@@ -2,7 +2,7 @@
 
 ## 현재 작업
 - **요청**: 승화전사 유니폼 패턴 자동 생성 프로그램 - 기술 타당성 조사 및 상세 계획 보고서 작성
-- **상태**: 개발 1단계 진행 중 (Tauri 프로젝트 세팅 + UI 기본 틀)
+- **상태**: 개발 2단계 진행 중 (패턴 프리셋 시스템)
 - **현재 담당**: developer
 
 ## 기획설계 (planner-architect)
@@ -120,6 +120,38 @@ reviewer 참고:
 - MSVC link.exe PATH 문제로 build.bat/dev.bat 우회 스크립트 필요 (Git Bash의 /usr/bin/link가 MSVC link.exe를 가림)
 - VS 2022 Build Tools + Windows 11 SDK 26100 설치됨
 
+### [2026-04-08] 2단계: 패턴 프리셋 시스템
+
+구현한 기능: 타입 정의, 프리셋 CRUD (생성/편집/삭제), SVG 파일 업로드 및 미리보기, 사이즈별 치수 입력 테이블 (13단계), JSON 로컬 저장/로드, Tauri 플러그인(dialog/fs) 연동, 1단계 CSS 하드코딩 색상 4곳 수정
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| src/types/pattern.ts | PatternPiece, SizeSpec, PatternPreset 타입 + SIZE_LIST 상수 | 신규 |
+| src/stores/presetStore.ts | loadPresets, savePresets, generateId — AppData JSON 저장 | 신규 |
+| src/pages/PatternManage.tsx | 목록모드(카드그리드) + 편집모드(폼/SVG미리보기/치수테이블) | 수정 |
+| src/App.css | CSS 변수 6종 추가, 하드코딩 4곳 수정, 버튼/카드/폼/테이블 스타일 추가 | 수정 |
+| src-tauri/src/lib.rs | tauri-plugin-dialog, tauri-plugin-fs 플러그인 등록 | 수정 |
+| src-tauri/Cargo.toml | tauri-plugin-dialog, tauri-plugin-fs 의존성 추가 | 수정 |
+| src-tauri/capabilities/default.json | dialog:default, fs 관련 권한 6종 추가 | 수정 |
+| package.json | @tauri-apps/plugin-dialog, @tauri-apps/plugin-fs 추가 | 수정 |
+
+추가한 라이브러리:
+- @tauri-apps/plugin-dialog ^2 (npm) + tauri-plugin-dialog 2.7.0 (cargo)
+- @tauri-apps/plugin-fs ^2 (npm) + tauri-plugin-fs 2.5.0 (cargo)
+
+tester 참고:
+- 테스트 방법: `dev.bat` 실행 후 "패턴 관리" 페이지에서 (1) "새 프리셋 추가" 클릭 (2) 이름 입력 (3) "조각 추가" 버튼으로 SVG 파일 선택 (4) SVG 미리보기 확인 (5) 조각 이름 수정 (6) 사이즈 치수 입력 (7) 저장 (8) 목록에 카드 표시 확인 (9) 편집/삭제 동작 확인
+- 정상 동작: 프리셋 카드가 목록에 표시되고, 앱 재시작 후에도 데이터가 유지됨
+- 주의: Tauri 파일 다이얼로그/fs API는 `npm run dev`(프론트엔드만)에서 동작 안함. 반드시 `dev.bat`으로 Tauri 앱 실행 필요
+- TypeScript: tsc --noEmit 통과 (에러 0건)
+- Vite 빌드: npx vite build 통과 (771ms)
+- 1단계 CSS 하드코딩 색상 4곳 모두 CSS 변수로 교체 완료
+
+reviewer 참고:
+- dangerouslySetInnerHTML로 SVG를 렌더링함 — 사용자가 직접 선택한 로컬 SVG 파일만 대상이므로 XSS 위험 낮음
+- presetStore에서 AppData 디렉토리에 JSON 저장 (BaseDirectory.AppData)
+- capabilities에 fs 권한을 $APPDATA 경로로 제한하여 보안 유지
+
 ## 테스트 결과 (tester)
 
 ### [2026-04-08] 1단계 검증
@@ -152,6 +184,30 @@ CSS 하드코딩 색상 (경미):
 - **종합 판정: 통과**
 - 수정 필요 사항: 없음 (CSS 하드코딩은 2단계 이후 개선 권장)
 
+### [2026-04-08] 2단계 검증
+
+| 테스트 항목 | 결과 | 비고 |
+|-----------|------|------|
+| 필수 파일 존재 (8개) | 통과 | pattern.ts, presetStore.ts, PatternManage.tsx, App.css, lib.rs, Cargo.toml, default.json, package.json 모두 존재 |
+| TypeScript (tsc --noEmit) | 통과 | 에러 0건 |
+| Vite 빌드 (npx vite build) | 통과 | 937ms, index.html + CSS(9.95KB) + JS(243.90KB) 정상 생성 |
+| Rust/Tauri 빌드 (cargo build) | 통과 | MSVC 환경 build.bat 경유, dev profile 22.95s 성공 |
+| 타입 시스템 | 통과 | PatternPiece, PieceDimension, SizeSpec, PatternPreset 인터페이스 + SIZE_LIST 13단계(5XS~5XL) + SizeName 유니온 타입 |
+| 코드 품질 (presetStore) | 통과 | loadPresets, savePresets, generateId 함수 존재, AppData JSON 저장, 에러 핸들링 포함 |
+| 코드 품질 (PatternManage) | 통과 | 목록모드(list)/생성모드(create)/편집모드(edit) 3가지 상태 구분, CRUD 동작 로직 완비 |
+| Tauri 플러그인 등록 | 통과 | lib.rs에 tauri_plugin_dialog::init(), tauri_plugin_fs::init() 등록 |
+| capabilities 권한 | 통과 | dialog:default, fs:default, fs:allow-exists/read-text-file/write-text-file/mkdir (APPDATA+SVG 경로 제한) |
+| CSS 하드코딩 수정 | 통과 | 1단계 지적 4곳(#d1d5db, #22c55e, #f59e0b, #ef4444) 모두 CSS 변수로 교체. 새 변수 6종 :root 정의 |
+| npm 의존성 | 통과 | @tauri-apps/plugin-dialog@2.7.0, @tauri-apps/plugin-fs@2.5.0 설치 확인 (npm ls + node_modules 실물) |
+| Cargo 의존성 | 통과 | tauri-plugin-dialog 2.7.0, tauri-plugin-fs 2.5.0 Cargo.toml에 명시, 빌드 시 다운로드+컴파일 성공 |
+
+경미한 참고사항:
+- App.css 301행, 323행에 `color: #fff` 잔존 (버튼 텍스트 색상). 기능 무영향, 향후 CSS 변수화 권장.
+
+종합: 12개 항목 중 12개 통과 / 0개 실패
+- **종합 판정: 통과**
+- 수정 필요 사항: 없음
+
 ## 리뷰 결과 (reviewer)
 (아직 없음)
 
@@ -166,4 +222,8 @@ CSS 하드코딩 색상 (경미):
 | 2026-04-08 | planner-architect | 패턴 프리셋 입력 파일 형식 분석 (SVG/DXF/AI/AAMA-DXF/직접입력 비교) | 완료 - SVG 최선 확인 |
 | 2026-04-08 | planner-architect | 워크플로우 확정 + 기준디자인 형식 분석(PDF 채택) + 주문서 인식 분석 + REPORT.md 전면 업데이트 | 완료 |
 | 2026-04-09 | developer | 1단계: Tauri 2.x + React + TS 프로젝트 세팅 + UI 기본 틀 (레이아웃+라우팅 4페이지) + VS Build Tools 설치 | 완료 |
+| 2026-04-09 | tester | 1단계 검증: TS/Vite/Rust 빌드 통과, 파일구조 완전, CSS 하드코딩 4곳 경미 이슈 | 통과 |
+| 2026-04-09 | pm | Git 초기화 + GitHub 연결(cobby8/grader) + 커밋 + 푸시 | 완료 |
 | 2026-04-08 | tester | 1단계 검증: TS/Vite/Rust 빌드, 파일구조, 라우팅, 컴포넌트, CSS 변수 | 통과 (경미한 CSS 이슈 1건) |
+| 2026-04-08 | developer | 2단계: 패턴 프리셋 시스템 (타입/스토어/CRUD/SVG미리보기/치수테이블/CSS변수수정) | 완료 — tsc/vite 통과 |
+| 2026-04-08 | tester | 2단계 검증: 파일존재/TS/Vite/Rust빌드/타입시스템/코드품질/CSS수정/의존성 전항목 통과 | 통과 (12/12) |

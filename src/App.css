@@ -24,6 +24,14 @@
   --color-nav-hover: rgba(255, 255, 255, 0.08);  /* 네비 호버 배경 */
   --color-nav-active: rgba(233, 69, 96, 0.2);    /* 네비 활성 배경 */
 
+  /* 기능 색상 (상태 표시용) */
+  --color-border-dashed: #d1d5db;               /* 점선 테두리 */
+  --color-status-ok: #22c55e;                    /* 정상 (초록) */
+  --color-status-warning: #f59e0b;               /* 경고 (노랑) */
+  --color-status-error: #ef4444;                 /* 에러 (빨강) */
+  --color-danger: #ef4444;                       /* 삭제/위험 버튼 */
+  --color-danger-hover: #dc2626;                 /* 삭제/위험 호버 */
+
   /* 레이아웃 크기 */
   --header-height: 52px;
   --sidebar-width: 220px;
@@ -208,7 +216,7 @@ html, body, #root {
 /* placeholder 카드 (아직 기능 미구현 안내) */
 .page__placeholder {
   background-color: var(--color-bg-surface);
-  border: 2px dashed #d1d5db;
+  border: 2px dashed var(--color-border-dashed);
   border-radius: var(--radius-md);
   padding: 48px 32px;
   text-align: center;
@@ -255,13 +263,372 @@ html, body, #root {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background-color: #22c55e; /* 초록: 정상 */
+  background-color: var(--color-status-ok);
 }
 
 .statusbar__dot--warning {
-  background-color: #f59e0b;
+  background-color: var(--color-status-warning);
 }
 
 .statusbar__dot--error {
-  background-color: #ef4444;
+  background-color: var(--color-status-error);
+}
+
+/* ===== 2단계: 패턴 프리셋 관련 스타일 ===== */
+
+/* --- 공통 버튼 --- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid var(--color-border-dashed);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-dark);
+  font-size: var(--font-size-base);
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn:hover {
+  background-color: var(--color-bg-content);
+}
+
+.btn--primary {
+  background-color: var(--color-accent);
+  color: #fff;
+  border-color: var(--color-accent);
+}
+
+.btn--primary:hover {
+  background-color: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+.btn--primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn--danger {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+  background-color: transparent;
+}
+
+.btn--danger:hover {
+  background-color: var(--color-danger);
+  color: #fff;
+}
+
+.btn--small {
+  padding: 4px 10px;
+  font-size: var(--font-size-sm);
+}
+
+/* --- 프리셋 목록 상단 액션 바 --- */
+.preset-actions {
+  margin-bottom: 20px;
+}
+
+/* --- 프리셋 카드 그리드 --- */
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.preset-card {
+  background-color: var(--color-bg-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: box-shadow var(--transition-fast);
+}
+
+.preset-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.preset-card__header {
+  padding: 16px 16px 8px;
+}
+
+.preset-card__name {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.preset-card__body {
+  padding: 0 16px 12px;
+  flex: 1;
+}
+
+.preset-card__info {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.preset-card__stat {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.preset-card__date {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* 카드 내 SVG 미리보기 영역 */
+.preset-card__preview {
+  height: 100px;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--color-bg-content);
+  overflow: hidden;
+}
+
+.preset-card__preview svg {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.preset-card__actions {
+  padding: 12px 16px;
+  border-top: 1px solid var(--color-bg-content);
+  display: flex;
+  gap: 8px;
+}
+
+/* 빈 상태 힌트 텍스트 */
+.preset-empty__hint {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  margin-top: 8px;
+}
+
+/* --- 폼 공통 --- */
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-group__label {
+  display: block;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-dark);
+  margin-bottom: 6px;
+}
+
+.form-group__input {
+  width: 100%;
+  max-width: 400px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-dashed);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-base);
+  font-family: var(--font-family);
+  color: var(--color-text-dark);
+  background-color: var(--color-bg-surface);
+  transition: border-color var(--transition-fast);
+}
+
+.form-group__input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+/* --- 폼 섹션 (조각 목록, 치수 테이블 등) --- */
+.form-section {
+  margin-bottom: 24px;
+  background-color: var(--color-bg-surface);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  box-shadow: var(--shadow-sm);
+}
+
+.form-section__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.form-section__title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.form-section__empty {
+  color: var(--color-text-muted);
+  font-style: italic;
+  padding: 16px 0;
+}
+
+.form-section__hint {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  margin-bottom: 12px;
+}
+
+/* --- 패턴 조각 목록 --- */
+.piece-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.piece-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px;
+  background-color: var(--color-bg-content);
+  border-radius: var(--radius-sm);
+}
+
+/* 조각 SVG 미리보기 (작은 썸네일) */
+.piece-item__preview {
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+  background-color: var(--color-bg-surface);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--color-border-dashed);
+}
+
+.piece-item__preview svg {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.piece-item__info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.piece-item__name-input {
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-base);
+  font-family: var(--font-family);
+  font-weight: 600;
+  color: var(--color-text-dark);
+  background: transparent;
+  transition: border-color var(--transition-fast);
+}
+
+.piece-item__name-input:hover,
+.piece-item__name-input:focus {
+  border-color: var(--color-border-dashed);
+  outline: none;
+  background-color: var(--color-bg-surface);
+}
+
+.piece-item__path {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+/* --- 사이즈 치수 테이블 --- */
+.size-table-wrapper {
+  overflow-x: auto; /* 조각이 많으면 가로 스크롤 */
+}
+
+.size-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.size-table__th {
+  padding: 8px 6px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--color-text-dark);
+  background-color: var(--color-bg-content);
+  border-bottom: 2px solid var(--color-border-dashed);
+  white-space: nowrap;
+}
+
+.size-table__th--size {
+  text-align: left;
+  width: 70px;
+  min-width: 70px;
+}
+
+.size-table__th--sub {
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border-dashed);
+  padding: 4px 6px;
+}
+
+.size-table__td {
+  padding: 4px;
+  border-bottom: 1px solid var(--color-bg-content);
+}
+
+.size-table__td--size {
+  font-weight: 600;
+  color: var(--color-text-dark);
+  padding-left: 8px;
+}
+
+.size-table__input {
+  width: 100%;
+  min-width: 50px;
+  max-width: 80px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-family);
+  text-align: center;
+  color: var(--color-text-dark);
+  background: transparent;
+  transition: border-color var(--transition-fast);
+}
+
+.size-table__input:hover,
+.size-table__input:focus {
+  border-color: var(--color-border-dashed);
+  outline: none;
+  background-color: var(--color-bg-surface);
+}
+
+/* number input의 스피너(화살표) 숨김 — 깔끔한 테이블 유지 */
+.size-table__input::-webkit-outer-spin-button,
+.size-table__input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* --- 폼 하단 버튼 영역 --- */
+.form-actions {
+  display: flex;
+  gap: 12px;
+  padding-top: 8px;
+  margin-bottom: 24px;
 }
