@@ -1,0 +1,267 @@
+/* ===== CSS 변수 정의 ===== */
+/* 프로젝트 전체에서 하드코딩 색상 대신 var(--color-*) 사용 */
+:root {
+  /* 기본 색상 */
+  --color-bg-primary: #1a1a2e;        /* 메인 배경 (진한 네이비) */
+  --color-bg-secondary: #16213e;      /* 사이드바 배경 */
+  --color-bg-content: #f0f2f5;        /* 컨텐츠 영역 배경 */
+  --color-bg-surface: #ffffff;        /* 카드/패널 배경 */
+  --color-bg-header: #0f3460;         /* 헤더 배경 */
+  --color-bg-statusbar: #1a1a2e;      /* 상태바 배경 */
+
+  /* 텍스트 색상 */
+  --color-text-primary: #e0e0e0;      /* 밝은 텍스트 (어두운 배경용) */
+  --color-text-secondary: #94a3b8;    /* 보조 텍스트 */
+  --color-text-dark: #1e293b;         /* 어두운 텍스트 (밝은 배경용) */
+  --color-text-muted: #64748b;        /* 흐린 텍스트 */
+
+  /* 강조 색상 */
+  --color-accent: #e94560;            /* 주 강조색 (빨간계열) */
+  --color-accent-hover: #ff6b6b;      /* 강조색 호버 */
+  --color-accent-soft: rgba(233, 69, 96, 0.15); /* 강조색 연한 배경 */
+
+  /* 사이드바 내비게이션 */
+  --color-nav-hover: rgba(255, 255, 255, 0.08);  /* 네비 호버 배경 */
+  --color-nav-active: rgba(233, 69, 96, 0.2);    /* 네비 활성 배경 */
+
+  /* 레이아웃 크기 */
+  --header-height: 52px;
+  --sidebar-width: 220px;
+  --statusbar-height: 32px;
+
+  /* 폰트 */
+  --font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-size-sm: 0.8125rem;    /* 13px */
+  --font-size-base: 0.875rem;   /* 14px */
+  --font-size-lg: 1rem;         /* 16px */
+  --font-size-xl: 1.125rem;     /* 18px */
+
+  /* 그림자 */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.12);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.15);
+
+  /* 둥글기 */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+
+  /* 전환 */
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+}
+
+/* ===== 전역 리셋 ===== */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+  color: var(--color-text-dark);
+  background-color: var(--color-bg-primary);
+}
+
+/* ===== 앱 전체 레이아웃 (그리드) ===== */
+/* 헤더 / 사이드바+메인 / 상태바 의 3행 구조 */
+.app-layout {
+  display: grid;
+  grid-template-rows: var(--header-height) 1fr var(--statusbar-height);
+  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-areas:
+    "header  header"
+    "sidebar content"
+    "status  status";
+  width: 100%;
+  height: 100%;
+}
+
+/* ===== 헤더 ===== */
+.header {
+  grid-area: header;
+  background-color: var(--color-bg-header);
+  color: var(--color-text-primary);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 12px;
+  /* 타이틀바 드래그 가능하게 (Tauri 기본) */
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.header__icon {
+  font-size: var(--font-size-xl);
+  color: var(--color-accent);
+}
+
+.header__title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.header__subtitle {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  margin-left: 4px;
+}
+
+/* ===== 사이드바 ===== */
+.sidebar {
+  grid-area: sidebar;
+  background-color: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  display: flex;
+  flex-direction: column;
+  padding: 12px 0;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sidebar__section-title {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 8px 20px 4px;
+  font-weight: 600;
+}
+
+/* 사이드바 내비게이션 링크 */
+.sidebar__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px;
+}
+
+.sidebar__link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  text-decoration: none;
+  font-size: var(--font-size-base);
+  transition: background-color var(--transition-fast);
+  cursor: pointer;
+}
+
+.sidebar__link:hover {
+  background-color: var(--color-nav-hover);
+}
+
+/* 현재 활성화된 페이지 표시 */
+.sidebar__link--active {
+  background-color: var(--color-nav-active);
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.sidebar__link-icon {
+  font-size: var(--font-size-xl);
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.sidebar__link-step {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* ===== 메인 컨텐츠 영역 ===== */
+.content {
+  grid-area: content;
+  background-color: var(--color-bg-content);
+  overflow-y: auto;
+  padding: 24px;
+}
+
+/* 페이지 공통 래퍼 */
+.page {
+  max-width: 960px;
+}
+
+.page__title {
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  color: var(--color-text-dark);
+  margin-bottom: 8px;
+}
+
+.page__description {
+  font-size: var(--font-size-base);
+  color: var(--color-text-muted);
+  margin-bottom: 24px;
+  line-height: 1.6;
+}
+
+/* placeholder 카드 (아직 기능 미구현 안내) */
+.page__placeholder {
+  background-color: var(--color-bg-surface);
+  border: 2px dashed #d1d5db;
+  border-radius: var(--radius-md);
+  padding: 48px 32px;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.page__placeholder-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  opacity: 0.4;
+}
+
+.page__placeholder-text {
+  font-size: var(--font-size-lg);
+}
+
+/* ===== 상태바 ===== */
+.statusbar {
+  grid-area: status;
+  background-color: var(--color-bg-statusbar);
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  font-size: var(--font-size-sm);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.statusbar__left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.statusbar__right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 상태 인디케이터 점 */
+.statusbar__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #22c55e; /* 초록: 정상 */
+}
+
+.statusbar__dot--warning {
+  background-color: #f59e0b;
+}
+
+.statusbar__dot--error {
+  background-color: #ef4444;
+}
