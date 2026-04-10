@@ -78,6 +78,16 @@ function getTimestampDirName(): string {
   )}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
 }
 
+/**
+ * 파일 크기를 사람이 읽기 쉬운 형식으로 변환한다.
+ * DesignUpload의 동일 함수와 같은 구현 (공통 util로 빼지 않고 중복 허용 - 단순함 우선).
+ */
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 /** 파일명으로 사용할 수 없는 문자 제거 */
 function sanitizeFileName(name: string): string {
   // 확장자 제거 + 파일 시스템 금지 문자 치환
@@ -225,7 +235,7 @@ function FileGenerate() {
             ]
           );
 
-          // 상태: 성공
+          // 상태: 성공 (5단계: 파일 크기/압축률 포함)
           updateResult(targetSize, {
             status: "success",
             outputPath: graded.output_path,
@@ -233,6 +243,9 @@ function FileGenerate() {
             scaleY: graded.scale_y,
             outputWidthMm: graded.output_width_mm,
             outputHeightMm: graded.output_height_mm,
+            fileSizeBytes: graded.file_size_bytes,
+            originalSizeBytes: graded.original_size_bytes,
+            compressionRatio: graded.compression_ratio,
           });
         } catch (err) {
           // 한 사이즈 실패해도 전체 중단하지 않고 다음으로 진행
@@ -415,6 +428,23 @@ function FileGenerate() {
                     <>
                       {r.outputWidthMm}×{r.outputHeightMm}mm (스케일{" "}
                       {r.scaleX?.toFixed(3)}×{r.scaleY?.toFixed(3)})
+                      {/* 5단계 신규: 파일 크기 및 압축률 표시 */}
+                      {typeof r.fileSizeBytes === "number" && r.fileSizeBytes > 0 && (
+                        <span className="gen-result__size-info">
+                          {" · "}
+                          {formatFileSize(r.fileSizeBytes)}
+                          {typeof r.compressionRatio === "number" &&
+                            r.compressionRatio > 0 && (
+                              <span
+                                className="gen-result__ratio"
+                                title={`원본 대비 ${(r.compressionRatio * 100).toFixed(0)}%`}
+                              >
+                                {" "}
+                                ({(r.compressionRatio * 100).toFixed(0)}%)
+                              </span>
+                            )}
+                        </span>
+                      )}
                     </>
                   )}
                   {r.status === "error" && (

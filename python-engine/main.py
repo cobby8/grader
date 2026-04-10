@@ -22,7 +22,12 @@ import io
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-from pdf_handler import get_pdf_info, verify_cmyk, generate_preview
+from pdf_handler import (
+    get_pdf_info,
+    verify_cmyk,
+    generate_preview,
+    analyze_color_space_detailed,
+)
 from pattern_scaler import calculate_scale_factor
 from pdf_grader import generate_graded_pdf
 
@@ -45,6 +50,7 @@ def show_help() -> None:
         "commands": {
             "get_pdf_info <pdf_path>": "PDF 파일의 기본 정보를 추출합니다 (페이지 수, 크기, 색상 공간 등)",
             "verify_cmyk <pdf_path>": "PDF의 색상 공간이 CMYK인지 검증합니다",
+            "analyze_color <pdf_path>": "PDF의 색상 공간을 페이지별/객체별로 상세 분석합니다 (벡터+이미지+ICC)",
             "generate_preview <pdf_path> <output_path> [dpi]": "PDF 첫 페이지를 PNG 미리보기로 변환합니다 (기본 150dpi)",
             "calc_scale <preset_json_path> <base_size> <target_size>": "프리셋 JSON 파일에서 기준/타겟 사이즈 비율을 계산합니다",
             "generate_graded <src_pdf> <out_pdf> <scale_x> <scale_y>": "원본 PDF를 주어진 비율로 스케일링해 새 PDF를 생성합니다 (CMYK 보존)",
@@ -52,6 +58,7 @@ def show_help() -> None:
         "examples": [
             'python main.py get_pdf_info "C:/designs/front.pdf"',
             'python main.py verify_cmyk "C:/designs/front.pdf"',
+            'python main.py analyze_color "C:/designs/front.pdf"',
             'python main.py generate_preview "C:/designs/front.pdf" "C:/temp/preview.png" 150',
             'python main.py calc_scale "C:/temp/preset.json" "L" "XL"',
             'python main.py generate_graded "C:/src.pdf" "C:/out.pdf" 1.05 1.08',
@@ -81,11 +88,20 @@ def main() -> None:
             print_json(result)
 
         elif command == "verify_cmyk":
-            # CMYK 검증
+            # CMYK 검증 (기본 - 호환성 유지)
             if len(args) < 2:
                 print_error("PDF 파일 경로가 필요합니다. 예: python main.py verify_cmyk file.pdf")
                 sys.exit(1)
             result = verify_cmyk(args[1])
+            print_json(result)
+
+        elif command == "analyze_color":
+            # 5단계 신규: 색상 공간 상세 분석
+            # 페이지별 벡터 연산자 + 이미지 색상 공간 + ICC 프로파일 감지
+            if len(args) < 2:
+                print_error("PDF 파일 경로가 필요합니다. 예: python main.py analyze_color file.pdf")
+                sys.exit(1)
+            result = analyze_color_space_detailed(args[1])
             print_json(result)
 
         elif command == "generate_preview":

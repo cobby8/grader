@@ -33,6 +33,10 @@ export interface GenerationResult {
   scaleY?: number;             // 적용된 세로 스케일
   outputWidthMm?: number;      // 출력 가로 mm
   outputHeightMm?: number;     // 출력 세로 mm
+  // 5단계 신규: 출력 파일 크기 및 원본 대비 압축률
+  fileSizeBytes?: number;      // 출력 PDF 파일 크기 (bytes)
+  originalSizeBytes?: number;  // 원본 PDF 파일 크기 (bytes)
+  compressionRatio?: number;   // 출력/원본 비율 (0.8 = 20% 감소)
 }
 
 /** Python calc_scale 명령 응답 */
@@ -60,5 +64,9 @@ export interface GenerateGradedResult {
   page_count: number;
   scale_x: number;
   scale_y: number;
+  // 5단계 신규: 파일 크기 및 압축률 (snake_case - Python에서 직접 매핑)
+  file_size_bytes?: number;
+  original_size_bytes?: number;
+  compression_ratio?: number;
   error?: string;
 }

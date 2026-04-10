@@ -782,6 +782,83 @@ html, body, #root {
   color: var(--color-text-muted);
 }
 
+/* 5단계 신규: Grayscale 배지 */
+.design-badge--gray {
+  background-color: rgba(100, 116, 139, 0.2);
+  color: var(--color-text-muted);
+}
+
+/* 5단계 신규: 작은 사이즈 배지 (상세 배지용) */
+.design-badge--small {
+  padding: 1px 6px;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+}
+
+/* 벡터 CMYK 감지 배지 (초록) */
+.design-badge--vector-cmyk {
+  background-color: rgba(34, 197, 94, 0.12);
+  color: var(--color-status-ok);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+/* 벡터 RGB 감지 배지 (주의 - 노랑) */
+.design-badge--vector-rgb {
+  background-color: rgba(245, 158, 11, 0.12);
+  color: var(--color-status-warning);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+/* CMYK 이미지 배지 */
+.design-badge--img-cmyk {
+  background-color: rgba(59, 130, 246, 0.12);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+/* RGB 이미지 배지 (주의) */
+.design-badge--img-rgb {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* ICC 프로파일 배지 */
+.design-badge--icc {
+  background-color: rgba(168, 85, 247, 0.12);
+  color: #a855f7;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+/* 5단계 신규: 상세 배지 컨테이너 (한 줄, 줄바꿈 허용) */
+.design-card__color-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+/* 5단계 신규: 경고 메시지 리스트 */
+.design-card__warnings {
+  list-style: none;
+  padding: 6px 10px;
+  margin: 6px 0 0 0;
+  background-color: rgba(245, 158, 11, 0.08);
+  border-left: 3px solid var(--color-status-warning);
+  border-radius: var(--radius-sm);
+}
+
+.design-card__warning-item {
+  font-size: 11px;
+  color: var(--color-status-warning);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.design-card__warning-item + .design-card__warning-item {
+  margin-top: 3px;
+}
+
 /* CMYK 검증 결과 메시지 */
 .design-card__cmyk-msg {
   font-size: var(--font-size-sm);
@@ -1073,6 +1150,17 @@ html, body, #root {
 
 .gen-result__error {
   color: var(--color-status-error);
+}
+
+/* 5단계 신규: 파일 크기/압축률 표시 */
+.gen-result__size-info {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.gen-result__ratio {
+  color: var(--color-status-ok);
+  font-weight: 500;
 }
 
 /* 출력 경로 표시 */

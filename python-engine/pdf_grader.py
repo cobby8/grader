@@ -114,21 +114,56 @@ def generate_graded_pdf(
     # 저장 전에 페이지 수를 지역 변수로 저장 (close 이후 len() 사용 불가 방지)
     total_pages = len(out_doc)
 
-    # 6. PDF 저장
-    # deflate=True: 스트림 압축 / garbage=4: 미사용 객체 정리 / clean=True: 콘텐츠 정규화
-    # 이 옵션들은 구조만 최적화하며 색상 공간은 변환하지 않는다.
-    out_doc.save(
-        output_pdf_path,
-        deflate=True,
-        garbage=4,
-        clean=True,
-    )
+    # 6. PDF 저장 (출력 최적화 설정)
+    # 각 옵션 역할:
+    #   - deflate=True     : 스트림 압축 (Flate 인코딩) → 파일 크기 감소
+    #   - deflate_images=True : 이미지 스트림 압축 (추가 감소)
+    #   - deflate_fonts=True  : 폰트 스트림 압축 (추가 감소)
+    #   - garbage=4        : 미사용/중복 객체 완전 제거 (최대 수준)
+    #   - clean=True       : 콘텐츠 스트림 정규화 (불필요한 공백/명령 정리)
+    # 중요: 이 옵션들은 구조만 최적화하며, 색상 공간(CMYK/ICCBased)은 변환하지 않는다.
+    try:
+        out_doc.save(
+            output_pdf_path,
+            deflate=True,
+            deflate_images=True,
+            deflate_fonts=True,
+            garbage=4,
+            clean=True,
+        )
+    except TypeError:
+        # PyMuPDF 구버전은 deflate_images/deflate_fonts를 지원하지 않을 수 있다.
+        # 이 경우 기본 옵션으로 폴백한다.
+        out_doc.save(
+            output_pdf_path,
+            deflate=True,
+            garbage=4,
+            clean=True,
+        )
 
     # 출력 후 문서 닫기
     out_doc.close()
     src_doc.close()
 
-    # 7. 결과 반환 (mm 단위로도 표기)
+    # 7. 파일 크기 측정 (원본 vs 결과) - 압축률 리포트용
+    try:
+        original_size_bytes = os.path.getsize(source_pdf_path)
+    except OSError:
+        original_size_bytes = 0
+    try:
+        file_size_bytes = os.path.getsize(output_pdf_path)
+    except OSError:
+        file_size_bytes = 0
+
+    # 압축률: 결과 파일 / 원본 파일 비율 (1.0 = 동일 크기, 0.5 = 절반)
+    # 원본 크기가 0이면 0.0 반환 (0 나눗셈 방지)
+    compression_ratio = (
+        round(file_size_bytes / original_size_bytes, 3)
+        if original_size_bytes > 0
+        else 0.0
+    )
+
+    # 8. 결과 반환 (mm 단위 + 파일 크기/압축률 추가)
     return {
         "success": True,
         "output_path": output_pdf_path,
@@ -139,4 +174,8 @@ def generate_graded_pdf(
         "page_count": total_pages,
         "scale_x": scale_x,
         "scale_y": scale_y,
+        # 5단계 신규: 출력 최적화 리포트
+        "file_size_bytes": file_size_bytes,
+        "original_size_bytes": original_size_bytes,
+        "compression_ratio": compression_ratio,
     }

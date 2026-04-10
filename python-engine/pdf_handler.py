@@ -4,7 +4,8 @@ PDF 파일 처리 모듈
 승화전사 유니폼 디자인 파일(PDF)을 읽고 분석하는 기능을 제공한다.
 주요 기능:
   - PDF 기본 정보 추출 (페이지 수, 크기, 파일 크기)
-  - CMYK 색상 공간 검증
+  - CMYK 색상 공간 검증 (기본)
+  - CMYK 색상 공간 상세 분석 (벡터 연산자 감지 + 이미지별 색상 공간)
   - PDF 미리보기 이미지(PNG) 생성
 
 PyMuPDF(fitz) 라이브러리를 사용한다.
@@ -12,6 +13,7 @@ PyMuPDF(fitz) 라이브러리를 사용한다.
 
 import fitz  # PyMuPDF
 import os
+import re
 import json
 from typing import Any
 
@@ -176,6 +178,236 @@ def verify_cmyk(pdf_path: str) -> dict[str, Any]:
             "color_space": "Unknown",
             "message": "색상 공간을 확인할 수 없습니다. 벡터 전용 PDF일 수 있습니다.",
         }
+
+
+def _detect_vector_color_operators(content_bytes: bytes) -> dict[str, bool]:
+    """
+    PDF 콘텐츠 스트림 바이트 데이터에서 벡터 페인트 연산자를 감지한다.
+
+    왜 필요한가:
+      PDF는 벡터 페인트 색상을 다음 연산자로 지정한다:
+        - k, K   : CMYK 채움/선 (소문자=fill, 대문자=stroke)
+        - rg, RG : RGB 채움/선
+        - g, G   : Grayscale 채움/선
+      기존 방식(페이지 객체 딕셔너리에서 DeviceCMYK 문자열 검색)으로는
+      reportlab 같은 도구가 생성한 벡터 CMYK PDF를 감지할 수 없었다.
+      이 함수는 콘텐츠 스트림을 직접 파싱하여 실제 사용된 색상 연산자를 찾는다.
+
+    구현 방법:
+      - 콘텐츠 스트림은 이진 데이터지만 연산자는 ASCII이므로 bytes 패턴 매칭 사용
+      - 정규식 경계: 앞에 공백 또는 줄바꿈, 뒤에 공백/줄바꿈/탭
+      - 연산자 앞에는 반드시 숫자 인자(4개=CMYK, 3개=RGB, 1개=Gray)가 있음
+
+    반환:
+      {"cmyk": True/False, "rgb": True/False, "gray": True/False}
+    """
+    result = {"cmyk": False, "rgb": False, "gray": False}
+
+    if not content_bytes:
+        return result
+
+    # 콘텐츠 스트림을 ASCII-safe 문자열로 변환 (디코딩 실패 시 ignore)
+    try:
+        text = content_bytes.decode("latin-1", errors="ignore")
+    except Exception:
+        return result
+
+    # CMYK: "숫자 숫자 숫자 숫자 k" 또는 "K" (경계 포함)
+    # 예: "0.5 0.3 0.2 0.1 k\n"
+    # 숫자는 정수 또는 소수, 앞뒤에 공백/줄바꿈
+    num_pattern = r"[-+]?\d*\.?\d+"
+    ws = r"[\s\r\n]"
+    cmyk_re = re.compile(
+        rf"(?:^|{ws}){num_pattern}{ws}+{num_pattern}{ws}+{num_pattern}{ws}+{num_pattern}{ws}+[kK]{ws}"
+    )
+    rgb_re = re.compile(
+        rf"(?:^|{ws}){num_pattern}{ws}+{num_pattern}{ws}+{num_pattern}{ws}+(?:rg|RG){ws}"
+    )
+    # grayscale g/G는 더 주의해야 함 — 많은 다른 의미와 혼동되지 않도록
+    # "숫자 g" 또는 "숫자 G" (연산자로서) 감지
+    gray_re = re.compile(
+        rf"(?:^|{ws}){num_pattern}{ws}+[gG]{ws}"
+    )
+
+    # 검색 (빠르게 첫 매치만 확인)
+    if cmyk_re.search(text):
+        result["cmyk"] = True
+    if rgb_re.search(text):
+        result["rgb"] = True
+    if gray_re.search(text):
+        result["gray"] = True
+
+    return result
+
+
+def analyze_color_space_detailed(pdf_path: str) -> dict[str, Any]:
+    """
+    PDF의 색상 공간을 페이지별/객체별로 상세 분석한다.
+
+    기존 get_pdf_info보다 정밀한 감지:
+      1. 콘텐츠 스트림을 직접 읽어서 벡터 페인트 연산자(k, K, rg, RG, g, G) 감지
+      2. 페이지 리소스 딕셔너리에서 ColorSpace / ICCBased 프로파일 확인
+      3. 각 이미지를 extract_image으로 읽어서 colorspace 필드 확인
+
+    반환:
+      {
+        "success": True,
+        "overall": "CMYK" | "RGB" | "Mixed" | "Grayscale" | "Unknown",
+        "pages": [
+          {
+            "page_num": 0,
+            "vector_cmyk": True,
+            "vector_rgb": False,
+            "vector_gray": False,
+            "image_count": 3,
+            "image_color_spaces": ["CMYK", "CMYK", "RGB"],
+            "has_icc_profile": False
+          },
+          ...
+        ],
+        "warnings": ["RGB 이미지가 1개 포함되어 있습니다"],
+        "has_vector_cmyk": True,
+        "has_vector_rgb": False,
+        "has_image_cmyk": True,
+        "has_image_rgb": True,
+        "has_icc_profile": False
+      }
+    """
+    if not os.path.exists(pdf_path):
+        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {pdf_path}")
+
+    doc = fitz.open(pdf_path)
+
+    pages_info: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    # 전역 집계
+    has_vector_cmyk = False
+    has_vector_rgb = False
+    has_vector_gray = False
+    has_image_cmyk = False
+    has_image_rgb = False
+    has_image_gray = False
+    has_icc_profile = False
+
+    total_rgb_images = 0
+    total_cmyk_images = 0
+
+    for page_num in range(len(doc)):
+        page = doc[page_num]
+
+        # (A) 벡터 연산자 감지: 페이지의 콘텐츠 스트림 바이트를 직접 읽어온다.
+        # page.read_contents()는 모든 contents 스트림을 합쳐서 바이트로 반환한다.
+        try:
+            content_bytes = page.read_contents()
+        except Exception:
+            content_bytes = b""
+
+        vector_flags = _detect_vector_color_operators(content_bytes)
+
+        if vector_flags["cmyk"]:
+            has_vector_cmyk = True
+        if vector_flags["rgb"]:
+            has_vector_rgb = True
+        if vector_flags["gray"]:
+            has_vector_gray = True
+
+        # (B) 이미지별 색상 공간 조사
+        image_color_spaces: list[str] = []
+        image_list = page.get_images(full=True)
+        for img_info in image_list:
+            xref = img_info[0]
+            try:
+                img_data = doc.extract_image(xref)
+                cs = img_data.get("colorspace", 0)
+                # colorspace 값: 1=Gray, 3=RGB, 4=CMYK
+                if cs == 4:
+                    image_color_spaces.append("CMYK")
+                    has_image_cmyk = True
+                    total_cmyk_images += 1
+                elif cs == 3:
+                    image_color_spaces.append("RGB")
+                    has_image_rgb = True
+                    total_rgb_images += 1
+                elif cs == 1:
+                    image_color_spaces.append("Gray")
+                    has_image_gray = True
+                else:
+                    image_color_spaces.append("Unknown")
+            except Exception:
+                image_color_spaces.append("Unknown")
+
+        # (C) ICC 프로파일 감지: 페이지 리소스 객체 문자열에서 검색
+        # xref_object는 객체의 textual 표현을 반환한다 (PDF 사전 구조).
+        page_has_icc = False
+        try:
+            page_obj_str = doc.xref_object(page.xref)
+            if "ICCBased" in page_obj_str or "/ICC" in page_obj_str:
+                page_has_icc = True
+                has_icc_profile = True
+        except Exception:
+            pass
+
+        pages_info.append({
+            "page_num": page_num,
+            "vector_cmyk": vector_flags["cmyk"],
+            "vector_rgb": vector_flags["rgb"],
+            "vector_gray": vector_flags["gray"],
+            "image_count": len(image_list),
+            "image_color_spaces": image_color_spaces,
+            "has_icc_profile": page_has_icc,
+        })
+
+    doc.close()
+
+    # (D) 전체 색상 공간 판정
+    # 우선순위: Mixed > CMYK > RGB > Grayscale > Unknown
+    any_cmyk = has_vector_cmyk or has_image_cmyk
+    any_rgb = has_vector_rgb or has_image_rgb
+    any_gray_only = (has_vector_gray or has_image_gray) and not any_cmyk and not any_rgb
+
+    if any_cmyk and any_rgb:
+        overall = "Mixed"
+    elif any_cmyk:
+        overall = "CMYK"
+    elif any_rgb:
+        overall = "RGB"
+    elif any_gray_only:
+        overall = "Grayscale"
+    else:
+        overall = "Unknown"
+
+    # (E) 사용자 경고 메시지 생성
+    if total_rgb_images > 0 and any_cmyk:
+        warnings.append(
+            f"RGB 이미지가 {total_rgb_images}개 포함되어 있습니다. "
+            f"인쇄 품질을 위해 CMYK로 변환해 주세요."
+        )
+    elif overall == "RGB":
+        warnings.append(
+            "이 PDF는 RGB 색상만 사용합니다. 인쇄 시 색상 차이가 발생할 수 있습니다."
+        )
+    elif overall == "Unknown":
+        warnings.append(
+            "색상 공간을 특정할 수 없습니다. 벡터 오브젝트가 없거나 비표준 형식일 수 있습니다."
+        )
+
+    if has_vector_rgb:
+        warnings.append("벡터 RGB 색상이 감지되었습니다.")
+
+    return {
+        "success": True,
+        "overall": overall,
+        "pages": pages_info,
+        "warnings": warnings,
+        "has_vector_cmyk": has_vector_cmyk,
+        "has_vector_rgb": has_vector_rgb,
+        "has_image_cmyk": has_image_cmyk,
+        "has_image_rgb": has_image_rgb,
+        "has_icc_profile": has_icc_profile,
+        "total_rgb_images": total_rgb_images,
+        "total_cmyk_images": total_cmyk_images,
+    }
 
 
 def generate_preview(pdf_path: str, output_path: str, dpi: int = 150) -> dict[str, Any]:

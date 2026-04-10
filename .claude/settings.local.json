@@ -92,7 +92,21 @@
       "Bash(./venv/Scripts/python.exe main.py generate_graded \"C:/0. Programing/grader/test_temp/sample.pdf\" \"C:/0. Programing/grader/test_temp/out_XL.pdf\" 1.05 1.078873)",
       "Bash(./venv/Scripts/python.exe main.py generate_graded \"C:/0. Programing/grader/test_temp/sample.pdf\" \"C:/0. Programing/grader/test_temp/out_S.pdf\" 0.923077 0.957746)",
       "Bash(./venv/Scripts/python.exe main.py generate_graded \"C:/no/such/file.pdf\" \"C:/0. Programing/grader/test_temp/out_err.pdf\" 1.0 1.0)",
-      "Bash(./venv/Scripts/python.exe main.py generate_graded \"C:/0. Programing/grader/test_temp/sample.pdf\" \"C:/0. Programing/grader/test_temp/out_neg.pdf\" -1.0 1.0)"
+      "Bash(./venv/Scripts/python.exe main.py generate_graded \"C:/0. Programing/grader/test_temp/sample.pdf\" \"C:/0. Programing/grader/test_temp/out_neg.pdf\" -1.0 1.0)",
+      "Bash(./venv/Scripts/python.exe main.py --help)",
+      "Bash(./venv/Scripts/python.exe main.py analyze_color \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\test_cmyk_vector.pdf\")",
+      "Bash(./venv/Scripts/python.exe main.py analyze_color \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\test_rgb_vector.pdf\")",
+      "Bash(./venv/Scripts/python.exe main.py analyze_color \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\test_mixed_vector.pdf\")",
+      "Bash(./venv/Scripts/python.exe main.py verify_cmyk \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\test_cmyk_vector.pdf\")",
+      "Bash(./venv/Scripts/python.exe main.py generate_graded \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\test_cmyk_vector.pdf\" \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\test_out.pdf\" 1.5 1.5)",
+      "Bash(./venv/Scripts/python.exe main.py get_pdf_info \"C:\\\\Users\\\\user\\\\AppData\\\\Local\\\\Temp\\\\test_cmyk_vector.pdf\")",
+      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" analyze_color test_cmyk.pdf)",
+      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" analyze_color test_rgb.pdf)",
+      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" analyze_color test_mixed.pdf)",
+      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" verify_cmyk test_cmyk.pdf)",
+      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" get_pdf_info test_cmyk.pdf)",
+      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" generate_graded test_cmyk.pdf out_scaled.pdf 1.05 1.08)",
+      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" analyze_color nonexistent.pdf)"
     ]
   }
 }

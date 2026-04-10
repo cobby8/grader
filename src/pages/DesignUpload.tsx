@@ -23,6 +23,8 @@ import type {
   PdfInfoResult,
   CmykVerifyResult,
   PreviewResult,
+  AnalyzeColorResult,
+  ColorAnalysis,
 } from "../types/design";
 import {
   loadDesigns,
@@ -54,9 +56,38 @@ function getColorSpaceBadge(colorSpace: string): string {
       return "design-badge design-badge--rgb";
     case "Mixed":
       return "design-badge design-badge--mixed";
+    case "Grayscale":
+      return "design-badge design-badge--gray";
     default:
       return "design-badge design-badge--unknown";
   }
+}
+
+/**
+ * Python의 snake_case 결과를 TypeScript의 camelCase 타입으로 변환한다.
+ * 이 프로젝트의 Python ↔ TS 경계에서는 단순 수동 매핑을 사용한다 (의존성 최소화).
+ */
+function toColorAnalysis(raw: AnalyzeColorResult): ColorAnalysis {
+  return {
+    overall: raw.overall,
+    pages: raw.pages.map((p) => ({
+      pageNum: p.page_num,
+      vectorCmyk: p.vector_cmyk,
+      vectorRgb: p.vector_rgb,
+      vectorGray: p.vector_gray,
+      imageCount: p.image_count,
+      imageColorSpaces: p.image_color_spaces,
+      hasIccProfile: p.has_icc_profile,
+    })),
+    warnings: raw.warnings,
+    hasVectorCmyk: raw.has_vector_cmyk,
+    hasVectorRgb: raw.has_vector_rgb,
+    hasImageCmyk: raw.has_image_cmyk,
+    hasImageRgb: raw.has_image_rgb,
+    hasIccProfile: raw.has_icc_profile,
+    totalRgbImages: raw.total_rgb_images,
+    totalCmykImages: raw.total_cmyk_images,
+  };
 }
 
 function DesignUpload() {
@@ -159,9 +190,23 @@ function DesignUpload() {
       setProgressMessage("PDF 정보를 분석하는 중...");
       const info = await callPython<PdfInfoResult>("get_pdf_info", [storedPath]);
 
-      // 4) Python 엔진: CMYK 검증
+      // 4) Python 엔진: CMYK 검증 (기본 - 기존 호환)
       setProgressMessage("색상 공간을 검증하는 중...");
       const cmyk = await callPython<CmykVerifyResult>("verify_cmyk", [storedPath]);
+
+      // 4-b) Python 엔진: 색상 공간 상세 분석 (5단계 신규)
+      // 실패해도 치명적이지 않으므로 try/catch로 보호하고 계속 진행한다.
+      // 이유: analyze_color는 부가 정보이므로 CMYK 검증보다 실패 내성이 높아야 함.
+      setProgressMessage("색상 공간을 상세 분석하는 중...");
+      let colorAnalysis: ColorAnalysis | undefined = undefined;
+      try {
+        const analyzed = await callPython<AnalyzeColorResult>("analyze_color", [
+          storedPath,
+        ]);
+        colorAnalysis = toColorAnalysis(analyzed);
+      } catch (err) {
+        console.warn("색상 상세 분석 실패 (계속 진행):", err);
+      }
 
       // 5) Python 엔진: 미리보기 이미지 생성
       setProgressMessage("미리보기 이미지를 생성하는 중...");
@@ -173,7 +218,10 @@ function DesignUpload() {
       ]);
 
       // 6) 메타데이터 객체 생성
+      // colorAnalysis가 있으면 overall 값으로 colorSpace를 덮어써서
+      // 더 정확한 판정을 사용한다 (벡터 CMYK 감지 포함).
       const now = new Date().toISOString();
+      const finalColorSpace = colorAnalysis?.overall ?? info.color_space;
       const newDesign: DesignFile = {
         id: designId,
         name: fileName,
@@ -183,12 +231,13 @@ function DesignUpload() {
         pageCount: info.page_count,
         pageWidth: info.page_width_mm,
         pageHeight: info.page_height_mm,
-        colorSpace: info.color_space,
+        colorSpace: finalColorSpace,
         cmykVerified: cmyk.is_cmyk,
         cmykMessage: cmyk.message,
         fileSize: info.file_size,
         createdAt: now,
         updatedAt: now,
+        colorAnalysis,
       };
 
       // 7) 목록에 추가 후 저장
@@ -329,6 +378,52 @@ function DesignUpload() {
                   </span>
                 </div>
 
+                {/* 5단계 신규: 색상 상세 배지 (colorAnalysis가 있을 때만) */}
+                {design.colorAnalysis && (
+                  <div className="design-card__color-detail">
+                    {design.colorAnalysis.hasVectorCmyk && (
+                      <span
+                        className="design-badge design-badge--small design-badge--vector-cmyk"
+                        title="벡터 CMYK 색상이 사용됨"
+                      >
+                        V-CMYK
+                      </span>
+                    )}
+                    {design.colorAnalysis.hasVectorRgb && (
+                      <span
+                        className="design-badge design-badge--small design-badge--vector-rgb"
+                        title="벡터 RGB 색상이 사용됨 - 인쇄 주의"
+                      >
+                        V-RGB
+                      </span>
+                    )}
+                    {design.colorAnalysis.totalCmykImages > 0 && (
+                      <span
+                        className="design-badge design-badge--small design-badge--img-cmyk"
+                        title={`CMYK 이미지 ${design.colorAnalysis.totalCmykImages}개`}
+                      >
+                        IMG-CMYK ×{design.colorAnalysis.totalCmykImages}
+                      </span>
+                    )}
+                    {design.colorAnalysis.totalRgbImages > 0 && (
+                      <span
+                        className="design-badge design-badge--small design-badge--img-rgb"
+                        title={`RGB 이미지 ${design.colorAnalysis.totalRgbImages}개 - 인쇄 주의`}
+                      >
+                        IMG-RGB ×{design.colorAnalysis.totalRgbImages}
+                      </span>
+                    )}
+                    {design.colorAnalysis.hasIccProfile && (
+                      <span
+                        className="design-badge design-badge--small design-badge--icc"
+                        title="ICC 프로파일 포함"
+                      >
+                        ICC
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 {/* CMYK 검증 메시지 */}
                 <div
                   className={`design-card__cmyk-msg ${
@@ -339,6 +434,17 @@ function DesignUpload() {
                 >
                   {design.cmykVerified ? "✓" : "⚠"} {design.cmykMessage}
                 </div>
+
+                {/* 5단계 신규: 경고 메시지 (colorAnalysis.warnings) */}
+                {design.colorAnalysis && design.colorAnalysis.warnings.length > 0 && (
+                  <ul className="design-card__warnings">
+                    {design.colorAnalysis.warnings.map((w, i) => (
+                      <li key={i} className="design-card__warning-item">
+                        {w}
+                      </li>
+                    ))}
+                  </ul>
+                )}
 
                 <div className="design-card__date">
                   등록일: {new Date(design.createdAt).toLocaleDateString("ko-KR")}
