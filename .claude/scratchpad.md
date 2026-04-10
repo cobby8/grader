@@ -2,8 +2,8 @@
 
 ## 현재 작업
 - **요청**: 승화전사 유니폼 패턴 자동 생성 프로그램 개발
-- **상태**: 개발 5단계 진행 중 (CMYK 고급 검증 + 출력 고도화)
-- **현재 담당**: developer
+- **상태**: 6단계 통합 테스트 진행 중
+- **현재 담당**: tester
 
 ## 진행 현황표
 
@@ -14,8 +14,8 @@
 | 2 | 패턴 프리셋 시스템 (SVG 업로드, 치수 테이블, 로컬 저장) | ✅ 완료 |
 | 3 | 디자인 파일 처리 + Python 엔진 (PDF 업로드, CMYK 검증, 미리보기) | ✅ 완료 |
 | 4 | 사이즈 선택 + 그레이딩 파일 생성 (CMYK 보존 스케일링) | ✅ 완료 |
-| 5 | CMYK 보존 + 출력 고도화 (ICC 프로파일, Ghostscript 검증) | ⏳ 대기 |
-| 6 | 통합 테스트 | ⏳ 대기 |
+| 5 | CMYK 보존 + 출력 고도화 (벡터 CMYK 감지 + 파일 크기 리포트) | ✅ 완료 |
+| 6 | 통합 테스트 (E2E 워크플로우 검증) | ✅ 완료 |
 
 ## 프로젝트 핵심 정보
 
@@ -117,6 +117,29 @@ grader/
 | 3단계 | 최종 통과 | 21/21 | pdf_handler page_count 버그 1건 → 수정 완료 |
 | 4단계 | 통과 | 30/30 | 없음 (실제 Illustrator PDF 수동 검증 권장) |
 | 5단계 | 통과 | 10/10 | 없음 (analyze_color 3종 PDF 정확, 기존 CLI 호환, file_size 필드 정상) |
+| 6단계 | 통과 | 18/19 | analyze_color가 그레이딩 결과 PDF(Form XObject 래핑)를 Unknown으로 판정 (개선 제안) |
+
+### [2026-04-08] 6단계 E2E 통합 테스트
+- 시나리오 1 (완전한 워크플로우): 통과 - 자산 생성→get_pdf_info→analyze_color→verify_cmyk→generate_preview→calc_scale(L→S/M/L/XL)→generate_graded(4종)→에러 5종 모두 정상
+- 시나리오 2 (빌드/구조): 통과 - tsc 통과, vite 빌드 통과(267KB JS), 프로젝트 구조 완전, .gitignore 정상
+- 시나리오 3 (데이터 흐름 트레이스): 통과 - PatternManage/DesignUpload/SizeSelect/FileGenerate 전부 store→callPython→AppData 흐름 정상 연결
+- 발견 이슈: 1건 (경미/개선 제안)
+- 종합: 통과
+- MVP 출시 준비 상태: 준비 완료 (단, 아래 개선 권장)
+
+**발견 상세 (개선 제안 — 치명적 아님)**:
+- `analyze_color`는 `page.read_contents()`만 검사하는데, `pdf_grader`가 `show_pdf_page`로 만든 출력 PDF는 top-level 콘텐츠 스트림이 `/fzFrm0 Do`(Form XObject 호출)뿐이라 CMYK 연산자가 감지 안 됨
+- 실제 xref 스트림 직접 덤프 결과, Form XObject 내부에 `1 0 0 0 k` 등 CMYK 연산자가 **그대로 보존**됨을 확인 → 인쇄 품질에는 영향 없음
+- 개선 방법: `_detect_vector_color_operators`가 Form XObject 리소스까지 순회하도록 확장 (doc.xref_length() + xref_stream) — MVP 이후 보완 권장
+- 기능적 영향: 사용자가 그레이딩 결과를 재업로드 시에만 "Unknown" 배지가 보임. 일반 워크플로우(외부 디자인 → 그레이딩)에서는 영향 없음
+
+**E2E 세부 결과**:
+- CMYK 원본 PDF: overall=CMYK, vector_cmyk=true, page 210x297mm, preview 1241x1754 OK
+- calc_scale: L→S=0.9, L→M=0.95, L→L=1.0, L→XL=1.05 (프리셋 치수 기반 정확)
+- generate_graded 출력 크기: S(189x266.58), M(199.5x281.79), L(210x297), XL(220.5x312.21) mm — scale 계산과 완전 일치
+- 파일 크기 리포트: compression_ratio 0.9 내외, 모든 응답에 file_size_bytes/original_size_bytes 포함
+- 에러 시나리오 5종: 존재하지 않는 PDF / 손상된 JSON / 0×0 치수 / 스케일 0 / 잘못된 커맨드 모두 success:false + exit 1 + 친절한 메시지
+- Python CLI 6개 커맨드 모두 정상 등록 (help 출력 확인)
 
 ### 5단계 검증 상세 (경량)
 - 빌드: `npx tsc --noEmit` 통과, `npx vite build` 통과 (266.90 KB JS / 18.38 KB CSS)
@@ -151,3 +174,4 @@ grader/
 | 2026-04-10 | tester | 4단계 검증 | 통과 (30/30) |
 | 2026-04-08 | developer | 5단계: analyze_color + 벡터 연산자 감지 + 파일 크기 리포트 + 상세 배지 UI | 완료 |
 | 2026-04-08 | tester | 5단계 검증 (빌드+Python CLI 3종+호환성+파일크기필드) | 통과 (10/10) |
+| 2026-04-08 | tester | 6단계 E2E 통합 테스트 (워크플로우+빌드+데이터흐름) | 통과 (18/19, 개선 제안 1건) |

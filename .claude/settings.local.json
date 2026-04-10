@@ -106,7 +106,8 @@
       "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" verify_cmyk test_cmyk.pdf)",
       "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" get_pdf_info test_cmyk.pdf)",
       "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" generate_graded test_cmyk.pdf out_scaled.pdf 1.05 1.08)",
-      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" analyze_color nonexistent.pdf)"
+      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" analyze_color nonexistent.pdf)",
+      "Bash(./venv/Scripts/python.exe \"C:/Users/user/AppData/Local/Temp/grader_e2e/make_assets.py\")"
     ]
   }
 }
