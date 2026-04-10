@@ -50,7 +50,28 @@
       "Bash(npm ls:*)",
       "Bash(cmd.exe //c \"\\\\\"C:\\\\\\\\Program Files \\(x86\\)\\\\\\\\Microsoft Visual Studio\\\\\\\\2022\\\\\\\\BuildTools\\\\\\\\VC\\\\\\\\Auxiliary\\\\\\\\Build\\\\\\\\vcvarsall.bat\\\\\" x64 >nul 2>&1 && set PATH=%USERPROFILE%\\\\\\\\.cargo\\\\\\\\bin;%PATH% && cd /d \\\\\"C:\\\\\\\\0. Programing\\\\\\\\grader\\\\\\\\src-tauri\\\\\" && cargo check 2>&1\")",
       "Bash(cmd.exe //c \"call \\\\\"C:\\\\\\\\Program Files \\(x86\\)\\\\\\\\Microsoft Visual Studio\\\\\\\\2022\\\\\\\\BuildTools\\\\\\\\VC\\\\\\\\Auxiliary\\\\\\\\Build\\\\\\\\vcvarsall.bat\\\\\" x64 >nul 2>&1 && set \\\\\"PATH=%USERPROFILE%\\\\\\\\.cargo\\\\\\\\bin;%PATH%\\\\\" && cargo check 2>&1\")",
-      "Bash(\"C:/0. Programing/grader/build.bat\")"
+      "Bash(\"C:/0. Programing/grader/build.bat\")",
+      "Bash(venv/Scripts/pip install:*)",
+      "Bash(venv/Scripts/python main.py --help)",
+      "Bash(cmd.exe //c \"build.bat\")",
+      "Bash(cmd.exe //c \"C:\\\\\\\\0. Programing\\\\\\\\grader\\\\\\\\build.bat\")",
+      "Bash(venv/Scripts/python main.py get_pdf_info)",
+      "Bash(C:/0. Programing/grader/python-engine/venv/Scripts/python.exe:*)",
+      "Bash(C:/0. Programing/grader/python-engine/venv/Scripts/pip.exe list:*)",
+      "Bash(./build.bat)",
+      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" unknown_command)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" generate_preview \"C:/0. Programing/grader/test_sample.pdf\" \"C:/0. Programing/grader/test_preview.png\" 100)",
+      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/0. Programing/grader/python-engine/main.py\" get_pdf_info)",
+      "Bash(./venv/Scripts/python _make_sample.py)",
+      "Bash(./venv/Scripts/python main.py get_pdf_info \"_sample_3p.pdf\")",
+      "Bash(./venv/Scripts/python main.py verify_cmyk \"_sample_3p.pdf\")",
+      "Bash(./venv/Scripts/python main.py generate_preview \"_sample_3p.pdf\" \"_sample_preview.png\" 150)",
+      "Bash(rm:*)",
+      "Bash(./venv/Scripts/python.exe _tester_make_sample.py)",
+      "Bash(./venv/Scripts/python.exe main.py get_pdf_info \"_tester_sample_3p.pdf\")",
+      "Bash(./venv/Scripts/python.exe main.py verify_cmyk \"_tester_sample_3p.pdf\")",
+      "Bash(./venv/Scripts/python.exe main.py generate_preview \"_tester_sample_3p.pdf\" \"_tester_sample_preview.png\" 150)"
     ]
   }
 }

@@ -15,6 +15,12 @@ dist-ssr
 # Rust build output
 src-tauri/target/
 
+# Python 가상환경 (PyMuPDF, reportlab 등 설치됨)
+python-engine/venv/
+python-engine/__pycache__/
+**/__pycache__/
+*.pyc
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -64,4 +64,27 @@
   - 프론트엔드만 테스트: `npm run dev` (Git Bash에서 가능)
   - TypeScript 검증: `npx tsc --noEmit` (Git Bash에서 가능)
   - Rust 빌드/실행 시 vcvarsall.bat x64 환경 선행 필수
+- **참조횟수**: 1
+
+### [2026-04-10] Python 엔진 호출 패턴
+- **분류**: convention
+- **발견자**: developer
+- **내용**:
+  - 프론트엔드에서 Python 호출: `invoke<string>("run_python", { command, args })` → 결과는 JSON 문자열
+  - Python CLI는 반드시 JSON 단일 라인을 stdout에 출력 (`print(json.dumps(data, ensure_ascii=False))`)
+  - 모든 Python 결과에 `success: boolean` 필드 포함, 실패 시 `error: string` 추가
+  - Python 스크립트 상단에서 sys.stdout을 UTF-8 TextIOWrapper로 재설정 (Windows cp949 대응)
+  - Tauri 타입 정의 시 Python 응답 인터페이스는 snake_case 유지 (Python 측 필드명과 1:1 매칭)
+  - 에러 핸들링은 프론트에서 try/catch + `result.success` 체크 두 단계
+- **참조횟수**: 0
+
+### [2026-04-10] Tauri 바이너리 파일 처리 패턴
+- **분류**: convention
+- **발견자**: developer
+- **내용**:
+  - 바이너리 파일 복사: `readFile(절대경로)` → Uint8Array → `writeFile(상대경로, bytes, { baseDir: BaseDirectory.AppData })`
+  - 절대 경로로 읽을 때는 `baseDir` 생략, 상대 경로는 `baseDir` 지정
+  - capabilities의 fs:allow-read-file / fs:allow-write-file / fs:allow-remove 권한은 별도로 추가 필요 (fs:default에 미포함)
+  - 바이너리 → base64 변환 시 8KB 청크 단위 루프로 String.fromCharCode 스택 초과 방지
+  - 로컬 이미지를 <img>에 표시할 때는 asset:// 대신 `data:image/png;base64,...` data URL 사용이 권한 설정 없이 안전
 - **참조횟수**: 0
