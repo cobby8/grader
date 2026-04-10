@@ -25,3 +25,15 @@
 - **발견자**: developer
 - **내용**: 디자인 파일(PDF)은 AppData/designs.json에 메타데이터 저장 + AppData/designs/{id}.pdf 실파일 + AppData/designs/{id}.preview.png 미리보기. 원본 파일을 앱 데이터로 복사하여 사용자 원본 위치에 의존하지 않음. 파일 ID는 "design-{timestamp36}-{random6}" 형식. 바이너리 파일 복사는 tauri-plugin-fs의 readFile/writeFile (절대 경로는 baseDir 생략, 상대 경로는 BaseDirectory.AppData 지정). 미리보기 이미지는 base64 data URL로 <img src>에 주입하여 asset 프로토콜 권한 없이 표시.
 - **참조횟수**: 0
+
+### [2026-04-10] 그레이딩 출력 파일 저장 구조
+- **분류**: architecture
+- **발견자**: developer
+- **내용**: 4단계 그레이딩 결과 PDF는 AppData/outputs/{timestamp}/{디자인명}_{사이즈}.pdf 형식으로 저장된다. timestamp는 "YYYY-MM-DD_HH-mm-ss" 형식으로 매 생성 작업마다 새 하위 폴더 생성. 파일명은 sanitizeFileName으로 확장자 제거 + <>:"/\|?* 치환 처리. 생성 직전에 프리셋 전체 JSON을 같은 폴더 내 _preset.json 임시 파일로 기록하여 Python calc_scale에 경로로 전달, 모든 사이즈 처리 후 삭제. Python은 stdin 대신 파일 경로 입력을 선호(크기 제한/이스케이프 문제 회피). 출력 폴더는 opener 플러그인 `openPath`로 OS 탐색기에서 열 수 있음(capabilities에 `opener:allow-open-path` + `$APPDATA/**` 범위 필요).
+- **참조횟수**: 0
+
+### [2026-04-10] CMYK 보존 PDF 스케일링 아키텍처
+- **분류**: architecture
+- **발견자**: developer
+- **내용**: PyMuPDF `show_pdf_page(target_rect, src_doc, page_num, keep_proportion=False)`를 사용하면 원본 PDF 페이지를 새 문서의 임의 크기 페이지에 "통째로 배치"할 수 있고, 내부적으로 XObject Form으로 원본 콘텐츠 스트림을 재사용하므로 벡터/텍스트/이미지의 색상 공간(/DeviceCMYK, ICCBased 포함)이 전혀 변환 없이 그대로 유지된다. `keep_proportion=False`로 설정하면 가로/세로 독립 스케일이 정확히 적용됨. 저장은 `doc.save(path, deflate=True, garbage=4, clean=True)` — 이 옵션들은 구조 최적화만 수행하고 색상 변환 없음. 이 방식이 grader 프로젝트의 그레이딩 엔진 핵심 기법이며, 4단계 MVP 그레이딩(단순 비례 스케일링)과 향후 고급 클리핑 마스킹의 기반.
+- **참조횟수**: 0

@@ -78,6 +78,12 @@
   - 에러 핸들링은 프론트에서 try/catch + `result.success` 체크 두 단계
 - **참조횟수**: 0
 
+### [2026-04-10] 페이지 간 상태 전달 패턴 (sessionStorage)
+- **분류**: convention
+- **발견자**: developer
+- **내용**: 라우팅으로 분리된 두 페이지 간에 사용자 선택 정보를 전달할 때 Zustand/Recoil 등 별도 상태 라이브러리 대신 sessionStorage + 간단한 store 모듈을 사용한다. 예: `src/stores/generationStore.ts` — `loadGenerationRequest()`, `saveGenerationRequest(req)`, `clearGenerationRequest()` 3개 함수만 export. sessionStorage 키는 `grader.{도메인}.{용도}` 네임스페이스(예: `grader.generation.request`). ID만 저장하고 실제 객체는 해당 스토어(presetStore/designStore)에서 매번 다시 로드(데이터 중복 방지). 브라우저 새로고침에도 유지되고 앱 종료 시 자동 소멸하여 프라이버시 측면도 안전. 에러 처리는 try/catch + console.error, 저장 실패는 throw 하지 않음(사용자 UX 방해 방지).
+- **참조횟수**: 0
+
 ### [2026-04-10] Tauri 바이너리 파일 처리 패턴
 - **분류**: convention
 - **발견자**: developer

@@ -71,7 +71,28 @@
       "Bash(./venv/Scripts/python.exe _tester_make_sample.py)",
       "Bash(./venv/Scripts/python.exe main.py get_pdf_info \"_tester_sample_3p.pdf\")",
       "Bash(./venv/Scripts/python.exe main.py verify_cmyk \"_tester_sample_3p.pdf\")",
-      "Bash(./venv/Scripts/python.exe main.py generate_preview \"_tester_sample_3p.pdf\" \"_tester_sample_preview.png\" 150)"
+      "Bash(./venv/Scripts/python.exe main.py generate_preview \"_tester_sample_3p.pdf\" \"_tester_sample_preview.png\" 150)",
+      "Bash(venv/Scripts/python.exe main.py --help)",
+      "Bash(venv/Scripts/python.exe _dev_test_4stage.py)",
+      "Bash(cmd //c \"build.bat\")",
+      "Bash(ls:*)",
+      "Bash(cmd.exe /c build.bat)",
+      "Bash(cmd.exe //c \".\\\\\\\\build.bat\")",
+      "Bash(venv/Scripts/python.exe -c \"from pattern_scaler import calculate_scale_factor; from pdf_grader import generate_graded_pdf; print\\('import OK'\\)\")",
+      "Bash(./venv/Scripts/python.exe -c \"from pattern_scaler import calculate_scale_factor; from pdf_grader import generate_graded_pdf; print\\('imports OK'\\)\")",
+      "Bash(cargo check:*)",
+      "Bash(mkdir:*)",
+      "Bash(./python-engine/venv/Scripts/python.exe test_temp/make_sample.py)",
+      "Bash(./venv/Scripts/python.exe main.py calc_scale \"C:/0. Programing/grader/test_temp/preset.json\" L L)",
+      "Bash(./venv/Scripts/python.exe main.py calc_scale \"C:/0. Programing/grader/test_temp/preset.json\" L XL)",
+      "Bash(./venv/Scripts/python.exe main.py calc_scale \"C:/0. Programing/grader/test_temp/preset.json\" L S)",
+      "Bash(./venv/Scripts/python.exe main.py calc_scale \"C:/0. Programing/grader/test_temp/preset.json\" L 3XL)",
+      "Bash(./venv/Scripts/python.exe main.py calc_scale \"C:/0. Programing/grader/test_temp/preset.json\" L ZERO)",
+      "Bash(./venv/Scripts/python.exe main.py generate_graded \"C:/0. Programing/grader/test_temp/sample.pdf\" \"C:/0. Programing/grader/test_temp/out_L.pdf\" 1.0 1.0)",
+      "Bash(./venv/Scripts/python.exe main.py generate_graded \"C:/0. Programing/grader/test_temp/sample.pdf\" \"C:/0. Programing/grader/test_temp/out_XL.pdf\" 1.05 1.078873)",
+      "Bash(./venv/Scripts/python.exe main.py generate_graded \"C:/0. Programing/grader/test_temp/sample.pdf\" \"C:/0. Programing/grader/test_temp/out_S.pdf\" 0.923077 0.957746)",
+      "Bash(./venv/Scripts/python.exe main.py generate_graded \"C:/no/such/file.pdf\" \"C:/0. Programing/grader/test_temp/out_err.pdf\" 1.0 1.0)",
+      "Bash(./venv/Scripts/python.exe main.py generate_graded \"C:/0. Programing/grader/test_temp/sample.pdf\" \"C:/0. Programing/grader/test_temp/out_neg.pdf\" -1.0 1.0)"
     ]
   }
 }

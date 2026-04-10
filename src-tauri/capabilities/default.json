@@ -39,6 +39,10 @@
     {
       "identifier": "fs:allow-remove",
       "allow": [{ "path": "$APPDATA/**" }]
+    },
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "$APPDATA/**" }]
     }
   ]
 }

@@ -2,7 +2,7 @@
 
 ## 현재 작업
 - **요청**: 승화전사 유니폼 패턴 자동 생성 프로그램 - 기술 타당성 조사 및 상세 계획 보고서 작성
-- **상태**: 개발 3단계 진행 중 (디자인 파일 처리 + Python 엔진)
+- **상태**: 개발 4단계 진행 중 (사이즈 선택 + 그레이딩/스케일링)
 - **현재 담당**: developer
 
 ## 기획설계 (planner-architect)
@@ -248,6 +248,141 @@ reviewer 참고:
     - `generate_preview ... 150` → 1241×1754 PNG 생성 성공
   - 검증 후 임시 파일(`_make_sample.py`, `_sample_3p.pdf`, `_sample_preview.png`) 모두 정리 완료
 
+### [2026-04-10] 4단계: 사이즈 선택 + 그레이딩 파일 생성
+
+구현한 기능:
+- **SizeSelect 페이지**: 프리셋/디자인/기준사이즈/타겟사이즈 4단계 선택 UI (드롭다운 + 체크박스 그리드)
+- **FileGenerate 페이지**: 생성 요약, 진행 상태 표시, 사이즈별 결과 카드, 출력 폴더 열기
+- **Python 그레이딩 엔진**: pattern_scaler(치수 기반 비율 계산) + pdf_grader(PyMuPDF show_pdf_page로 CMYK 보존 스케일링)
+- **Python CLI 확장**: `calc_scale`, `generate_graded` 두 서브커맨드 추가
+- **generationStore**: 페이지 간 선택 상태 전달 (sessionStorage 기반, 외부 라이브러리 없음)
+- **출력 관리**: AppData/outputs/{timestamp}/{디자인명}_{사이즈}.pdf 구조로 저장
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| python-engine/pattern_scaler.py | calculate_scale_factor — 프리셋의 기준/타겟 사이즈 평균 치수 비교하여 scale_x/scale_y 계산 | 신규 |
+| python-engine/pdf_grader.py | generate_graded_pdf — PyMuPDF로 새 문서 생성 후 show_pdf_page로 벡터 복사 (CMYK 유지) | 신규 |
+| python-engine/main.py | calc_scale / generate_graded 서브커맨드 추가, help 문구 확장 | 수정 |
+| src/types/generation.ts | GenerationRequest, GenerationResult, GenerationStatus, CalcScaleResult, GenerateGradedResult 타입 | 신규 |
+| src/stores/generationStore.ts | loadGenerationRequest / saveGenerationRequest / clearGenerationRequest (sessionStorage) | 신규 |
+| src/pages/SizeSelect.tsx | placeholder 전면 교체: 프리셋/디자인/기준사이즈/체크박스 그리드 UI + 유효성 검사 + "다음" 버튼 | 수정 |
+| src/pages/FileGenerate.tsx | placeholder 전면 교체: 요약/생성 실행/진행표시/결과목록/폴더열기 | 수정 |
+| src/App.css | 4단계 UI 스타일 추가 (size-section/size-select/size-summary/size-grid/size-cell/gen-result 등) | 수정 |
+| src-tauri/capabilities/default.json | opener:allow-open-path 권한 추가 ($APPDATA/** 범위) | 수정 |
+
+추가한 라이브러리:
+- npm: 신규 없음 (기존 @tauri-apps/plugin-opener, @tauri-apps/plugin-fs 재사용)
+- pip: 신규 없음 (기존 PyMuPDF, reportlab만 사용)
+
+Python 새 모듈 설명:
+
+1. **pattern_scaler.py** — 패턴 프리셋의 사이즈별 치수 데이터로 스케일 비율 계산
+   - `_get_size_spec(preset, size_name)`: 프리셋에서 특정 SizeSpec 검색
+   - `_avg_dimensions(size_spec)`: 조각별 가로/세로 평균 치수 (0 제외)
+   - `calculate_scale_factor(preset, base_size, target_size)`: 두 사이즈 평균 비교 → `{scale_x, scale_y}`
+   - 에러 케이스: 사이즈 미등록 / 치수 0 / 분모 0
+   - MVP 단순 비례: 모든 조각 평균 사용 (조각별 개별 비율은 향후 확장)
+
+2. **pdf_grader.py** — 원본 PDF를 비율대로 확대/축소해 새 PDF 생성
+   - `generate_graded_pdf(src, out, scale_x, scale_y)`: 핵심 함수
+   - 구현: `fitz.open()` → 새 빈 Document → 각 페이지마다 새 크기 new_page → `show_pdf_page(target_rect, src_doc, page_num, keep_proportion=False)`
+   - **CMYK 보존 원리**: show_pdf_page는 원본 콘텐츠 스트림을 XObject 폼으로 재사용. 래스터화 없이 벡터 오브젝트와 CMYK 색상 공간(/DeviceCMYK, ICCBased 모두)을 그대로 유지
+   - 저장 옵션: `deflate=True, garbage=4, clean=True` (구조 최적화만, 색상 변환 없음)
+   - 다중 페이지 PDF도 안전 처리
+
+3. **main.py 확장**
+   - `calc_scale <preset_json_path> <base_size> <target_size>`: 프리셋 JSON 파일 경로 받아 JSON 파싱 후 계산
+   - `generate_graded <src_pdf> <out_pdf> <scale_x> <scale_y>`: 실수 파싱 + 엔진 호출
+   - 실패 시 `success=false` JSON 반환 + `sys.exit(1)` (Rust `run_python`이 stdout 우선 반환)
+
+데이터 흐름:
+
+```
+[SizeSelect 페이지]
+  사용자 선택 (프리셋/디자인/기준사이즈/타겟사이즈들)
+   ↓ saveGenerationRequest()
+  sessionStorage["grader.generation.request"]
+   ↓ navigate("/generate")
+
+[FileGenerate 페이지]
+  마운트 → loadGenerationRequest() + loadPresets() + loadDesigns() → 매칭
+   ↓ "파일 생성 시작" 클릭
+  1) AppData/outputs/{timestamp}/ 디렉토리 생성
+  2) 프리셋 전체 JSON을 outputs/{timestamp}/_preset.json 에 임시 저장
+  3) for 각 타겟 사이즈:
+     a. invoke run_python calc_scale [_preset.json, baseSize, targetSize]
+        → Python이 JSON 읽고 scale_x/scale_y 반환
+     b. invoke run_python generate_graded [design.storedPath, out_pdf, scale_x, scale_y]
+        → Python이 PyMuPDF로 스케일링된 PDF 생성 (CMYK 보존)
+     c. updateResult(size, {status: success/error, outputPath, ...})
+  4) _preset.json 삭제
+  5) 결과 카드 표시 + "출력 폴더 열기" 버튼 (openPath with opener 플러그인)
+```
+
+Python CLI 독립 테스트 (구현 중 검증 완료 후 정리):
+- reportlab으로 A4 1페이지 CMYK 샘플 PDF 생성
+- 프리셋 JSON: 조각 2개, L(520×710) / XL(546×756.5 평균) 치수
+- `calc_scale L XL` → `scale_x=1.05, scale_y=1.079577` 정확
+- `generate_graded` → 210×297mm 원본이 220.5×320.6mm 결과로 생성, page_count=1 확인
+- `calc_scale L L` → `scale_x=1.0, scale_y=1.0` (같은 사이즈 원본 복사 동작)
+- `calc_scale L 3XL` (미등록) → `success=false`, 한국어 에러 메시지, exit 1
+- 모듈 import 검증: `from pattern_scaler import ...; from pdf_grader import ...` → OK
+
+빌드 검증:
+- TypeScript (`npx tsc --noEmit`): 에러 0건 통과
+- Vite (`npx vite build`): 726ms, 58 modules, CSS 17.12KB / JS 264.25KB
+- Rust (`build.bat`): dev profile 28.32s 컴파일 성공 (capabilities 변경 후 재생성)
+
+💡 tester 참고:
+- **기본 실행**: `dev.bat`으로 앱 기동 → 좌측 메뉴 "사이즈 선택" 진입
+- **선행 조건**: 패턴 프리셋 1개 이상, 디자인 파일 1개 이상 필요 (없으면 안내 메시지 표시)
+- **테스트 시나리오 1 (정상)**:
+  1. 프리셋 드롭다운에서 선택 → 조각/사이즈 요약이 표시되는지
+  2. 디자인 드롭다운에서 선택 → 크기/색상공간 요약 표시
+  3. 기준 사이즈 드롭다운이 프리셋 등록 사이즈로 채워지는지 (L 우선)
+  4. 사이즈 그리드에서 프리셋 미등록 사이즈는 disabled 회색 처리
+  5. "전체 선택" 클릭 → 프리셋 등록 사이즈만 체크됨
+  6. "다음: 파일 생성 →" 클릭 → FileGenerate 페이지 이동
+  7. "파일 생성 시작" 클릭 → 각 사이즈 카드가 pending → processing → success로 전환
+  8. "출력 폴더 열기" 클릭 → Windows 탐색기에서 AppData/outputs/{timestamp}/ 열림
+  9. 해당 폴더에 `{디자인명}_{사이즈}.pdf` 파일들이 생성되어 있어야 함
+- **테스트 시나리오 2 (유효성)**:
+  - 프리셋/디자인/사이즈 하나라도 미선택 → "다음" 버튼 disabled
+  - 기준 사이즈가 프리셋에 없음 → 에러 메시지 (UI가 자동 보정하므로 보기 어려움)
+- **테스트 시나리오 3 (에러 처리)**:
+  - 치수가 0인 사이즈 → calc_scale이 에러 반환, 해당 사이즈만 실패로 표시, 다른 사이즈는 계속 생성
+  - 프리셋에 치수가 하나도 없는 사이즈 포함 → 해당 사이즈 실패
+- **정상 동작 기준**:
+  - 기준 사이즈(L) → L 선택 시 원본 그대로 복사 (scale 1.0×1.0)
+  - XL 선택 시 L 대비 평균 치수 비율로 확대
+  - 생성된 PDF를 PDF 뷰어로 열면 원본 크기보다 확대/축소되어 보임
+  - 벡터/텍스트가 래스터화되지 않고 선명하게 유지되어야 함
+- **주의할 입력**:
+  - 프리셋 치수가 모두 0인 경우 → 모든 사이즈 실패 예상
+  - 매우 큰 스케일 차이 (5XS → 5XL): 동작은 하나 의미상 부적절
+  - 다중 페이지 PDF: 모든 페이지가 같은 비율로 스케일됨
+  - Illustrator에서 내보낸 실제 CMYK PDF로 최종 검증 권장 (reportlab 샘플은 3단계에서 언급한 "Unknown" 판정 한계 있음)
+- **페이지 이동**: 브라우저 새로고침해도 sessionStorage는 유지되나, 창 닫으면 소멸
+
+⚠️ reviewer 참고:
+- **아키텍처**:
+  - 프리셋 JSON을 임시 파일로 떨어뜨려 Python에 전달하는 방식 채택 (Rust로 JSON 문자열을 전달하는 것보다 경로가 짧고 stdin 제한 없음). 임시 파일은 출력 디렉토리 내에 만들고 완료 후 삭제
+  - show_pdf_page는 PyMuPDF의 권장 방식으로 원본 벡터/이미지 리소스를 재사용하므로 파일 크기와 품질이 모두 유지됨. MuPDF 1.18+ 에서 CMYK 프로파일을 정확히 보존함이 공식 문서에 명시됨
+- **보안**:
+  - Python subprocess는 기존 3단계와 동일하게 `Command::new + .args()` 방식 → 쉘 인젝션 불가
+  - 출력 경로는 항상 `$APPDATA/outputs/` 하위로만 생성 → 사용자 지정 경로 미허용 (시스템 다른 위치 쓰기 방지)
+  - opener 권한은 `opener:allow-open-path` + `$APPDATA/**` 경로 제한 → 임의 경로 실행 불가
+  - sessionStorage는 브라우저 세션 내에서만 유지되고 앱 종료 시 사라지므로 선택 정보 유출 위험 없음
+- **성능**:
+  - 사이즈별 순차 처리 (병렬 아님). 13개 전체 선택 시 13회 Python 호출 → 각 호출 ~200~500ms 가정 시 2~6초 소요
+  - 병렬화는 가능하나 PyMuPDF가 같은 src_doc을 공유하지 않으므로 현재는 단순 순차가 안전
+  - 프리셋 JSON 임시 파일은 한 번만 쓰고 모든 사이즈가 재사용 (파일 IO 최소화)
+- **UX**:
+  - 한 사이즈가 실패해도 전체 중단 없이 다음 사이즈 진행 → 부분 성공 지원
+  - 상태 색상: pending(회색) / processing(주황) / success(초록) / error(빨강)
+  - "뒤로" 버튼은 sessionStorage를 유지한 채 SizeSelect로 돌아가 재조정 가능
+  - "처음으로" 버튼은 sessionStorage 초기화 + SizeSelect로 (완전 새 작업)
+
 ## 테스트 결과 (tester)
 
 ### [2026-04-08] 1단계 검증
@@ -366,6 +501,65 @@ CSS 하드코딩 색상 (경미):
 - 프론트엔드 빌드/타입 영향 없음 확인
 - 수정 필요 사항: 없음
 
+### [2026-04-10] 4단계 검증
+
+| 테스트 항목 | 결과 | 비고 |
+|-----------|------|------|
+| 필수 파일 존재 (10개) | 통과 | pattern_scaler.py, pdf_grader.py, main.py(수정), generation.ts, generationStore.ts, SizeSelect.tsx, FileGenerate.tsx, App.css, default.json 모두 존재 |
+| TypeScript (tsc --noEmit) | 통과 | 에러 0건 |
+| Vite 빌드 (npx vite build) | 통과 | 723ms, 58 modules, CSS 17.12KB + JS 264.25KB |
+| Rust cargo check | 통과 | dev profile 40.66s, 에러 0건 (opener allow-open-path 권한 추가 반영됨) |
+| pattern_scaler 코드 검증 | 통과 | calculate_scale_factor(preset, base, target) → dict, _get_size_spec/_avg_dimensions 헬퍼 포함, 미등록/0치수 에러 처리 |
+| pdf_grader 코드 검증 | 통과 | generate_graded_pdf(src,out,sx,sy) 구현, PyMuPDF show_pdf_page(target_rect, src_doc, page_num, keep_proportion=False) 사용, close 전 len(doc) 지역변수 저장(이전 버그 재발 방지) |
+| main.py CLI 확장 | 통과 | calc_scale/generate_graded 서브커맨드 추가, 인자 개수 체크, FileNotFoundError 처리, 실패 시 exit 1 + JSON 에러 반환 |
+| Python 모듈 import | 통과 | `from pattern_scaler import calculate_scale_factor; from pdf_grader import generate_graded_pdf` OK |
+| CLI calc_scale L→L | 통과 | scale_x=1.0, scale_y=1.0 정확 (동일 사이즈 원본 복사 동작) |
+| CLI calc_scale L→XL | 통과 | scale_x=1.05, scale_y=1.078873 (520→546, 710→766 평균 비율) |
+| CLI calc_scale L→S | 통과 | scale_x=0.923077, scale_y=0.957746 (축소 방향도 정상) |
+| CLI calc_scale L→3XL (미등록) | 통과 | success=false, 한국어 에러 "타겟 사이즈 '3XL' 데이터가 프리셋에 없습니다.", exit 1 |
+| CLI calc_scale L→ZERO (0치수) | 통과 | success=false, "조각 치수가 등록되지 않았거나 0" 메시지, exit 1 |
+| CLI generate_graded 1.0×1.0 | 통과 | 출력 PDF 210.00×297.00mm (원본 그대로), page_count=1 |
+| CLI generate_graded 1.05×1.078873 | 통과 | 출력 PDF 220.50×320.43mm 확대, 원본 A4 대비 비율 정확 |
+| CLI generate_graded 0.92×0.95 | 통과 | 출력 PDF 193.85×284.45mm 축소 |
+| CLI generate_graded 없는 파일 | 통과 | FileNotFoundError → JSON 에러, exit 1 |
+| CLI generate_graded 음수 스케일 | 통과 | "유효하지 않은 스케일 값입니다" JSON 에러, exit 1 |
+| 생성 PDF 벡터 보존 확인 | 통과 | 페이지 스트림에 XObject 호출(`Do`)만 존재 → 원본 콘텐츠가 폼으로 재사용됨(CMYK 색상 공간 유지 원리 확인) |
+| SizeSelect.tsx 요구사항 | 통과 | 프리셋/디자인 드롭다운, 기준 사이즈 드롭다운(프리셋 등록 사이즈만), 13개 SIZE_LIST 체크박스 그리드, 미등록 사이즈 disabled, 전체선택/해제, "다음" 버튼 활성/비활성 로직 (4개 선택 조건 모두 AND) |
+| SizeSelect 이전 선택 복원 | 통과 | useEffect에서 loadGenerationRequest() → 프리셋/디자인 ID 유효성 재확인 후 state 복원 |
+| SizeSelect 프리셋 변경 자동보정 | 통과 | availablePresetSizes 변경 시 baseSize가 목록에 없으면 "L" 우선 아니면 첫 번째로 자동 변경 |
+| FileGenerate.tsx 요구사항 | 통과 | 요약 카드, "파일 생성 시작" 버튼, 진행 표시(N/M 완료), 결과 목록(pending/processing/success/error 상태별 스타일), 출력 폴더 열기, 뒤로/처음으로 버튼 |
+| FileGenerate 데이터 흐름 | 통과 | 마운트 시 loadGenerationRequest → 없으면 navigate("/size"), 있으면 preset/design 객체 매칭 후 results 초기화 |
+| 출력 경로 구조 | 통과 | AppData/outputs/{YYYY-MM-DD_HH-mm-ss}/{sanitized_name}_{size}.pdf, 임시 _preset.json도 같은 디렉토리에 저장 후 삭제 |
+| 프리셋 JSON 전달 방식 | 통과 | writeTextFile로 임시 파일 저장 → Python calc_scale에 경로 전달 → finally(try)로 remove, stdin/인자 크기 제한 회피 |
+| 사이즈별 순차 처리 | 통과 | for loop 내 try/catch로 한 사이즈 실패해도 전체 중단 없이 다음 사이즈 계속 진행 (부분 성공 지원) |
+| generationStore (sessionStorage) | 통과 | STORAGE_KEY="grader.generation.request", load/save/clear 3함수, try/catch로 파싱 실패 시 null 반환·저장 실패는 console만 |
+| types/generation.ts | 통과 | GenerationRequest/Status/Result + CalcScaleResult/GenerateGradedResult Python 응답 타입까지 포함 |
+| capabilities opener 권한 | 통과 | default.json에 `opener:allow-open-path` + `$APPDATA/**` 경로 제한, 임의 경로 실행 불가 |
+| Python subprocess 보안 | 통과 | Rust run_python은 `Command::new + .args(&cmd_args)` 방식으로 PowerShell/cmd 경유 없음 → 쉘 인젝션 불가, 사용자 입력(파일명)은 sanitizeFileName에서 `<>:"/\|?*` 제거 |
+| 출력 파일 경로 제한 | 통과 | 프론트에서 항상 AppData/outputs 하위로만 생성, 사용자가 임의 경로 지정 불가 |
+| 임시 파일 정리 | 통과 | test_temp 폴더 (sample.pdf, preset.json, out_L/XL/S.pdf, make_sample.py) 모두 삭제 완료 |
+
+테스트 환경:
+- 샘플 CMYK PDF: reportlab으로 A4 1페이지(setFillColorCMYK로 빨강/시안 박스 + 텍스트) 생성
+- 테스트 프리셋: 조각 2개(앞판/뒷판), 사이즈 4개 (S 480×680, L 520×710, XL 546×766, ZERO 0×0)
+- Python: python-engine/venv/Scripts/python.exe, PyMuPDF 1.27.2.2
+- Rust: cargo 1.94.1 (dev profile check 통과)
+
+교차 검증 하이라이트:
+- L→L 스케일 = 1.0 (같은 사이즈는 원본 그대로 복사) ✓
+- L→XL 스케일 > 1.0 (확대 방향) ✓
+- L→S 스케일 < 1.0 (축소 방향도 동작) ✓
+- 생성된 PDF를 PyMuPDF로 재오픈해 실제 페이지 크기가 `원본 × scale`과 정확히 일치하는 것 확인
+- 페이지 내용 스트림에 XObject `Do` 연산자만 존재하고 직접 CMYK 연산자(`k`/`K`)가 없음 → show_pdf_page가 원본 콘텐츠를 XObject 폼으로 감싸 재사용하고 있음이 검증됨 (CMYK 보존의 핵심 원리)
+- 미등록/0치수/없는 파일/음수 스케일 등 모든 에러 케이스에서 success=false + 한국어 메시지 + exit 1 일관 처리
+- 프론트엔드 데이터 흐름: SizeSelect(선택) → saveGenerationRequest → sessionStorage → navigate → FileGenerate(loadGenerationRequest → 객체 매칭 → 결과 초기화) 연결 정상
+
+종합: 30개 항목 중 30개 통과 / 0개 실패
+- **종합 판정: 4단계 통과**
+- 실제 앱 UI 수동 테스트는 개발서버 기동이 필요하므로 생략 (코드/CLI 레벨까지는 전 경로 검증 완료)
+- 수정 필요 사항: 없음
+- 권장: Illustrator/InDesign에서 내보낸 실제 작업 CMYK PDF로 최종 사용자 수동 검증 1회 (reportlab 샘플은 벡터 CMYK만 사용하는 특수 케이스이며, 3단계 errors.md의 "벡터 CMYK 감지 한계"와 동일한 이슈가 남아 있음)
+
 ## 리뷰 결과 (reviewer)
 (아직 없음)
 
@@ -390,3 +584,5 @@ CSS 하드코딩 색상 (경미):
 | 2026-04-10 | tester | 3단계 검증: 파일/TS/Vite/Rust/Python CLI/에러처리/보안 19개 통과, pdf_handler page_count=0 버그 1건 발견 | 조건부 통과 |
 | 2026-04-10 | tester | 3단계 재검증: pdf_handler page_count 버그 수정 확인(3페이지 PDF → page_count=3), 타 함수 점검, TSC/Vite 통과 | 3단계 최종 통과 |
 | 2026-04-10 | developer | pdf_handler.py page_count 버그 수정 (close 전 지역변수 저장) + 3페이지 샘플 CLI 검증 | 완료 — page_count=3 정상 |
+| 2026-04-10 | developer | 4단계: 사이즈 선택 + 그레이딩(pattern_scaler/pdf_grader) + SizeSelect/FileGenerate 페이지 + generationStore | 완료 — TS/Vite/Rust 빌드 통과 |
+| 2026-04-10 | tester | 4단계 검증: 파일/TS/Vite/Rust/Python CLI(calc_scale·generate_graded)/벡터CMYK보존/프론트엔드/보안 30개 전항목 통과 | 4단계 통과 |
