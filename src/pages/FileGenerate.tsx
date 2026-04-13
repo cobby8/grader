@@ -229,6 +229,9 @@ function FileGenerate() {
       // 3) 각 사이즈 순차 처리
       const baseFileName = sanitizeFileName(design.name);
 
+      // 임시 SVG 파일 경로를 추적 (사후 정리용)
+      const tempSvgPaths: string[] = [];
+
       for (const targetSize of request.selectedSizes) {
         // 상태: 처리중
         updateResult(targetSize, { status: "processing" });
@@ -245,7 +248,25 @@ function FileGenerate() {
           const outputFileName = `${baseFileName}_${targetSize}.pdf`;
           const outputAbs = await join(absOutputDir, outputFileName);
 
-          // 3-c) Python generate_graded 호출
+          // 3-c) 타겟 사이즈의 SVG 패턴 데이터가 있으면 임시 파일로 저장
+          // 이 SVG는 Python에서 클리핑 마스크로 사용된다.
+          // 프리셋의 첫 번째 조각(piece)에서 해당 사이즈의 SVG를 가져온다.
+          let clipSvgAbs: string | null = null;
+          if (preset.pieces.length > 0) {
+            const piece = preset.pieces[0];
+            const targetSvgData = piece.svgBySize?.[targetSize];
+            if (targetSvgData) {
+              // 임시 SVG 파일로 저장 (Python이 파일 경로로 읽음)
+              const tempSvgRel = `outputs/${timestampDir}/_clip_${targetSize}.svg`;
+              clipSvgAbs = await join(absOutputDir, `_clip_${targetSize}.svg`);
+              await writeTextFile(tempSvgRel, targetSvgData, {
+                baseDir: BaseDirectory.AppData,
+              });
+              tempSvgPaths.push(tempSvgRel);
+            }
+          }
+
+          // 3-d) Python generate_graded 호출
           // crop 파라미터가 있으면 아트보드 크기를 전달하여 CropBox 적용
           const gradeArgs = [
             design.storedPath, // 원본 기준 디자인 PDF (AppData/designs/{id}.pdf)
@@ -259,7 +280,19 @@ function FileGenerate() {
               artboard.artboard_width_pt.toString(),
               artboard.artboard_height_pt.toString()
             );
+          } else {
+            // crop 없더라도 clip_svg를 전달하려면 빈 crop 자리를 채워야 함
+            // (positional args이므로 순서 유지 필요)
+            if (clipSvgAbs) {
+              gradeArgs.push("0", "0"); // crop 미사용 표시 (0이면 전체 사용)
+            }
           }
+          // 클리핑 SVG 경로 전달 (있는 경우만)
+          if (clipSvgAbs) {
+            gradeArgs.push(clipSvgAbs);
+            gradeArgs.push("3.0"); // bleed 3mm
+          }
+
           const graded = await callPython<GenerateGradedResult>(
             "generate_graded",
             gradeArgs
@@ -288,11 +321,19 @@ function FileGenerate() {
         }
       }
 
-      // 4) 임시 프리셋 파일 정리 (실패해도 무시)
+      // 4) 임시 파일 정리 (프리셋 JSON + 클리핑 SVG들, 실패해도 무시)
       try {
         await remove(tempPresetRel, { baseDir: BaseDirectory.AppData });
       } catch {
         // 무시
+      }
+      // 임시 SVG 파일들도 정리
+      for (const svgRel of tempSvgPaths) {
+        try {
+          await remove(svgRel, { baseDir: BaseDirectory.AppData });
+        } catch {
+          // 무시
+        }
       }
     } catch (err) {
       console.error("파일 생성 실패:", err);

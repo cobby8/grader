@@ -142,7 +142,11 @@
       "Bash(python-engine/venv/Scripts/python python-engine/main.py get_pdf_info \"C:/Users/user/AppData/Roaming/com.grader.app/outputs/2026-04-13_18-57-27/$\\(ls 'C:/Users/user/AppData/Roaming/com.grader.app/outputs/2026-04-13_18-57-27/')",
       "Bash(./venv/Scripts/python.exe -c \"from pdf_handler import detect_artboard; from pdf_grader import generate_graded_pdf, generate_graded_pdf_legacy; print\\('import OK'\\)\")",
       "Bash(./venv/Scripts/python.exe main.py detect_artboard --help)",
-      "Bash(./venv/Scripts/python.exe -c \"import py_compile; py_compile.compile\\('pdf_grader.py', doraise=True\\); print\\('Python syntax OK'\\)\")"
+      "Bash(./venv/Scripts/python.exe -c \"import py_compile; py_compile.compile\\('pdf_grader.py', doraise=True\\); print\\('Python syntax OK'\\)\")",
+      "Bash(taskkill //f //pid 3728)",
+      "Bash(rm -f \"C:/Users/user/AppData/Roaming/com.grader.app/\"*.json)",
+      "Bash(echo \"DONE: $?\")",
+      "Bash(venv/Scripts/python.exe -c \"import svg_parser; import pdf_grader; import main; print\\('OK'\\)\")"
     ]
   }
 }

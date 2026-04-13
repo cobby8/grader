@@ -107,6 +107,16 @@ doc.save(output_path, deflate=True, garbage=4, clean=True)
 
 이전 기획: REPORT.md (10장) + decisions.md + architecture.md 참조
 
+### [2026-04-08] 클리핑 마스크 기반 그레이딩 기술 타당성 분석
+
+목표: 패턴 사이즈별 비균일 비례 문제를 해결하기 위한 클리핑 마스크 방식 분석
+
+핵심 결론:
+- **추천**: 방법 E (PDF W 연산자 직접 삽입) — CTM 삽입 경험의 자연스러운 확장
+- **대안**: 방법 C (화이트 마스크) — 빠른 MVP용 (3~5일)
+- **상세**: REPORT-CLIPPING.md 참조
+- **핵심 리스크**: SVG-PDF 좌표 Y축 반전 + 디자인-패턴 정렬 규칙 정의 필요
+
 ## 구현 기록 (developer)
 1~4단계 모두 완료. 각 단계 상세는 git 로그 참조 (커밋 메시지에 요약).
 
@@ -555,6 +565,42 @@ doc.save(output_path, deflate=True, garbage=4, clean=True)
 - set_mediabox → set_cropbox 순서 (CropBox가 MediaBox보다 크면 ValueError)
 - legacy 함수는 삭제하지 않고 보존 (import는 main.py에서 안 함, 직접 호출만 가능)
 
+### [2026-04-08] Phase 1: SVG 패턴 클리핑 마스크 + bleed(3mm) 적용
+
+📝 구현한 기능: 그레이딩 출력 PDF에 패턴 형태 클리핑 마스크 적용 (사각형→패턴 모양)
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| python-engine/svg_parser.py | extract_svg_paths_for_clipping(), _polyline_to_pdf_path(), _svg_path_d_to_pdf_path(), scale_pdf_path() 추가 | 수정 |
+| python-engine/pdf_grader.py | generate_graded_pdf에 clip_svg_path/bleed_mm 파라미터 + 클리핑 스트림 삽입 로직 | 수정 |
+| python-engine/main.py | generate_graded에 clip_svg/bleed_mm 인자 + extract_clip_paths CLI 커맨드 | 수정 |
+| src/pages/FileGenerate.tsx | 타겟 사이즈 SVG를 임시 파일로 저장 → Python에 clip_svg 경로 전달 + 임시 파일 정리 | 수정 |
+| src/types/generation.ts | GenerateGradedResult에 clipping_applied, clipping_paths_count, method 타입 확장 | 수정 |
+
+💡 tester 참고:
+- 검증: `npx tsc --noEmit` 통과, `npx vite build` 통과 (305KB JS / 23.8KB CSS), Python import 통과
+- 테스트 방법:
+  1. Python CLI: `python main.py extract_clip_paths "패턴_XS.svg"` → paths 배열 + pdf_commands 확인
+  2. Python CLI: `python main.py generate_graded src.pdf out.pdf 0.9 0.9 0 0 "패턴_XS.svg" 3.0` → clipping_applied=true 확인
+  3. 출력 PDF를 Acrobat/Illustrator에서 열어 패턴 모양으로 잘렸는지 확인
+  4. dev.bat 실행 → 사이즈별 SVG가 있는 프리셋으로 파일 생성 → 클리핑 적용 확인
+  5. 사이즈별 SVG가 없는 프리셋 → 기존과 동일하게 사각형 출력 (하위 호환)
+- 정상 동작:
+  - svgBySize에 해당 사이즈 SVG가 있으면 클리핑 적용 (method="clip+mask")
+  - SVG가 없으면 기존 스케일링만 적용 (method="clip")
+  - bleed 3mm가 적용되어 패턴 윤곽선보다 약간 바깥까지 출력
+  - CMYK 색상 보존 (클리핑은 색상에 영향 없음)
+- 주의할 입력:
+  - SVG에 도형이 없으면 클리핑 건너뜀 (스케일링만 적용)
+  - 클리핑 실패 시에도 스케일링된 결과는 정상 출력 (치명적 에러 아님)
+  - clean=False 저장 (클리핑 스트림 보존을 위해)
+
+⚠️ reviewer 참고:
+- W* (even-odd rule) 사용: 여러 패턴 조각이 있을 때 각각의 내부가 클리핑 영역
+- SVG Y축(아래로 증가) → PDF Y축(위로 증가) 변환: pdf_y = viewbox_height - svg_y
+- bleed 구현: 클리핑 경로를 bleed_scale만큼 확대 + translate로 중심 유지
+- show_pdf_page가 Form XObject(Do 연산자)로 콘텐츠를 넣으므로, 클리핑을 Do 앞에 삽입하면 XObject 전체에 적용됨
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -567,7 +613,6 @@ doc.save(output_path, deflate=True, garbage=4, clean=True)
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-04-08 | developer | Form XObject 내부 CMYK 감지 확장 (_scan_form_xobjects 추가) | 완료 (6/6) |
 | 2026-04-13 | tester | 실사용 시나리오 E2E (A3 복잡 CMYK + Form XObject 재귀) | 통과 (21/21) |
 | 2026-04-08 | developer | 엑셀 주문서 자동 인식 (order_parser.py + SizeSelect 엑셀 업로드) | 완료 |
 | 2026-04-08 | tester | 엑셀 주문서 검증 (3종 샘플+에러4종+빌드+회귀) | 통과 (11/11) |
@@ -577,3 +622,4 @@ doc.save(output_path, deflate=True, garbage=4, clean=True)
 | 2026-04-08 | developer | SVG 실제 도형 bounding box 추출 (svg_parser.py + PatternManage bbox 우선 호출) | 완료 |
 | 2026-04-08 | developer | 데이터 보호 안전장치 (3 store 로드/저장 빈배열 차단 + 백업) | 완료 |
 | 2026-04-08 | developer | SVG 아트보드 자동 보정 (normalize_artboard: viewBox 확장 1580x2000mm) | 완료 |
+| 2026-04-08 | developer | SVG 패턴 클리핑 마스크+bleed 적용 (svg_parser+pdf_grader+main+FileGenerate) | 완료 |

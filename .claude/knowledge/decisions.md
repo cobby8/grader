@@ -61,3 +61,15 @@
 - **발견자**: planner-architect
 - **내용**: Illustrator에서 저장한 PDF에는 TrimBox가 아트보드 크기로 저장된다. PyMuPDF의 page.trimbox로 자동 감지 가능. TrimBox가 없거나 MediaBox와 같은 경우 사용자 수동 입력(회사 표준 크기 1580x2000mm)으로 폴백. PDF 크롭 전에 아트보드 크기를 정확히 파악하는 것이 CropBox 적용의 전제조건이다.
 - **참조횟수**: 0
+
+### [2026-04-08] 비균일 스케일링 전략: Phase 1(단순 비례 + 클리핑 + bleed) 우선 채택
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: 사이즈별 부위 변화율이 비균일(어깨 -15.6% vs 밑단 -11.1%)하지만, 4가지 전략(단순비례/메시워프/기준점매핑/수평슬라이스) 분석 결과 Phase 1(단순 비례 + 클리핑 + bleed)로 시작하기로 결정. 이유: (1) 업계 대부분이 단순 비례 방식 사용, (2) 전략 1의 최대 위치 오차 약 1.25mm로 업계 허용 오차(+/-2~3mm) 이내, (3) bleed(3~5mm)와 원단 신축성이 오차를 흡수. CMYK 보존도 기존 show_pdf_page 방식으로 완벽 보장. 실물 인쇄 검증 후 필요시 Phase 2(수평 슬라이스)로 확장. 상세: REPORT-SCALING-STRATEGY.md 참조.
+- **참조횟수**: 0
+
+### [2026-04-08] 클리핑 마스크 그레이딩: PDF W 연산자 직접 삽입 방식 추천
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: 패턴 사이즈별 비례가 균일하지 않으므로(부위별 다른 비율 변화) 단순 스케일링만으로는 정확한 그레이딩 불가. SVG 패턴 윤곽선을 PDF 클리핑 마스크로 적용하는 방식이 필요. 5가지 방법(A:PyMuPDF클리핑, B:reportlab, C:화이트마스크, D:Illustrator, E:PDF W연산자) 비교 후, 방법 E를 최우선 추천. 이유: CTM 직접 삽입(검증 완료)의 자연스러운 확장, CMYK 완벽 보존, Illustrator 불필요, 추가 라이브러리 svgpathtools만 필요. 단계적 접근: Phase1 화이트마스크(3~5일) -> Phase2 PDF W연산자(1~2주) -> Phase3 Illustrator(필요시). 핵심 리스크: SVG-PDF 좌표 변환(Y축 반전)과 디자인-패턴 정렬 규칙 정의 필요.
+- **참조횟수**: 0
