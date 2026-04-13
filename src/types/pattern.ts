@@ -64,3 +64,15 @@ export const SIZE_LIST = [
 
 /** SIZE_LIST의 유니온 타입 */
 export type SizeName = (typeof SIZE_LIST)[number];
+
+/**
+ * 기준 아트보드 크기 (mm) — 회사 표준 디자인 PDF 아트보드
+ *
+ * 패턴 SVG의 아트보드가 이보다 작을 수 있으므로,
+ * SVG 업로드 시 이 크기로 viewBox를 보정한다.
+ * (패턴 도형의 좌표는 변경하지 않고 아트보드만 확장)
+ */
+export const STANDARD_ARTBOARD = {
+  width: 1580,   // mm
+  height: 2000,  // mm
+} as const;

@@ -402,6 +402,43 @@ grader/
 - 빈배열 차단은 "모두 개별 삭제" 방식만 허용 (한 건씩 삭제할 때는 배열 길이가 0이 아님)
 - 저장 전 백업은 실패해도 무시 (원래 저장 동작은 방해하지 않음)
 
+### [2026-04-08] SVG 아트보드 자동 보정 (normalize_artboard)
+
+📝 구현한 기능: SVG 업로드 시 아트보드(viewBox)를 디자인 PDF 기준 크기(1580x2000mm)로 자동 보정
+
+**문제**: 패턴 SVG 아트보드(1530x1200mm)와 디자인 PDF 아트보드(1580x2000mm)의 크기가 달라서 스케일링 시 출력물 크기가 부정확함
+
+**해결**: SVG viewBox를 확장하여 아트보드를 맞추고, 패턴을 새 아트보드 중앙에 배치. 도형 좌표는 변경하지 않음.
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| src/types/pattern.ts | STANDARD_ARTBOARD 상수 추가 (1580x2000mm) | 수정 |
+| python-engine/svg_parser.py | normalize_svg_artboard() 함수 추가 (viewBox 확장 + 중앙 배치) | 수정 |
+| python-engine/main.py | normalize_artboard CLI 커맨드 추가 + import 추가 | 수정 |
+| src/pages/PatternManage.tsx | normalizeSvgArtboard() 함수 추가 + 3개 SVG 업로드 경로에서 보정 적용 | 수정 |
+
+💡 tester 참고:
+- 검증: `npx tsc --noEmit` 통과, `npx vite build` 통과 (304KB JS / 23.8KB CSS)
+- Python import 테스트 통과
+- 테스트 방법:
+  1. Python CLI 수동 테스트: `python main.py normalize_artboard "패턴.svg" 1580 2000`
+     - 원본 viewBox(0 0 4337.01 3401.57) → 새 viewBox(중앙 정렬, 4478.67x5669.29) 확인
+  2. dev.bat 실행 → 패턴 관리 → SVG 업로드 → 콘솔에 "아트보드 보정 완료: 1530x1200mm → 1580x2000mm" 로그 확인
+  3. 보정된 SVG의 bounding box가 원본과 동일한지 확인 (도형 좌표 불변)
+  4. 보정 실패 시(Python 없는 환경 등) 원본 SVG가 그대로 저장되는지 확인 (폴백)
+- 정상 동작:
+  - SVG 업로드 후 presetStore에 저장된 svgData의 viewBox가 보정된 값
+  - 치수 테이블의 값은 이전과 동일 (bounding box는 도형 좌표 기반이므로 viewBox 변경에 영향 없음)
+- 주의할 입력:
+  - viewBox가 없는 SVG → "viewBox 속성이 없거나 잘못되었습니다" 에러 → 원본 폴백
+  - 이미 1580x2000mm인 SVG → 보정 적용되지만 결과 동일 (무해)
+
+⚠️ reviewer 참고:
+- PT_TO_MM=0.3528 상수는 svg_parser.py에 정의 (Illustrator SVG가 pt 단위 viewBox 사용)
+- 보정은 SVG 업로드 시점에 1회만 수행, 이후 bounding box 추출은 보정된 SVG 기준
+- normalizeSvgArtboard()는 Python 실패 시 원본 반환 (무중단 폴백)
+- STANDARD_ARTBOARD는 현재 상수, 향후 설정 UI에서 변경 가능하도록 구조화
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -414,9 +451,6 @@ grader/
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-04-08 | developer | 5단계: analyze_color + 벡터 연산자 감지 + 파일 크기 리포트 + 상세 배지 UI | 완료 |
-| 2026-04-08 | tester | 5단계 검증 (빌드+Python CLI 3종+호환성+파일크기필드) | 통과 (10/10) |
-| 2026-04-08 | tester | 6단계 E2E 통합 테스트 (워크플로우+빌드+데이터흐름) | 통과 (18/19, 개선 제안 1건) |
 | 2026-04-08 | developer | Form XObject 내부 CMYK 감지 확장 (_scan_form_xobjects 추가) | 완료 (6/6) |
 | 2026-04-13 | tester | 실사용 시나리오 E2E (A3 복잡 CMYK + Form XObject 재귀) | 통과 (21/21) |
 | 2026-04-08 | developer | 엑셀 주문서 자동 인식 (order_parser.py + SizeSelect 엑셀 업로드) | 완료 |
@@ -425,3 +459,5 @@ grader/
 | 2026-04-08 | developer | 패턴 카테고리 트리 분류 시스템 (CategoryTree+categoryStore+2컬럼 레이아웃) | 완료 |
 | 2026-04-08 | tester | 카테고리 트리 빠른 검증 (tsc+vite+코드리뷰 5항목) | 통과 (5/5) |
 | 2026-04-08 | developer | SVG 실제 도형 bounding box 추출 (svg_parser.py + PatternManage bbox 우선 호출) | 완료 |
+| 2026-04-08 | developer | 데이터 보호 안전장치 (3 store 로드/저장 빈배열 차단 + 백업) | 완료 |
+| 2026-04-08 | developer | SVG 아트보드 자동 보정 (normalize_artboard: viewBox 확장 1580x2000mm) | 완료 |

@@ -385,3 +385,109 @@ def get_svg_bounding_box(svg_path: str) -> dict:
         "viewbox_height": round(viewbox_height, 2),
         "element_count": element_count,
     }
+
+
+# SVG 좌표(pt) ↔ mm 변환 상수: 1pt = 0.3528mm, 1mm = 2.8346pt
+PT_TO_MM = 0.3528
+MM_TO_PT = 1.0 / PT_TO_MM  # ≈ 2.8346
+
+
+def normalize_svg_artboard(
+    svg_path: str, target_width_mm: float, target_height_mm: float
+) -> dict:
+    """
+    SVG의 아트보드(viewBox)를 목표 크기(mm)로 보정한다.
+    패턴 도형의 좌표는 변경하지 않는다.
+
+    원리:
+      Illustrator SVG의 viewBox는 pt 단위(1pt=0.3528mm)이다.
+      패턴 SVG 아트보드(예: 1530x1200mm)가 디자인 PDF 아트보드(예: 1580x2000mm)보다
+      작을 때, viewBox를 확장하여 아트보드를 맞추고 패턴을 중앙에 배치한다.
+
+    방법:
+      1. 현재 viewBox에서 SVG 좌표 → mm 변환 비율 계산
+      2. 목표 크기(mm)에 해당하는 새 viewBox 크기 계산
+      3. 패턴 도형을 아트보드 중앙에 배치하기 위해 viewBox 원점 조정
+      4. 보정된 SVG 데이터를 문자열로 반환 (원본 파일은 수정하지 않음)
+
+    Args:
+      svg_path: 원본 SVG 파일 경로
+      target_width_mm: 목표 아트보드 폭 (mm)
+      target_height_mm: 목표 아트보드 높이 (mm)
+
+    Returns:
+      성공 시: {success, normalized_svg, original_viewbox, new_viewbox,
+                scale_factor, original_artboard_mm, target_artboard_mm}
+      실패 시: {success: False, error: "..."}
+    """
+    try:
+        tree = ET.parse(svg_path)
+        root = tree.getroot()
+    except ET.ParseError as e:
+        return {"success": False, "error": f"SVG XML 파싱 실패: {e}"}
+    except FileNotFoundError:
+        return {"success": False, "error": f"파일을 찾을 수 없습니다: {svg_path}"}
+
+    # 1. 현재 viewBox 파싱
+    vb = root.get("viewBox", "").strip().split()
+    if len(vb) < 4:
+        return {"success": False, "error": "SVG에 viewBox 속성이 없거나 잘못되었습니다."}
+
+    try:
+        vb_x, vb_y, vb_w, vb_h = float(vb[0]), float(vb[1]), float(vb[2]), float(vb[3])
+    except ValueError:
+        return {"success": False, "error": f"viewBox 값을 숫자로 파싱할 수 없습니다: {vb}"}
+
+    if vb_w <= 0 or vb_h <= 0:
+        return {"success": False, "error": f"viewBox 크기가 유효하지 않습니다: {vb_w}x{vb_h}"}
+
+    # 2. 현재 아트보드의 mm 크기 계산 (viewBox pt → mm)
+    current_w_mm = vb_w * PT_TO_MM
+    current_h_mm = vb_h * PT_TO_MM
+
+    # 3. 목표 viewBox 크기 계산 (mm → pt)
+    new_vb_w = target_width_mm * MM_TO_PT
+    new_vb_h = target_height_mm * MM_TO_PT
+
+    # 4. 패턴을 새 아트보드 중앙에 배치
+    # 현재 viewBox의 중심점을 기준으로 새 viewBox를 중앙 정렬한다.
+    # 이렇게 하면 기존 도형 좌표를 건드리지 않고 아트보드만 확장된다.
+    old_center_x = vb_x + vb_w / 2.0
+    old_center_y = vb_y + vb_h / 2.0
+    new_vb_x = old_center_x - new_vb_w / 2.0
+    new_vb_y = old_center_y - new_vb_h / 2.0
+
+    # 5. SVG 요소의 viewBox, width, height 속성 업데이트
+    root.set("viewBox", f"{new_vb_x:.2f} {new_vb_y:.2f} {new_vb_w:.2f} {new_vb_h:.2f}")
+    root.set("width", f"{target_width_mm}mm")
+    root.set("height", f"{target_height_mm}mm")
+
+    # 6. 보정된 SVG를 문자열로 직렬화
+    # xml_declaration=False: <?xml ...?> 헤더는 원본에 있을 수도/없을 수도 있으므로 생략
+    normalized_svg = ET.tostring(root, encoding="unicode")
+
+    return {
+        "success": True,
+        "normalized_svg": normalized_svg,
+        "original_viewbox": {
+            "x": round(vb_x, 2),
+            "y": round(vb_y, 2),
+            "w": round(vb_w, 2),
+            "h": round(vb_h, 2),
+        },
+        "new_viewbox": {
+            "x": round(new_vb_x, 2),
+            "y": round(new_vb_y, 2),
+            "w": round(new_vb_w, 2),
+            "h": round(new_vb_h, 2),
+        },
+        "scale_factor": round(MM_TO_PT, 4),
+        "original_artboard_mm": {
+            "w": round(current_w_mm, 2),
+            "h": round(current_h_mm, 2),
+        },
+        "target_artboard_mm": {
+            "w": target_width_mm,
+            "h": target_height_mm,
+        },
+    }

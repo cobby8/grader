@@ -32,7 +32,7 @@ from pdf_handler import (
 from pattern_scaler import calculate_scale_factor
 from pdf_grader import generate_graded_pdf
 from order_parser import parse_order_excel
-from svg_parser import get_svg_bounding_box
+from svg_parser import get_svg_bounding_box, normalize_svg_artboard
 
 
 def print_json(data: dict) -> None:
@@ -59,6 +59,7 @@ def show_help() -> None:
             "generate_graded <src_pdf> <out_pdf> <scale_x> <scale_y>": "원본 PDF를 주어진 비율로 스케일링해 새 PDF를 생성합니다 (CMYK 보존)",
             "parse_order <excel_path>": "엑셀 주문서에서 사이즈 목록과 수량을 자동 추출합니다 (xlsx)",
             "svg_bbox <svg_path>": "SVG 파일 내 실제 도형의 bounding box를 계산합니다 (viewBox가 아닌 실제 크기)",
+            "normalize_artboard <svg_path> <target_w_mm> <target_h_mm>": "SVG 아트보드(viewBox)를 목표 크기(mm)로 보정합니다 (패턴 좌표 유지, 중앙 배치)",
         },
         "examples": [
             'python main.py get_pdf_info "C:/designs/front.pdf"',
@@ -69,6 +70,7 @@ def show_help() -> None:
             'python main.py generate_graded "C:/src.pdf" "C:/out.pdf" 1.05 1.08',
             'python main.py parse_order "C:/orders/order.xlsx"',
             'python main.py svg_bbox "C:/patterns/front_L.svg"',
+            'python main.py normalize_artboard "C:/patterns/front_L.svg" 1580 2000',
         ],
     }
     print_json(help_text)
@@ -172,6 +174,30 @@ def main() -> None:
                 print_error(f"SVG 파일을 찾을 수 없습니다: {args[1]}")
                 sys.exit(1)
             result = get_svg_bounding_box(args[1])
+            print_json(result)
+            if not result.get("success"):
+                sys.exit(1)
+
+        elif command == "normalize_artboard":
+            # SVG 아트보드(viewBox)를 목표 크기(mm)로 보정
+            # 패턴 도형의 좌표는 변경하지 않고, 아트보드만 확장하여 중앙 배치
+            if len(args) < 4:
+                print_error(
+                    "인자가 부족합니다. 예: python main.py normalize_artboard pattern.svg 1580 2000"
+                )
+                sys.exit(1)
+            svg_path = args[1]
+            try:
+                target_w = float(args[2])
+                target_h = float(args[3])
+            except ValueError:
+                print_error("목표 크기는 숫자(mm)여야 합니다.")
+                sys.exit(1)
+            import os as _os4
+            if not _os4.path.exists(svg_path):
+                print_error(f"SVG 파일을 찾을 수 없습니다: {svg_path}")
+                sys.exit(1)
+            result = normalize_svg_artboard(svg_path, target_w, target_h)
             print_json(result)
             if not result.get("success"):
                 sys.exit(1)

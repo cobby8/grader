@@ -136,7 +136,10 @@
       "Bash(./venv/Scripts/python.exe -c \"from svg_parser import get_svg_bounding_box; print\\('import OK'\\)\")",
       "Bash(./venv/Scripts/python.exe main.py svg_bbox --help)",
       "Bash(echo \"EXIT: $?\")",
-      "Bash(./venv/Scripts/python.exe main.py svg_bbox test_bbox.svg)"
+      "Bash(./venv/Scripts/python.exe main.py svg_bbox test_bbox.svg)",
+      "Bash(taskkill //f //pid 12464)",
+      "Bash(python-engine/venv/Scripts/python python-engine/main.py get_pdf_info \"C:/Users/user/AppData/Roaming/com.grader.app/designs/design-mnx0qjh4-isb4og.pdf\")",
+      "Bash(python-engine/venv/Scripts/python python-engine/main.py get_pdf_info \"C:/Users/user/AppData/Roaming/com.grader.app/outputs/2026-04-13_18-57-27/$\\(ls 'C:/Users/user/AppData/Roaming/com.grader.app/outputs/2026-04-13_18-57-27/')"
     ]
   }
 }
