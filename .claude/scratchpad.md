@@ -192,6 +192,26 @@ grader/
 - 정상 동작: 드래그 시 테두리 색 변경, 여러 PDF 드롭 시 "1/3 파일 처리 중..." 형식 진행 표시
 - 주의할 입력: PDF 아닌 파일 드롭 → "PDF 파일만 업로드할 수 있습니다" 에러 메시지
 
+### [2026-04-08] SVG 업로드 시 치수 자동 추출
+
+📝 구현 요약:
+- `parseSvgDimensions()` + `parseLength()` 유틸리티 함수 추가 (PatternManage.tsx 내부)
+- SVG의 width/height 속성 또는 viewBox에서 크기를 mm 단위로 자동 추출
+- 단위 변환 지원: mm/cm/in/pt/px (패턴 SVG는 보통 mm, Illustrator 기본은 px)
+- `addSvgFilesWithSizeGrouping`: 사이즈별 SVG가 있으면 해당 SVG에서, 없으면 대표 SVG에서 크기 추출
+- `addSvgFilesAsPieces`: 개별 SVG에서 크기 추출하여 모든 사이즈에 동일 적용
+- 파싱 실패 시 0 반환 (사용자 수동 입력 가능, 기존 input 필드 유지)
+
+| 파일 | 변경 | 신규/수정 |
+|------|------|----------|
+| src/pages/PatternManage.tsx | parseSvgDimensions/parseLength 유틸 추가 + 두 함수에서 치수 자동 채움 | 수정 |
+
+💡 tester 참고:
+- 검증: `npx tsc --noEmit` 통과, `npx vite build` 통과 (303KB JS / 23.8KB CSS)
+- 테스트: SVG 파일 업로드/폴더 업로드 시 치수 테이블에 0이 아닌 값이 자동 입력되는지 확인
+- 정상 동작: `<svg width="520mm" height="710mm">` → width=520, height=710 자동 입력
+- 주의할 입력: viewBox만 있는 SVG, px 단위 SVG, width/height 없는 SVG
+
 ## 테스트 결과 (tester)
 | 단계 | 판정 | 항목 | 이슈 |
 |------|------|------|------|

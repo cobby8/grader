@@ -35,6 +35,91 @@ type EditMode = "list" | "create" | "edit";
 
 // === 유틸리티 함수 ===
 
+/** SVG에서 추출한 치수 (mm 단위) */
+interface SvgDimensions {
+  width: number;
+  height: number;
+}
+
+/**
+ * SVG의 길이 값(예: "520mm", "710px", "100")을 mm 단위 숫자로 변환한다.
+ * 패턴 SVG는 보통 mm 단위이므로 mm를 기본으로 취급한다.
+ * 단위가 없으면 px(96dpi)로 간주하여 변환한다.
+ */
+function parseLength(value: string): number {
+  const match = value.trim().match(/^([\d.]+)\s*(mm|cm|in|pt|px)?$/i);
+  if (!match) return 0;
+
+  const num = parseFloat(match[1]);
+  if (isNaN(num) || num <= 0) return 0;
+
+  const unit = (match[2] || "px").toLowerCase();
+  switch (unit) {
+    case "mm": return num;
+    case "cm": return num * 10;
+    case "in": return num * 25.4;
+    case "pt": return num * 0.3528;
+    case "px": return num * 0.2646; // 96dpi 기준: 1px = 25.4/96 mm
+    default:   return num * 0.2646;
+  }
+}
+
+/**
+ * SVG 문자열에서 너비/높이를 mm 단위로 추출한다.
+ *
+ * 추출 우선순위:
+ * 1) <svg> 태그의 width/height 속성 (단위 포함 시 변환)
+ * 2) viewBox 속성의 3번째/4번째 값 (단위 없으므로 mm로 간주)
+ *
+ * 패턴 SVG는 대부분 mm 단위로 작업되므로,
+ * viewBox만 있을 때는 해당 값을 mm로 간주한다.
+ * 파싱 실패 시 {width: 0, height: 0}을 반환하여 사용자가 수동 입력할 수 있게 한다.
+ */
+function parseSvgDimensions(svgData: string): SvgDimensions {
+  // DOMParser로 SVG를 파싱한다
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgData, "image/svg+xml");
+  const svg = doc.querySelector("svg");
+
+  if (!svg) return { width: 0, height: 0 };
+
+  // 1단계: width/height 속성에서 추출 (단위 변환 포함)
+  const widthAttr = svg.getAttribute("width");
+  const heightAttr = svg.getAttribute("height");
+
+  if (widthAttr && heightAttr) {
+    const w = parseLength(widthAttr);
+    const h = parseLength(heightAttr);
+    if (w > 0 && h > 0) {
+      return {
+        width: Math.round(w * 100) / 100,  // 소수점 2자리로 반올림
+        height: Math.round(h * 100) / 100,
+      };
+    }
+  }
+
+  // 2단계: viewBox에서 추출 (width/height 없거나 파싱 실패 시)
+  const viewBox = svg.getAttribute("viewBox");
+  if (viewBox) {
+    // viewBox="minX minY width height" — 공백 또는 쉼표로 구분
+    const parts = viewBox.trim().split(/[\s,]+/);
+    if (parts.length >= 4) {
+      const vbWidth = parseFloat(parts[2]);
+      const vbHeight = parseFloat(parts[3]);
+      // 패턴 SVG의 viewBox는 보통 mm 기준이므로 그대로 사용
+      if (vbWidth > 0 && vbHeight > 0) {
+        return {
+          width: Math.round(vbWidth * 100) / 100,
+          height: Math.round(vbHeight * 100) / 100,
+        };
+      }
+    }
+  }
+
+  // 파싱 실패: 0으로 반환하여 사용자가 수동 입력
+  return { width: 0, height: 0 };
+}
+
 /**
  * 파일명에서 사이즈를 추출한다.
  * 예: "농구유니폼_U넥_스탠다드_암홀X_2XL.svg" → "2XL"
@@ -422,16 +507,23 @@ function PatternManage() {
     const updatedPieces = [...formPieces, ...newPieces];
     setFormPieces(updatedPieces);
 
+    // 사이즈별 SVG에서 치수를 자동 추출하여 테이블에 채운다.
+    // 해당 사이즈의 SVG가 있으면 그 SVG에서, 없으면 대표 SVG에서 크기를 읽는다.
     setFormSizes((prev) =>
       prev.map((sizeSpec) => ({
         ...sizeSpec,
         pieces: [
           ...sizeSpec.pieces,
-          ...newPieces.map((np) => ({
-            pieceId: np.id,
-            width: 0,
-            height: 0,
-          })),
+          ...newPieces.map((np) => {
+            // 이 사이즈 전용 SVG가 있으면 그것에서 크기 추출
+            const svgForSize = np.svgBySize?.[sizeSpec.size];
+            const dims = parseSvgDimensions(svgForSize || np.svgData || "");
+            return {
+              pieceId: np.id,
+              width: dims.width,
+              height: dims.height,
+            };
+          }),
         ],
       }))
     );
@@ -474,16 +566,21 @@ function PatternManage() {
     const updatedPieces = [...formPieces, ...newPieces];
     setFormPieces(updatedPieces);
 
+    // 개별 SVG에서도 치수를 자동 추출하여 기본값으로 채운다.
+    // 사이즈별 SVG가 없으므로, 대표 svgData에서 크기를 읽어 모든 사이즈에 동일하게 적용.
     setFormSizes((prev) =>
       prev.map((sizeSpec) => ({
         ...sizeSpec,
         pieces: [
           ...sizeSpec.pieces,
-          ...newPieces.map((np) => ({
-            pieceId: np.id,
-            width: 0,
-            height: 0,
-          })),
+          ...newPieces.map((np) => {
+            const dims = parseSvgDimensions(np.svgData || "");
+            return {
+              pieceId: np.id,
+              width: dims.width,
+              height: dims.height,
+            };
+          }),
         ],
       }))
     );
