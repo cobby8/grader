@@ -498,21 +498,23 @@ def normalize_svg_artboard(
 # ─────────────────────────────────────────────────────────
 
 
-def _polyline_to_pdf_path(points_str: str, page_height: float) -> Optional[str]:
+def _polyline_to_pdf_path(
+    points_str: str,
+    page_height: float,
+    svg_to_pdf_fn=None,
+) -> Optional[str]:
     """
     SVG polyline/polygon의 points 속성을 PDF 경로 명령어로 변환한다.
 
     왜 Y축을 반전하는가:
       SVG 좌표계: Y축이 아래로 증가 (좌상단 원점)
       PDF 좌표계: Y축이 위로 증가 (좌하단 원점)
-      따라서 pdf_y = page_height - svg_y 로 변환해야 한다.
+
+    svg_to_pdf_fn이 주어지면 viewBox 원점 + 정규화 + PDF 크기 매핑을 한 번에 처리.
+    없으면 기존 방식(page_height - y)으로 폴백.
 
     PDF 경로 명령어:
       m = moveto (시작점), l = lineto (선분), h = closepath (경로 닫기)
-
-    예시:
-      SVG points="100,200 300,400" + page_height=1000
-      → PDF: "100.00 800.00 m 300.00 600.00 l h"
     """
     coords = re.findall(r"-?[\d.]+", points_str)
     if len(coords) < 4:
@@ -524,12 +526,22 @@ def _polyline_to_pdf_path(points_str: str, page_height: float) -> Optional[str]:
     if len(xs) < 2:
         return None
 
+    # 좌표 변환 함수 결정
+    if svg_to_pdf_fn:
+        # viewBox 원점 고려 + 정규화 + PDF 크기 매핑 (정확한 방식)
+        convert = svg_to_pdf_fn
+    else:
+        # 기존 폴백 방식 (viewBox 원점이 0,0일 때만 정확)
+        convert = lambda sx, sy: (sx, page_height - sy)
+
     # 첫 번째 점: m (moveto) — 경로의 시작점
-    cmds = [f"{xs[0]:.2f} {page_height - ys[0]:.2f} m"]
+    px, py = convert(xs[0], ys[0])
+    cmds = [f"{px:.2f} {py:.2f} m"]
 
     # 나머지 점: l (lineto) — 직선으로 연결
     for i in range(1, len(xs)):
-        cmds.append(f"{xs[i]:.2f} {page_height - ys[i]:.2f} l")
+        px, py = convert(xs[i], ys[i])
+        cmds.append(f"{px:.2f} {py:.2f} l")
 
     # h (closepath) — 마지막 점에서 시작점으로 자동 연결
     cmds.append("h")
@@ -537,18 +549,28 @@ def _polyline_to_pdf_path(points_str: str, page_height: float) -> Optional[str]:
     return " ".join(cmds)
 
 
-def _svg_path_d_to_pdf_path(d_attr: str, page_height: float) -> Optional[str]:
+def _svg_path_d_to_pdf_path(
+    d_attr: str,
+    page_height: float,
+    svg_to_pdf_fn=None,
+) -> Optional[str]:
     """
     SVG <path d="..."> 속성을 PDF 경로 명령어로 변환한다.
 
     SVG path 명령(M, L, C, S, Q, Z 등)을 PDF 경로 명령(m, l, c, h 등)으로
     1:1 대응시킨다. 상대 좌표(소문자 명령)는 절대 좌표로 변환한 후 처리.
 
-    주의: SVG와 PDF의 명령어 문자가 일부 겹치지만 의미가 다를 수 있음.
-    여기서는 모두 절대 좌표 기반 PDF 명령으로 통일한다.
+    svg_to_pdf_fn이 주어지면 viewBox 원점 + 정규화 + PDF 크기 매핑을 한 번에 처리.
+    없으면 기존 방식(page_height - y)으로 폴백.
     """
     if not d_attr or not d_attr.strip():
         return None
+
+    # 좌표 변환 함수 결정
+    if svg_to_pdf_fn:
+        convert = svg_to_pdf_fn
+    else:
+        convert = lambda sx, sy: (sx, page_height - sy)
 
     # SVG path 토큰 분리 (명령어 + 숫자)
     tokens = re.findall(
@@ -590,8 +612,9 @@ def _svg_path_d_to_pdf_path(d_attr: str, page_height: float) -> Optional[str]:
                 y += cur_y
             cur_x, cur_y = x, y
             start_x, start_y = x, y
-            # PDF moveto: Y축 반전
-            pdf_cmds.append(f"{x:.2f} {page_height - y:.2f} m")
+            # PDF moveto: 좌표 변환 적용
+            px, py = convert(x, y)
+            pdf_cmds.append(f"{px:.2f} {py:.2f} m")
             cmd = "L" if cmd == "M" else "l"
 
         elif cmd in ("L", "l"):
@@ -600,21 +623,24 @@ def _svg_path_d_to_pdf_path(d_attr: str, page_height: float) -> Optional[str]:
                 x += cur_x
                 y += cur_y
             cur_x, cur_y = x, y
-            pdf_cmds.append(f"{x:.2f} {page_height - y:.2f} l")
+            px, py = convert(x, y)
+            pdf_cmds.append(f"{px:.2f} {py:.2f} l")
 
         elif cmd in ("H", "h"):
             x = _next_num()
             if cmd == "h":
                 x += cur_x
             cur_x = x
-            pdf_cmds.append(f"{x:.2f} {page_height - cur_y:.2f} l")
+            px, py = convert(cur_x, cur_y)
+            pdf_cmds.append(f"{px:.2f} {py:.2f} l")
 
         elif cmd in ("V", "v"):
             y = _next_num()
             if cmd == "v":
                 y += cur_y
             cur_y = y
-            pdf_cmds.append(f"{cur_x:.2f} {page_height - y:.2f} l")
+            px, py = convert(cur_x, cur_y)
+            pdf_cmds.append(f"{px:.2f} {py:.2f} l")
 
         elif cmd in ("C", "c"):
             # 3차 베지어 곡선: 제어점2개 + 끝점1개 = 6개 숫자
@@ -625,10 +651,13 @@ def _svg_path_d_to_pdf_path(d_attr: str, page_height: float) -> Optional[str]:
                     coords[j + 1] += cur_y
             cur_x, cur_y = coords[4], coords[5]
             # PDF 3차 베지어: c x1 y1 x2 y2 x3 y3
+            p1x, p1y = convert(coords[0], coords[1])
+            p2x, p2y = convert(coords[2], coords[3])
+            p3x, p3y = convert(coords[4], coords[5])
             pdf_cmds.append(
-                f"{coords[0]:.2f} {page_height - coords[1]:.2f} "
-                f"{coords[2]:.2f} {page_height - coords[3]:.2f} "
-                f"{coords[4]:.2f} {page_height - coords[5]:.2f} c"
+                f"{p1x:.2f} {p1y:.2f} "
+                f"{p2x:.2f} {p2y:.2f} "
+                f"{p3x:.2f} {p3y:.2f} c"
             )
 
         elif cmd in ("S", "s"):
@@ -639,31 +668,37 @@ def _svg_path_d_to_pdf_path(d_attr: str, page_height: float) -> Optional[str]:
                     coords[j] += cur_x
                     coords[j + 1] += cur_y
             # S를 C로 근사 (반사 제어점 생략, 현재 점을 첫 제어점으로 사용)
+            pc_x, pc_y = convert(cur_x, cur_y)
+            p2x, p2y = convert(coords[0], coords[1])
+            p3x, p3y = convert(coords[2], coords[3])
             pdf_cmds.append(
-                f"{cur_x:.2f} {page_height - cur_y:.2f} "
-                f"{coords[0]:.2f} {page_height - coords[1]:.2f} "
-                f"{coords[2]:.2f} {page_height - coords[3]:.2f} c"
+                f"{pc_x:.2f} {pc_y:.2f} "
+                f"{p2x:.2f} {p2y:.2f} "
+                f"{p3x:.2f} {p3y:.2f} c"
             )
             cur_x, cur_y = coords[2], coords[3]
 
         elif cmd in ("Q", "q"):
-            # 2차 베지어 → PDF는 3차만 지원하므로, 2차를 3차로 승격
+            # 2차 베지어 -> PDF는 3차만 지원하므로, 2차를 3차로 승격
             coords = [_next_num() for _ in range(4)]
             if cmd == "q":
                 for j in range(0, 4, 2):
                     coords[j] += cur_x
                     coords[j + 1] += cur_y
-            # 2차→3차 변환: CP1 = P0 + 2/3*(QCP-P0), CP2 = P1 + 2/3*(QCP-P1)
+            # 2차->3차 변환: CP1 = P0 + 2/3*(QCP-P0), CP2 = P1 + 2/3*(QCP-P1)
             qx, qy = coords[0], coords[1]  # 2차 제어점
             ex, ey = coords[2], coords[3]  # 끝점
             cp1x = cur_x + 2.0 / 3.0 * (qx - cur_x)
             cp1y = cur_y + 2.0 / 3.0 * (qy - cur_y)
             cp2x = ex + 2.0 / 3.0 * (qx - ex)
             cp2y = ey + 2.0 / 3.0 * (qy - ey)
+            p1x, p1y = convert(cp1x, cp1y)
+            p2x, p2y = convert(cp2x, cp2y)
+            p3x, p3y = convert(ex, ey)
             pdf_cmds.append(
-                f"{cp1x:.2f} {page_height - cp1y:.2f} "
-                f"{cp2x:.2f} {page_height - cp2y:.2f} "
-                f"{ex:.2f} {page_height - ey:.2f} c"
+                f"{p1x:.2f} {p1y:.2f} "
+                f"{p2x:.2f} {p2y:.2f} "
+                f"{p3x:.2f} {p3y:.2f} c"
             )
             cur_x, cur_y = ex, ey
 
@@ -673,7 +708,7 @@ def _svg_path_d_to_pdf_path(d_attr: str, page_height: float) -> Optional[str]:
             pdf_cmds.append("h")
 
         elif cmd in ("A", "a"):
-            # 호(arc) → PDF에 직접 대응 없음. 끝점까지 직선으로 근사.
+            # 호(arc) -> PDF에 직접 대응 없음. 끝점까지 직선으로 근사.
             # 패턴 SVG에서 arc는 거의 사용되지 않으므로 간단 처리.
             _next_num()  # rx
             _next_num()  # ry
@@ -685,7 +720,8 @@ def _svg_path_d_to_pdf_path(d_attr: str, page_height: float) -> Optional[str]:
                 x += cur_x
                 y += cur_y
             cur_x, cur_y = x, y
-            pdf_cmds.append(f"{x:.2f} {page_height - y:.2f} l")
+            px, py = convert(x, y)
+            pdf_cmds.append(f"{px:.2f} {py:.2f} l")
 
         else:
             i += 1
@@ -734,7 +770,11 @@ def scale_pdf_path(pdf_path_str: str, sx: float, sy: float) -> str:
     return " ".join(result)
 
 
-def extract_svg_paths_for_clipping(svg_path: str) -> dict:
+def extract_svg_paths_for_clipping(
+    svg_path: str,
+    target_width_pt: float | None = None,
+    target_height_pt: float | None = None,
+) -> dict:
     """
     SVG 파일에서 모든 도형의 좌표를 PDF 클리핑 경로 형식으로 추출한다.
 
@@ -742,10 +782,18 @@ def extract_svg_paths_for_clipping(svg_path: str) -> dict:
       패턴 SVG의 윤곽선을 PDF 클리핑 마스크로 사용하여,
       디자인 PDF를 패턴 형태로 자른다.
 
-    SVG → PDF 좌표 변환:
-      - SVG: Y축 아래로 증가 (좌상단 원점)
-      - PDF: Y축 위로 증가 (좌하단 원점)
-      - 변환: pdf_y = viewbox_height - svg_y
+    좌표 변환 (핵심):
+      viewBox="x0 y0 w h"일 때, SVG 좌표 (sx, sy)는:
+        1. 정규화: nx = (sx - x0) / w,  ny = (sy - y0) / h   → 0~1 범위
+        2. PDF 변환: pdf_x = nx * target_w,  pdf_y = (1 - ny) * target_h  (Y축 반전)
+
+      viewBox 원점(x0, y0)이 0이 아닌 경우(normalize_artboard 보정 후 발생):
+        원점을 빼지 않으면 클리핑 경로가 디자인과 어긋남 (스크린샷에서 확인된 버그).
+
+    Args:
+      svg_path: SVG 파일 경로
+      target_width_pt: (선택) 타겟 PDF 페이지 폭 (pt). 주어지면 PDF 좌표로 직접 변환.
+      target_height_pt: (선택) 타겟 PDF 페이지 높이 (pt). 주어지면 PDF 좌표로 직접 변환.
 
     반환:
       성공: {
@@ -753,7 +801,8 @@ def extract_svg_paths_for_clipping(svg_path: str) -> dict:
         "paths": [{"type": "polyline", "pdf_commands": "...", "point_count": N, "bbox": {...}}, ...],
         "total_paths": N,
         "viewbox": {"x": 0, "y": 0, "w": 4337, "h": 3401},
-        "page_height": 3401
+        "page_height": 3401,
+        "direct_pdf_coords": True/False  ← PDF 좌표로 직접 변환되었는지 여부
       }
       실패: {"success": False, "error": "..."}
     """
@@ -765,7 +814,7 @@ def extract_svg_paths_for_clipping(svg_path: str) -> dict:
     except FileNotFoundError:
         return {"success": False, "error": f"파일을 찾을 수 없습니다: {svg_path}"}
 
-    # viewBox 파싱 — 페이지 높이(Y축 반전)에 필요
+    # viewBox 파싱 — 좌표 변환의 기준
     vb = root.get("viewBox", "").strip().split()
     if len(vb) < 4:
         return {"success": False, "error": "SVG에 viewBox 속성이 없습니다."}
@@ -775,8 +824,28 @@ def extract_svg_paths_for_clipping(svg_path: str) -> dict:
     except ValueError:
         return {"success": False, "error": f"viewBox 파싱 실패: {vb}"}
 
-    # PDF Y축 반전에 사용할 페이지 높이 = viewBox 높이
-    page_height = vb_h
+    # target_width/height가 주어지면 → viewBox 원점 고려한 정확한 PDF 좌표 변환 사용
+    # 주어지지 않으면 → 기존 방식 (page_height - y) 폴백
+    direct_pdf_coords = (target_width_pt is not None and target_height_pt is not None)
+
+    if direct_pdf_coords:
+        # SVG 좌표를 PDF 좌표로 직접 변환하는 함수
+        # viewBox 원점(vb_x, vb_y)을 빼서 정규화한 후, PDF 크기에 매핑
+        tw = target_width_pt
+        th = target_height_pt
+        def svg_to_pdf(sx: float, sy: float) -> tuple[float, float]:
+            # 정규화: viewBox 내에서의 상대 위치 (0~1)
+            nx = (sx - vb_x) / vb_w if vb_w > 0 else 0.0
+            ny = (sy - vb_y) / vb_h if vb_h > 0 else 0.0
+            # PDF 좌표: X는 그대로, Y는 반전 (PDF는 아래→위)
+            return (nx * tw, (1.0 - ny) * th)
+
+        # page_height는 폴백용 (rect 변환에서 사용할 수 있음)
+        page_height = vb_h
+    else:
+        svg_to_pdf = None  # type: ignore
+        # 기존 방식: page_height = viewBox 높이
+        page_height = vb_h
 
     paths: list[dict] = []
 
@@ -792,12 +861,16 @@ def extract_svg_paths_for_clipping(svg_path: str) -> dict:
             if local_name in ("polyline", "polygon"):
                 points = elem.get("points", "")
                 if points:
-                    pdf_path_str = _polyline_to_pdf_path(points, page_height)
+                    pdf_path_str = _polyline_to_pdf_path(
+                        points, page_height, svg_to_pdf_fn=svg_to_pdf
+                    )
 
             elif local_name == "path":
                 d = elem.get("d", "")
                 if d:
-                    pdf_path_str = _svg_path_d_to_pdf_path(d, page_height)
+                    pdf_path_str = _svg_path_d_to_pdf_path(
+                        d, page_height, svg_to_pdf_fn=svg_to_pdf
+                    )
 
             elif local_name == "rect":
                 # rect는 4개 좌표로 직접 PDF 경로 생성
@@ -807,15 +880,28 @@ def extract_svg_paths_for_clipping(svg_path: str) -> dict:
                     rw = float(elem.get("width", "0"))
                     rh = float(elem.get("height", "0"))
                     if rw > 0 and rh > 0:
-                        # 사각형을 PDF 경로로: 4개 꼭짓점 연결
-                        y_top = page_height - ry
-                        y_bot = page_height - (ry + rh)
-                        pdf_path_str = (
-                            f"{rx:.2f} {y_top:.2f} m "
-                            f"{rx + rw:.2f} {y_top:.2f} l "
-                            f"{rx + rw:.2f} {y_bot:.2f} l "
-                            f"{rx:.2f} {y_bot:.2f} l h"
-                        )
+                        if direct_pdf_coords:
+                            # viewBox 원점 고려한 정확한 변환
+                            p1x, p1y = svg_to_pdf(rx, ry)            # 좌상
+                            p2x, p2y = svg_to_pdf(rx + rw, ry)       # 우상
+                            p3x, p3y = svg_to_pdf(rx + rw, ry + rh)  # 우하
+                            p4x, p4y = svg_to_pdf(rx, ry + rh)       # 좌하
+                            pdf_path_str = (
+                                f"{p1x:.2f} {p1y:.2f} m "
+                                f"{p2x:.2f} {p2y:.2f} l "
+                                f"{p3x:.2f} {p3y:.2f} l "
+                                f"{p4x:.2f} {p4y:.2f} l h"
+                            )
+                        else:
+                            # 기존 방식 (viewBox 원점 0,0 가정)
+                            y_top = page_height - ry
+                            y_bot = page_height - (ry + rh)
+                            pdf_path_str = (
+                                f"{rx:.2f} {y_top:.2f} m "
+                                f"{rx + rw:.2f} {y_top:.2f} l "
+                                f"{rx + rw:.2f} {y_bot:.2f} l "
+                                f"{rx:.2f} {y_bot:.2f} l h"
+                            )
                 except (ValueError, TypeError):
                     pass
 
@@ -868,4 +954,5 @@ def extract_svg_paths_for_clipping(svg_path: str) -> dict:
             "h": round(vb_h, 2),
         },
         "page_height": round(page_height, 2),
+        "direct_pdf_coords": direct_pdf_coords,
     }

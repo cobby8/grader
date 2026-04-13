@@ -601,6 +601,11 @@ doc.save(output_path, deflate=True, garbage=4, clean=True)
 - bleed 구현: 클리핑 경로를 bleed_scale만큼 확대 + translate로 중심 유지
 - show_pdf_page가 Form XObject(Do 연산자)로 콘텐츠를 넣으므로, 클리핑을 Do 앞에 삽입하면 XObject 전체에 적용됨
 
+#### 수정 이력 (클리핑 마스크)
+| 회차 | 날짜 | 수정 내용 | 수정 파일 | 사유 |
+|------|------|----------|----------|------|
+| 1차 | 2026-04-08 | viewBox 원점(x0,y0) 고려한 정규화 좌표 변환으로 전면 교체. extract에 target_width_pt/target_height_pt 파라미터 추가, scale_pdf_path 호출 제거 | svg_parser.py, pdf_grader.py | PM 분석: normalize_artboard로 보정된 SVG의 viewBox 원점이 음수(-70,-1133 등)인데, 기존 코드가 원점 0,0을 가정하여 클리핑 좌표가 디자인과 어긋남 |
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -623,3 +628,4 @@ doc.save(output_path, deflate=True, garbage=4, clean=True)
 | 2026-04-08 | developer | 데이터 보호 안전장치 (3 store 로드/저장 빈배열 차단 + 백업) | 완료 |
 | 2026-04-08 | developer | SVG 아트보드 자동 보정 (normalize_artboard: viewBox 확장 1580x2000mm) | 완료 |
 | 2026-04-08 | developer | SVG 패턴 클리핑 마스크+bleed 적용 (svg_parser+pdf_grader+main+FileGenerate) | 완료 |
+| 2026-04-08 | developer | 클리핑 마스크 좌표계 불일치 버그 수정 (viewBox 원점 고려+정규화+직접 PDF 변환) | 완료 |

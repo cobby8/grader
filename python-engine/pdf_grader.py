@@ -164,39 +164,38 @@ def generate_graded_pdf(
 
     if clip_svg_path:
         try:
-            from svg_parser import extract_svg_paths_for_clipping, scale_pdf_path
+            from svg_parser import extract_svg_paths_for_clipping
 
-            clip_data = extract_svg_paths_for_clipping(clip_svg_path)
+            # 첫 페이지 크기를 기준으로 클리핑 경로 좌표를 PDF 좌표로 직접 변환
+            first_out_page = out_doc[0]
+            pdf_w = first_out_page.rect.width
+            pdf_h = first_out_page.rect.height
+
+            # bleed를 pt로 변환 (3mm = 약 8.5pt)
+            bleed_pt = bleed_mm * MM_TO_PT
+
+            # bleed 적용: 클리핑 경로를 약간 확대하여 재단 여유를 둔다
+            # 방법: 타겟 크기를 bleed만큼 확장하여 경로가 조금 더 넓게 생성되도록
+            # bleed_scale = 1 + (bleed 양쪽 합 / 페이지 크기)
+            bleed_scale_x = 1.0 + (bleed_pt * 2.0) / pdf_w if pdf_w > 0 else 1.0
+            bleed_scale_y = 1.0 + (bleed_pt * 2.0) / pdf_h if pdf_h > 0 else 1.0
+
+            # SVG → PDF 좌표 변환 시 bleed 확장 반영
+            # target 크기를 bleed만큼 키워서 extract에 전달하면
+            # 경로가 PDF 페이지보다 bleed만큼 더 크게 생성된다
+            clip_target_w = pdf_w * bleed_scale_x
+            clip_target_h = pdf_h * bleed_scale_y
+
+            # viewBox 원점 고려 + 정규화 + PDF 크기 직접 매핑
+            # target_width_pt / target_height_pt를 전달하면
+            # extract 함수 내부에서 좌표가 이미 PDF 좌표로 변환되어 나옴
+            clip_data = extract_svg_paths_for_clipping(
+                clip_svg_path,
+                target_width_pt=clip_target_w,
+                target_height_pt=clip_target_h,
+            )
 
             if clip_data.get("success") and clip_data.get("paths"):
-                # SVG viewBox와 PDF 페이지 크기의 비율 계산
-                # SVG 좌표를 PDF 페이지 크기에 맞게 스케일링해야 한다
-                svg_vb_w = clip_data["viewbox"]["w"]
-                svg_vb_h = clip_data["viewbox"]["h"]
-
-                # 첫 페이지 기준으로 스케일 계산 (모든 페이지 동일 크기 가정)
-                first_out_page = out_doc[0]
-                pdf_w = first_out_page.rect.width
-                pdf_h = first_out_page.rect.height
-
-                # SVG → PDF 좌표 스케일 비율
-                path_sx = pdf_w / svg_vb_w if svg_vb_w > 0 else 1.0
-                path_sy = pdf_h / svg_vb_h if svg_vb_h > 0 else 1.0
-
-                # bleed를 pt로 변환하여 스케일에 반영
-                # bleed_pt = bleed_mm * MM_TO_PT  (3mm = 약 8.5pt)
-                bleed_pt = bleed_mm * MM_TO_PT
-
-                # bleed 적용: 클리핑 경로를 약간 확대하여 재단 여유를 둔다
-                # 방법: 경로 중심 기준으로 bleed 비율만큼 확대
-                # bleed_scale = 1 + (bleed 양쪽 합 / 페이지 크기)
-                bleed_scale_x = 1.0 + (bleed_pt * 2.0) / pdf_w if pdf_w > 0 else 1.0
-                bleed_scale_y = 1.0 + (bleed_pt * 2.0) / pdf_h if pdf_h > 0 else 1.0
-
-                # 최종 스케일: SVG→PDF 변환 + bleed 확대
-                final_sx = path_sx * bleed_scale_x
-                final_sy = path_sy * bleed_scale_y
-
                 # bleed로 인한 오프셋 (확대 시 중심 유지를 위해 왼쪽/아래로 이동)
                 offset_x = -bleed_pt
                 offset_y = -bleed_pt
@@ -217,15 +216,8 @@ def generate_graded_pdf(
                     clip_cmds = "q\n"
 
                     for path_info in clip_data["paths"]:
-                        # SVG 좌표를 PDF 페이지 좌표로 스케일링
-                        scaled_path = scale_pdf_path(
-                            path_info["pdf_commands"], final_sx, final_sy
-                        )
-
-                        # bleed 오프셋 적용: 각 좌표에 offset을 더한다
-                        # (scale_pdf_path가 이미 좌표를 스케일했으므로,
-                        #  translate는 별도로 적용 — PDF cm 연산자 사용)
-                        clip_cmds += scaled_path + "\n"
+                        # 이미 PDF 좌표로 변환된 경로 — scale_pdf_path 불필요
+                        clip_cmds += path_info["pdf_commands"] + "\n"
 
                     # W* = even-odd 클리핑 (여러 경로가 있을 때 각각의 내부가 클리핑 영역)
                     # n = 경로 자체는 그리지 않음 (보이지 않는 클리핑 마스크)

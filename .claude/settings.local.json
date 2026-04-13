@@ -146,7 +146,9 @@
       "Bash(taskkill //f //pid 3728)",
       "Bash(rm -f \"C:/Users/user/AppData/Roaming/com.grader.app/\"*.json)",
       "Bash(echo \"DONE: $?\")",
-      "Bash(venv/Scripts/python.exe -c \"import svg_parser; import pdf_grader; import main; print\\('OK'\\)\")"
+      "Bash(venv/Scripts/python.exe -c \"import svg_parser; import pdf_grader; import main; print\\('OK'\\)\")",
+      "Bash(taskkill //f //pid 55148)",
+      "Bash(python-engine/venv/Scripts/python.exe -c \"import sys; sys.path.insert\\(0, 'python-engine'\\); import svg_parser; import pdf_grader; print\\('OK: 구문 오류 없음'\\)\")"
     ]
   }
 }
