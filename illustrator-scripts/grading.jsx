@@ -205,13 +205,29 @@ function cloneColor(color) {
     if (color.typename === "CMYKColor") {
         return cloneCMYKColor(color);
     }
-    // RGBColor — 화면용 디자인에서 올 수 있음
+    // RGBColor — CMYK로 변환 (인쇄용)
     if (color.typename === "RGBColor") {
-        var rgb = new RGBColor();
-        rgb.red = color.red;
-        rgb.green = color.green;
-        rgb.blue = color.blue;
-        return rgb;
+        // RGB → CMYK 근사 변환
+        var r = color.red / 255;
+        var g = color.green / 255;
+        var b = color.blue / 255;
+        var k = 1 - Math.max(r, g, b);
+        var cmyk = new CMYKColor();
+        if (k >= 1) {
+            cmyk.cyan = 0;
+            cmyk.magenta = 0;
+            cmyk.yellow = 0;
+            cmyk.black = 100;
+        } else {
+            cmyk.cyan = ((1 - r - k) / (1 - k)) * 100;
+            cmyk.magenta = ((1 - g - k) / (1 - k)) * 100;
+            cmyk.yellow = ((1 - b - k) / (1 - k)) * 100;
+            cmyk.black = k * 100;
+        }
+        $.writeln("[grading.jsx] RGB→CMYK 변환: R" + color.red + " G" + color.green + " B" + color.blue
+            + " → C" + cmyk.cyan.toFixed(1) + " M" + cmyk.magenta.toFixed(1)
+            + " Y" + cmyk.yellow.toFixed(1) + " K" + cmyk.black.toFixed(1));
+        return cmyk;
     }
     // GrayColor — 흑백 디자인
     if (color.typename === "GrayColor") {
@@ -338,8 +354,8 @@ function main() {
             throw new Error("디자인 PDF를 찾을 수 없습니다: " + config.designPdfPath);
         }
 
-        // 디자인 PDF 열기 (단순하게 — 다이얼로그가 뜨면 수동 확인)
-        designDoc = app.open(designFile);
+        // 디자인 PDF 열기 (CMYK 색상 공간)
+        designDoc = app.open(designFile, DocumentColorSpace.CMYK);
         $.writeln("[grading.jsx] 디자인 PDF 열림: " + designDoc.name);
 
         // 배경 메인 색상 추출
@@ -369,8 +385,9 @@ function main() {
         if (!patternFile.exists) {
             throw new Error("패턴 SVG를 찾을 수 없습니다: " + config.patternSvgPath);
         }
-        patternDoc = app.open(patternFile);
-        $.writeln("[grading.jsx] 패턴 SVG 열림: " + patternDoc.name);
+        // CMYK 색상 공간으로 열기 — 인쇄용 색상 보존
+        patternDoc = app.open(patternFile, DocumentColorSpace.CMYK);
+        $.writeln("[grading.jsx] 패턴 SVG 열림 (CMYK): " + patternDoc.name);
 
         // 아트보드 크기 확인
         var ab = patternDoc.artboards[0];
