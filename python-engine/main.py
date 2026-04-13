@@ -58,7 +58,7 @@ def show_help() -> None:
             "generate_preview <pdf_path> <output_path> [dpi]": "PDF 첫 페이지를 PNG 미리보기로 변환합니다 (기본 150dpi)",
             "calc_scale <preset_json_path> <base_size> <target_size>": "프리셋 JSON 파일에서 기준/타겟 사이즈 비율을 계산합니다",
             "detect_artboard <pdf_path>": "PDF의 아트보드(TrimBox/CropBox) 크기를 감지합니다 (Illustrator 등)",
-            "generate_graded <src_pdf> <out_pdf> <scale_x> <scale_y> [crop_w_pt] [crop_h_pt] [clip_svg] [bleed_mm]": "원본 PDF를 스케일링 + SVG 패턴 클리핑 마스크로 잘라 새 PDF 생성 (CMYK 보존)",
+            "generate_graded <src_pdf> <out_pdf> <scale_x> <scale_y> [crop_w_pt] [crop_h_pt]": "원본 PDF를 스케일링하여 새 PDF 생성 (아트보드 크롭 + CMYK 보존)",
             "extract_clip_paths <svg_path>": "SVG 파일에서 PDF 클리핑용 경로를 추출합니다 (디버깅용)",
             "parse_order <excel_path>": "엑셀 주문서에서 사이즈 목록과 수량을 자동 추출합니다 (xlsx)",
             "svg_bbox <svg_path>": "SVG 파일 내 실제 도형의 bounding box를 계산합니다 (viewBox가 아닌 실제 크기)",
@@ -245,28 +245,9 @@ def main() -> None:
                     print_error("크롭 크기는 실수(숫자, pt 단위)여야 합니다.")
                     sys.exit(1)
 
-            # clip_svg: 타겟 사이즈 패턴 SVG 경로 (선택)
-            clip_svg = None
-            if len(args) >= 8:
-                clip_svg = args[7]
-                import os as _os_clip
-                if not _os_clip.path.exists(clip_svg):
-                    print_error(f"클리핑 SVG 파일을 찾을 수 없습니다: {clip_svg}")
-                    sys.exit(1)
-
-            # bleed_mm: 클리핑 경로 바깥 여유 (mm, 기본 3.0)
-            bleed_mm = 3.0
-            if len(args) >= 9:
-                try:
-                    bleed_mm = float(args[8])
-                except ValueError:
-                    print_error("bleed 값은 실수(mm 단위)여야 합니다.")
-                    sys.exit(1)
-
             result = generate_graded_pdf(
                 src_pdf, out_pdf, scale_x, scale_y,
                 crop_width_pt=crop_w_pt, crop_height_pt=crop_h_pt,
-                clip_svg_path=clip_svg, bleed_mm=bleed_mm,
             )
             print_json(result)
             if not result.get("success"):

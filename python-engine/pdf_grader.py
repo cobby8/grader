@@ -40,8 +40,6 @@ def generate_graded_pdf(
     scale_y: float,
     crop_width_pt: float | None = None,
     crop_height_pt: float | None = None,
-    clip_svg_path: str | None = None,
-    bleed_mm: float = 3.0,
 ) -> dict[str, Any]:
     """
     새 문서 + show_pdf_page clip 방식으로 PDF를 스케일링한다.
@@ -153,104 +151,6 @@ def generate_graded_pdf(
             keep_proportion=False,            # 가로/세로 독립 스케일
         )
 
-    # ─── v4 신규: SVG 패턴 클리핑 마스크 적용 ───
-    # show_pdf_page로 콘텐츠를 넣은 후, 콘텐츠 스트림 앞에 클리핑 경로를 삽입한다.
-    # PDF 클리핑 원리: q → 경로 정의 → W n → (콘텐츠) → Q
-    # W = clip 연산자, n = no paint (경로 자체는 그리지 않음)
-    # show_pdf_page가 Form XObject(Do 연산자)로 콘텐츠를 넣으므로,
-    # 클리핑을 Do 앞에 삽입하면 XObject 전체에 클리핑이 적용된다.
-    clipping_applied = False
-    clipping_paths_count = 0
-
-    if clip_svg_path:
-        try:
-            from svg_parser import extract_svg_paths_for_clipping
-
-            # 첫 페이지 크기를 기준으로 클리핑 경로 좌표를 PDF 좌표로 직접 변환
-            first_out_page = out_doc[0]
-            pdf_w = first_out_page.rect.width
-            pdf_h = first_out_page.rect.height
-
-            # bleed를 pt로 변환 (3mm = 약 8.5pt)
-            bleed_pt = bleed_mm * MM_TO_PT
-
-            # bleed 적용: 클리핑 경로를 약간 확대하여 재단 여유를 둔다
-            # 방법: 타겟 크기를 bleed만큼 확장하여 경로가 조금 더 넓게 생성되도록
-            # bleed_scale = 1 + (bleed 양쪽 합 / 페이지 크기)
-            bleed_scale_x = 1.0 + (bleed_pt * 2.0) / pdf_w if pdf_w > 0 else 1.0
-            bleed_scale_y = 1.0 + (bleed_pt * 2.0) / pdf_h if pdf_h > 0 else 1.0
-
-            # SVG → PDF 좌표 변환 시 bleed 확장 반영
-            # target 크기를 bleed만큼 키워서 extract에 전달하면
-            # 경로가 PDF 페이지보다 bleed만큼 더 크게 생성된다
-            clip_target_w = pdf_w * bleed_scale_x
-            clip_target_h = pdf_h * bleed_scale_y
-
-            # viewBox 원점 고려 + 정규화 + PDF 크기 직접 매핑
-            # target_width_pt / target_height_pt를 전달하면
-            # extract 함수 내부에서 좌표가 이미 PDF 좌표로 변환되어 나옴
-            clip_data = extract_svg_paths_for_clipping(
-                clip_svg_path,
-                target_width_pt=clip_target_w,
-                target_height_pt=clip_target_h,
-            )
-
-            if clip_data.get("success") and clip_data.get("paths"):
-                # bleed로 인한 오프셋 (확대 시 중심 유지를 위해 왼쪽/아래로 이동)
-                offset_x = -bleed_pt
-                offset_y = -bleed_pt
-
-                # 각 페이지에 클리핑 적용
-                for page_idx in range(len(out_doc)):
-                    page = out_doc[page_idx]
-
-                    # 기존 콘텐츠 스트림을 읽는다
-                    page.clean_contents()
-                    xrefs = page.get_contents()
-                    if not xrefs:
-                        continue
-                    old_stream = page.read_contents()
-
-                    # 클리핑 경로 PDF 명령 생성
-                    # q = 그래픽 상태 저장
-                    clip_cmds = "q\n"
-
-                    for path_info in clip_data["paths"]:
-                        # 이미 PDF 좌표로 변환된 경로 — scale_pdf_path 불필요
-                        clip_cmds += path_info["pdf_commands"] + "\n"
-
-                    # W* = even-odd 클리핑 (여러 경로가 있을 때 각각의 내부가 클리핑 영역)
-                    # n = 경로 자체는 그리지 않음 (보이지 않는 클리핑 마스크)
-                    clip_cmds += "W* n\n"
-
-                    # bleed 오프셋을 위한 translate: 클리핑 전체를 약간 이동
-                    # 1 0 0 1 tx ty cm = translate 변환 행렬
-                    translate_cmd = f"1 0 0 1 {offset_x:.2f} {offset_y:.2f} cm\n"
-
-                    # 최종 스트림 조립:
-                    # q → translate → 클리핑 경로 → W* n → 원본 콘텐츠 → Q
-                    new_stream = (
-                        b"q\n"
-                        + translate_cmd.encode("latin-1")
-                        + clip_cmds.encode("latin-1")
-                        + old_stream
-                        + b"\nQ"
-                    )
-
-                    # 스트림 교체 (첫 번째 xref에 전체 스트림 기록)
-                    out_doc.update_stream(xrefs[0], new_stream)
-
-                clipping_applied = True
-                clipping_paths_count = len(clip_data["paths"])
-
-        except Exception as clip_err:
-            # 클리핑 실패 시 스케일링만 된 결과를 반환 (치명적 에러는 아님)
-            import sys
-            print(
-                f"[WARNING] 클리핑 마스크 적용 실패 (스케일링은 정상): {clip_err}",
-                file=sys.stderr,
-            )
-
     # 저장 전에 페이지 수를 지역 변수로 저장 (close 이후 사용 불가 방지)
     total_pages = len(out_doc)
 
@@ -271,10 +171,7 @@ def generate_graded_pdf(
         src_height_pt = original_rect.height
 
     # 5. PDF 저장 (출력 최적화 설정)
-    # 클리핑 마스크가 적용된 경우 clean=False로 저장해야 한다.
-    # clean=True는 콘텐츠 스트림을 재구성하는데, 수동 삽입한 클리핑 명령이
-    # 깨질 수 있기 때문이다.
-    use_clean = not clipping_applied
+    use_clean = True
     try:
         out_doc.save(
             output_pdf_path,
@@ -314,7 +211,6 @@ def generate_graded_pdf(
     )
 
     # 7. 결과 반환
-    method = "clip+mask" if clipping_applied else "clip"
     return {
         "success": True,
         "output_path": output_pdf_path,
@@ -328,8 +224,7 @@ def generate_graded_pdf(
         "file_size_bytes": file_size_bytes,
         "original_size_bytes": original_size_bytes,
         "compression_ratio": compression_ratio,
-        "method": method,
-        "clipping_applied": clipping_applied,
+        "method": "scale+clip",
         "clipping_paths_count": clipping_paths_count,
     }
 
