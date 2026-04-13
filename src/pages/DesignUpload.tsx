@@ -106,15 +106,25 @@ function DesignUpload() {
   const [isDragOver, setIsDragOver] = useState(false);
   // 드롭 존 ref (레이아웃 참조용)
   const dropZoneRef = useRef<HTMLDivElement>(null);
+  // 로드 성공 여부: false이면 저장을 차단하여 데이터 유실 방지
+  const [isLoadSuccess, setIsLoadSuccess] = useState(false);
+  // 로드 에러 메시지 (사용자에게 표시)
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // 초기 로드: 저장된 디자인 목록 불러오기
   useEffect(() => {
-    loadDesigns().then((list) => {
-      setDesigns(list);
-      // 각 디자인의 미리보기 이미지를 data URL로 읽어서 캐시
-      list.forEach((design) => {
-        loadPreviewImage(design);
-      });
+    loadDesigns().then((result) => {
+      if (result.success) {
+        setDesigns(result.data);
+        setIsLoadSuccess(true);
+        // 각 디자인의 미리보기 이미지를 data URL로 읽어서 캐시
+        result.data.forEach((design) => {
+          loadPreviewImage(design);
+        });
+      } else {
+        setLoadError(result.error || "디자인 데이터를 불러오는데 실패했습니다.");
+        setIsLoadSuccess(false);
+      }
     });
   }, []);
 
@@ -266,6 +276,11 @@ function DesignUpload() {
    * 하나가 실패해도 나머지를 계속 처리하며, 실패 파일명을 에러 메시지에 모아서 표시한다.
    */
   async function processMultipleFiles(filePaths: string[]) {
+    // 로드 실패 상태에서는 저장 차단
+    if (!isLoadSuccess) {
+      setErrorMessage("데이터 로드에 실패한 상태에서는 업로드할 수 없습니다. 앱을 재시작해주세요.");
+      return;
+    }
     setErrorMessage("");
     setUploading(true);
 
@@ -367,6 +382,11 @@ function DesignUpload() {
    * 물리 파일(PDF/PNG)과 메타데이터 모두 제거한다.
    */
   async function handleDelete(design: DesignFile) {
+    // 로드 실패 상태에서는 저장 차단
+    if (!isLoadSuccess) {
+      setErrorMessage("데이터 로드에 실패한 상태에서는 삭제할 수 없습니다. 앱을 재시작해주세요.");
+      return;
+    }
     // 사용자에게 확인
     const confirmed = window.confirm(
       `"${design.name}" 디자인을 정말 삭제하시겠습니까?`
@@ -403,6 +423,14 @@ function DesignUpload() {
         PDF 형식의 기준 사이즈 디자인 파일을 등록합니다. CMYK 색상이 유지된 PDF
         파일을 업로드해 주세요.
       </p>
+
+      {/* 로드 실패 시 경고 배너 */}
+      {loadError && (
+        <div className="load-error">
+          데이터 로드 실패: {loadError}
+          <br />앱을 재시작해주세요. 이 상태에서는 저장이 비활성화됩니다.
+        </div>
+      )}
 
       {/* 진행 메시지 (다중 업로드 시 "2/5 파일 처리 중..." 형식) */}
       {progressMessage && (

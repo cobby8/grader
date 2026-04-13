@@ -15,43 +15,79 @@ import {
   BaseDirectory,
 } from "@tauri-apps/plugin-fs";
 import type { PatternCategory } from "../types/pattern";
+import type { LoadResult } from "./presetStore";
 
 /** JSON 파일명 */
 const CATEGORIES_FILE = "categories.json";
+/** 백업 파일명 */
+const CATEGORIES_BACKUP_FILE = "categories.backup.json";
 
 /**
  * 저장된 카테고리 목록을 파일에서 읽어온다.
- * 파일이 없으면 빈 배열을 반환한다 (카테고리 없이도 동작 가능).
+ * - 파일이 없으면 success: true + 빈 배열 (카테고리 없이도 동작 가능)
+ * - 읽기/파싱 에러면 success: false
  */
-export async function loadCategories(): Promise<PatternCategory[]> {
+export async function loadCategories(): Promise<LoadResult<PatternCategory>> {
   try {
     const fileExists = await exists(CATEGORIES_FILE, {
       baseDir: BaseDirectory.AppData,
     });
 
     if (!fileExists) {
-      return [];
+      return { success: true, data: [] };
     }
 
     const raw = await readTextFile(CATEGORIES_FILE, {
       baseDir: BaseDirectory.AppData,
     });
 
-    return JSON.parse(raw) as PatternCategory[];
+    const parsed = JSON.parse(raw) as PatternCategory[];
+    return { success: true, data: parsed };
   } catch (err) {
     console.error("카테고리 로드 실패:", err);
-    return [];
+    return { success: false, data: [], error: String(err) };
   }
 }
 
 /**
  * 카테고리 목록을 JSON 파일로 저장한다.
+ * 안전장치: 빈 배열 덮어쓰기 차단 + 저장 전 백업
  */
 export async function saveCategories(categories: PatternCategory[]): Promise<void> {
+  // 안전장치 1: 빈 배열 저장 시 기존 파일이 있으면 차단
+  if (categories.length === 0) {
+    try {
+      const hasFile = await exists(CATEGORIES_FILE, { baseDir: BaseDirectory.AppData });
+      if (hasFile) {
+        const existing = await readTextFile(CATEGORIES_FILE, { baseDir: BaseDirectory.AppData });
+        const existingData = JSON.parse(existing);
+        if (Array.isArray(existingData) && existingData.length > 0) {
+          console.warn("경고: 기존 카테고리가 있는데 빈 배열로 덮어쓰기 시도됨. 차단합니다.");
+          throw new Error("빈 데이터로 기존 카테고리를 덮어쓸 수 없습니다.");
+        }
+      }
+    } catch (readErr) {
+      if (readErr instanceof Error && readErr.message.includes("빈 데이터로")) {
+        throw readErr;
+      }
+    }
+  }
+
   try {
     const dirExists = await exists("", { baseDir: BaseDirectory.AppData });
     if (!dirExists) {
       await mkdir("", { baseDir: BaseDirectory.AppData, recursive: true });
+    }
+
+    // 안전장치 2: 저장 전 기존 파일을 백업
+    try {
+      const hasFile = await exists(CATEGORIES_FILE, { baseDir: BaseDirectory.AppData });
+      if (hasFile) {
+        const existing = await readTextFile(CATEGORIES_FILE, { baseDir: BaseDirectory.AppData });
+        await writeTextFile(CATEGORIES_BACKUP_FILE, existing, { baseDir: BaseDirectory.AppData });
+      }
+    } catch {
+      // 백업 실패는 무시
     }
 
     const json = JSON.stringify(categories, null, 2);

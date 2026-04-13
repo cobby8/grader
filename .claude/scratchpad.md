@@ -333,6 +333,34 @@ grader/
 - 카테고리 필터링 시 getPresetBelongsToCategory()로 부모 체인 탐색 (O(depth) per preset)
 - prompt()로 카테고리 이름 입력 — 별도 모달 없이 간소화 (향후 인라인 입력으로 개선 가능)
 
+### [2026-04-08] 데이터 보호 안전장치 (프리셋 초기화 버그 수정)
+
+📝 구현한 기능: 3개 store의 로드/저장에 데이터 유실 방지 안전장치 추가
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| src/stores/presetStore.ts | LoadResult 타입 + loadPresets 성공/실패 구분 + savePresets 빈배열 차단 + 백업 | 수정 |
+| src/stores/designStore.ts | loadDesigns LoadResult 반환 + saveDesigns 빈배열 차단 + 백업 | 수정 |
+| src/stores/categoryStore.ts | loadCategories LoadResult 반환 + saveCategories 빈배열 차단 + 백업 | 수정 |
+| src/pages/PatternManage.tsx | isLoadSuccess 상태 + 로드 실패 시 저장 차단 + 에러 배너 UI | 수정 |
+| src/pages/DesignUpload.tsx | isLoadSuccess 상태 + 업로드/삭제 시 로드 체크 + 에러 배너 UI | 수정 |
+| src/pages/SizeSelect.tsx | LoadResult.data 추출 (읽기 전용이므로 차단 불필요) | 수정 |
+| src/pages/FileGenerate.tsx | LoadResult.data 추출 (읽기 전용이므로 차단 불필요) | 수정 |
+| src/App.css | .load-error 경고 배너 스타일 | 수정 |
+
+💡 tester 참고:
+- 테스트 방법: `npx tsc --noEmit` + `npx vite build` 통과 (이미 통과)
+- 핵심 검증 포인트:
+  1. 정상 동작 시 기존과 동일하게 작동하는지 (회귀 없음)
+  2. 프리셋/디자인/카테고리 저장 전 .backup.json 파일이 생성되는지
+  3. loadPresets 실패 상태에서 프리셋 추가/삭제/저장 시도 시 alert 경고 표시
+  4. 빈 배열로 savePresets([]) 호출 시 기존 데이터가 있으면 에러 throw
+
+⚠️ reviewer 참고:
+- LoadResult 타입은 presetStore.ts에서 export하고 designStore/categoryStore에서 import
+- 빈배열 차단은 "모두 개별 삭제" 방식만 허용 (한 건씩 삭제할 때는 배열 길이가 0이 아님)
+- 저장 전 백업은 실패해도 무시 (원래 저장 동작은 방해하지 않음)
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -340,6 +368,7 @@ grader/
 | 요청자 | 대상 파일 | 문제 설명 | 상태 |
 |--------|----------|----------|------|
 | tester | pdf_handler.py | page_count=0 반환 버그 | 완료 |
+| debugger | presetStore+designStore+categoryStore | loadPresets 에러 시 빈배열→savePresets→데이터 소실 | 완료 |
 
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |

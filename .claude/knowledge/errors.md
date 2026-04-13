@@ -19,3 +19,9 @@
 - **발견자**: tester (6단계 E2E)
 - **내용**: `pdf_handler.analyze_color_space_detailed`의 `_detect_vector_color_operators`는 `page.read_contents()`로 얻은 **페이지 top-level 콘텐츠 스트림**만 검사한다. 그런데 `pdf_grader.generate_graded_pdf`는 `new_page.show_pdf_page(...)`를 사용해 원본 페이지를 Form XObject로 임베드한다. 결과적으로 그레이딩된 출력 PDF의 top-level content stream은 `/fzFrm0 Do` 1줄뿐이고, 원본의 `k`/`K` 같은 CMYK 연산자는 Form XObject xref 내부에 들어가 있다 (`doc.xref_stream(xref)`로만 접근 가능). 이로 인해 그레이딩 결과 PDF를 `analyze_color`로 재검사하면 `vector_cmyk: false`, `overall: "Unknown"`으로 잘못 판정된다. **실제 CMYK 색상은 보존되어 인쇄 품질에는 영향이 없음** — 감지 로직의 한계일 뿐이다. 개선 방안: `_detect_vector_color_operators`가 페이지 콘텐츠뿐 아니라 `doc.xref_length()` 순회로 `/Subtype /Form` XObject까지 재귀 스캔하도록 확장한다. 이 버그는 사용자가 그레이딩 결과 PDF를 다시 프로그램에 업로드하는 드문 케이스에서만 배지가 잘못 표시되는 제한적 영향만 있어 MVP 범위 바깥으로 분류됨.
 - **참조횟수**: 0
+
+### [2026-04-08] loadPresets 에러 시 빈 배열 반환 → 데이터 소실 위험
+- **분류**: error
+- **발견자**: debugger
+- **내용**: presetStore/designStore/categoryStore의 load 함수가 에러 발생 시 빈 배열 `[]`을 그대로 반환했다. 이 상태에서 사용자가 UI 조작(추가/삭제 등)을 하면 `save([])` 또는 `save([새 항목만])` 형태로 기존 데이터를 덮어쓰게 된다. 원인: (1) Tauri AppData 경로가 없거나 권한 문제로 파일 접근 실패, (2) JSON 파싱 에러, (3) Tauri fs 플러그인 초기화 타이밍 문제. **수정**: LoadResult 타입으로 success/failure를 구분하고, 실패 시 UI에서 저장을 차단. 저장 전 백업 파일(.backup.json) 생성. 빈 배열로 기존 데이터를 덮어쓰는 것을 차단.
+- **참조횟수**: 0

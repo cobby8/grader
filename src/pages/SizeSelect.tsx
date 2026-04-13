@@ -54,10 +54,13 @@ function SizeSelect() {
   useEffect(() => {
     (async () => {
       // 프리셋/디자인 병렬 로드 (속도)
-      const [presetList, designList] = await Promise.all([
+      const [presetResult, designResult] = await Promise.all([
         loadPresets(),
         loadDesigns(),
       ]);
+      // 읽기 전용 페이지이므로 data만 꺼냄 (로드 실패 시 빈 배열)
+      const presetList = presetResult.data;
+      const designList = designResult.data;
       setPresets(presetList);
       setDesigns(designList);
 

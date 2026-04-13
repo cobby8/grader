@@ -19,12 +19,25 @@ import type { PatternPreset } from "../types/pattern";
 
 /** JSON 파일명 */
 const PRESETS_FILE = "presets.json";
+/** 백업 파일명 */
+const PRESETS_BACKUP_FILE = "presets.backup.json";
+
+/**
+ * 로드 결과 타입: 성공/실패를 명확히 구분하여
+ * 에러 시 빈 배열로 기존 데이터가 덮어쓰여지는 사고를 방지한다.
+ */
+export interface LoadResult<T> {
+  success: boolean; // true: 정상 로드 (파일 없음 포함), false: 읽기/파싱 에러
+  data: T[];
+  error?: string;   // 실패 시 에러 메시지
+}
 
 /**
  * 저장된 프리셋 목록을 파일에서 읽어온다.
- * 파일이 없으면 빈 배열을 반환한다.
+ * - 파일이 없으면 success: true + 빈 배열 (첫 실행 정상 케이스)
+ * - 읽기/파싱 에러면 success: false (이 상태에서는 저장이 차단됨)
  */
-export async function loadPresets(): Promise<PatternPreset[]> {
+export async function loadPresets(): Promise<LoadResult<PatternPreset>> {
   try {
     // AppData 디렉토리에 파일이 있는지 확인
     const fileExists = await exists(PRESETS_FILE, {
@@ -32,7 +45,8 @@ export async function loadPresets(): Promise<PatternPreset[]> {
     });
 
     if (!fileExists) {
-      return []; // 파일 없으면 빈 배열
+      // 파일 없음 = 첫 실행, 정상적으로 빈 배열 반환
+      return { success: true, data: [] };
     }
 
     // 파일 읽기
@@ -40,23 +54,59 @@ export async function loadPresets(): Promise<PatternPreset[]> {
       baseDir: BaseDirectory.AppData,
     });
 
-    return JSON.parse(raw) as PatternPreset[];
+    const parsed = JSON.parse(raw) as PatternPreset[];
+    return { success: true, data: parsed };
   } catch (err) {
+    // 읽기/파싱 실패 → success: false로 반환하여 저장을 차단
     console.error("프리셋 로드 실패:", err);
-    return [];
+    return { success: false, data: [], error: String(err) };
   }
 }
 
 /**
  * 프리셋 목록을 JSON 파일로 저장한다.
- * AppData 디렉토리가 없으면 자동으로 생성한다.
+ * 안전장치:
+ * 1) 빈 배열로 기존 데이터를 덮어쓰는 것을 차단
+ * 2) 저장 전 기존 파일을 백업
  */
 export async function savePresets(presets: PatternPreset[]): Promise<void> {
+  // 안전장치 1: 빈 배열 저장 시 기존 파일이 있으면 차단
+  if (presets.length === 0) {
+    try {
+      const hasFile = await exists(PRESETS_FILE, { baseDir: BaseDirectory.AppData });
+      if (hasFile) {
+        const existing = await readTextFile(PRESETS_FILE, { baseDir: BaseDirectory.AppData });
+        const existingData = JSON.parse(existing);
+        if (Array.isArray(existingData) && existingData.length > 0) {
+          console.warn("경고: 기존 프리셋이 있는데 빈 배열로 덮어쓰기 시도됨. 차단합니다.");
+          throw new Error("빈 데이터로 기존 프리셋을 덮어쓸 수 없습니다. 전체 삭제하려면 각각 삭제해주세요.");
+        }
+      }
+    } catch (readErr) {
+      // throw된 에러는 다시 throw, 파일 읽기 실패는 무시
+      if (readErr instanceof Error && readErr.message.includes("빈 데이터로")) {
+        throw readErr;
+      }
+      // 기존 파일 읽기 실패 → 파일이 없는 것이므로 빈 배열 저장 OK
+    }
+  }
+
   try {
     // AppData 디렉토리가 없으면 생성
     const dirExists = await exists("", { baseDir: BaseDirectory.AppData });
     if (!dirExists) {
       await mkdir("", { baseDir: BaseDirectory.AppData, recursive: true });
+    }
+
+    // 안전장치 2: 저장 전 기존 파일을 백업
+    try {
+      const hasFile = await exists(PRESETS_FILE, { baseDir: BaseDirectory.AppData });
+      if (hasFile) {
+        const existing = await readTextFile(PRESETS_FILE, { baseDir: BaseDirectory.AppData });
+        await writeTextFile(PRESETS_BACKUP_FILE, existing, { baseDir: BaseDirectory.AppData });
+      }
+    } catch {
+      // 백업 실패는 무시 (저장은 계속 진행)
     }
 
     // JSON 문자열로 변환하여 저장 (보기 좋게 2칸 들여쓰기)

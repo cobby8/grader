@@ -124,12 +124,13 @@ function FileGenerate() {
     setRequest(req);
 
     (async () => {
-      const [presetList, designList] = await Promise.all([
+      const [presetResult, designResult] = await Promise.all([
         loadPresets(),
         loadDesigns(),
       ]);
-      const p = presetList.find((x) => x.id === req.presetId) || null;
-      const d = designList.find((x) => x.id === req.designFileId) || null;
+      // 읽기 전용이므로 data만 꺼냄
+      const p = presetResult.data.find((x) => x.id === req.presetId) || null;
+      const d = designResult.data.find((x) => x.id === req.designFileId) || null;
       setPreset(p);
       setDesign(d);
 

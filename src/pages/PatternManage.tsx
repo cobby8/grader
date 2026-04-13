@@ -109,6 +109,10 @@ function PatternManage() {
 
   const [loading, setLoading] = useState(true);  // 초기 로딩 상태
   const [saving, setSaving] = useState(false);   // 저장 중 상태
+  // 로드 성공 여부: false이면 저장을 차단하여 데이터 유실 방지
+  const [isLoadSuccess, setIsLoadSuccess] = useState(false);
+  // 로드 에러 메시지 (사용자에게 표시)
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // 드래그앤드롭 상태
   const [isDragOver, setIsDragOver] = useState(false);
@@ -117,9 +121,21 @@ function PatternManage() {
   // === 앱 시작 시 프리셋 + 카테고리 로드 ===
   useEffect(() => {
     Promise.all([loadPresets(), loadCategories()])
-      .then(([presetData, categoryData]) => {
-        setPresets(presetData);
-        setCategories(categoryData);
+      .then(([presetResult, categoryResult]) => {
+        // 둘 다 성공해야 정상 상태로 전환
+        if (presetResult.success && categoryResult.success) {
+          setPresets(presetResult.data);
+          setCategories(categoryResult.data);
+          setIsLoadSuccess(true);
+          setLoadError(null);
+        } else {
+          // 하나라도 실패하면 에러 표시 + 저장 차단
+          const errors: string[] = [];
+          if (!presetResult.success) errors.push(`프리셋: ${presetResult.error}`);
+          if (!categoryResult.success) errors.push(`카테고리: ${categoryResult.error}`);
+          setLoadError(errors.join(" / "));
+          setIsLoadSuccess(false);
+        }
       })
       .finally(() => setLoading(false));
   }, []);
@@ -158,25 +174,35 @@ function PatternManage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
-  // === 프리셋 저장 ===
+  // === 프리셋 저장 (로드 실패 시 차단) ===
   const persistPresets = useCallback(async (updated: PatternPreset[]) => {
+    if (!isLoadSuccess) {
+      alert("데이터 로드에 실패한 상태에서는 저장할 수 없습니다. 앱을 재시작해주세요.");
+      return;
+    }
     setPresets(updated);
     try {
       await savePresets(updated);
     } catch (err) {
       console.error("자동 저장 실패:", err);
+      alert(`저장 실패: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, []);
+  }, [isLoadSuccess]);
 
-  // === 카테고리 저장 ===
+  // === 카테고리 저장 (로드 실패 시 차단) ===
   const persistCategories = useCallback(async (updated: PatternCategory[]) => {
+    if (!isLoadSuccess) {
+      alert("데이터 로드에 실패한 상태에서는 저장할 수 없습니다. 앱을 재시작해주세요.");
+      return;
+    }
     setCategories(updated);
     try {
       await saveCategories(updated);
     } catch (err) {
       console.error("카테고리 저장 실패:", err);
+      alert(`저장 실패: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, []);
+  }, [isLoadSuccess]);
 
   // === 카테고리별 프리셋 수 계산 (트리 표시용) ===
   const presetCountByCategory = new Map<string, number>();
@@ -633,6 +659,14 @@ function PatternManage() {
           SVG 형식의 옷 패턴(조각) 파일을 등록하고 관리합니다.
           등록된 패턴은 프리셋으로 저장되어 반복 사용할 수 있습니다.
         </p>
+
+        {/* 로드 실패 시 경고 배너 */}
+        {loadError && (
+          <div className="load-error">
+            데이터 로드 실패: {loadError}
+            <br />앱을 재시작해주세요. 이 상태에서는 저장이 비활성화됩니다.
+          </div>
+        )}
 
         {/* 좌측 트리 + 우측 프리셋 목록 레이아웃 */}
         <div className="pattern-layout">
