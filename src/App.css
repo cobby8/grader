@@ -705,6 +705,216 @@ html, body, #root {
   margin-bottom: 24px;
 }
 
+/* ===== 카테고리 트리 + 패턴 관리 레이아웃 ===== */
+
+/* 좌측 트리 + 우측 목록을 가로로 배치하는 레이아웃 컨테이너 */
+.pattern-layout {
+  display: flex;
+  gap: 20px;
+  min-height: 400px;
+}
+
+/* 좌측 사이드바 (카테고리 트리) */
+.pattern-layout__sidebar {
+  flex: 0 0 220px;
+  background-color: var(--color-bg-surface);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  padding: 8px 0;
+  overflow-y: auto;
+  max-height: calc(100vh - 200px);
+}
+
+/* 우측 프리셋 목록 영역 */
+.pattern-layout__content {
+  flex: 1;
+  min-width: 0; /* flex 자식이 overflow 안 되게 */
+}
+
+/* --- 빵가루(breadcrumb) 경로 --- */
+.pattern-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-base);
+  color: var(--color-text-muted);
+  margin-bottom: 12px;
+  padding: 6px 0;
+}
+
+.pattern-breadcrumb__sep {
+  margin: 0 4px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.pattern-breadcrumb__item {
+  cursor: pointer;
+  color: var(--color-text-dark);
+  font-weight: 500;
+}
+
+.pattern-breadcrumb__item:hover {
+  color: var(--color-accent);
+}
+
+/* --- 카테고리 트리 컴포넌트 --- */
+.cat-tree {
+  user-select: none;
+}
+
+/* 트리의 각 행 (카테고리 한 줄) */
+.cat-tree__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  margin: 1px 4px;
+  font-size: var(--font-size-base);
+  color: var(--color-text-dark);
+  transition: background-color 0.15s;
+}
+
+.cat-tree__row:hover {
+  background-color: var(--color-nav-hover);
+}
+
+/* 선택된 카테고리 행 */
+.cat-tree__row--selected {
+  background-color: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: 600;
+}
+
+.cat-tree__row--selected:hover {
+  background-color: var(--color-accent-soft);
+}
+
+/* 접기/펼치기 화살표 */
+.cat-tree__toggle {
+  flex: 0 0 14px;
+  text-align: center;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--color-text-muted);
+}
+
+/* 폴더/파일 아이콘 */
+.cat-tree__icon {
+  flex: 0 0 18px;
+  font-size: 14px;
+}
+
+/* 카테고리 이름 */
+.cat-tree__name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 인라인 이름 편집 input */
+.cat-tree__edit-input {
+  flex: 1;
+  border: 1px solid var(--color-accent);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: var(--font-size-sm);
+  outline: none;
+  background: var(--color-bg-surface);
+  color: var(--color-text-dark);
+}
+
+/* 프리셋 수 배지 */
+.cat-tree__count {
+  flex: 0 0 auto;
+  background-color: var(--color-bg-content);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  min-width: 18px;
+  text-align: center;
+}
+
+/* 액션 버튼 그룹 (호버 시만 보이기) */
+.cat-tree__actions {
+  display: none;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.cat-tree__row:hover .cat-tree__actions {
+  display: flex;
+}
+
+/* 개별 액션 버튼 (+, x) */
+.cat-tree__action-btn {
+  background: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-size: 14px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  color: var(--color-text-muted);
+  padding: 0;
+}
+
+.cat-tree__action-btn:hover {
+  background-color: var(--color-bg-content);
+  color: var(--color-text-dark);
+}
+
+.cat-tree__action-btn--danger:hover {
+  color: var(--color-danger);
+}
+
+/* 자식 노드 영역 */
+.cat-tree__children {
+  /* 들여쓰기는 TreeNode의 inline style로 처리 */
+}
+
+/* 루트 카테고리 추가 버튼 */
+.cat-tree__add-root {
+  padding: 4px 8px;
+  margin-top: 4px;
+  border-top: 1px solid var(--color-bg-content);
+}
+
+.cat-tree__add-btn {
+  width: 100%;
+  background: none;
+  border: 1px dashed var(--color-border-dashed);
+  border-radius: 4px;
+  padding: 6px;
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  transition: all 0.15s;
+}
+
+.cat-tree__add-btn:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background-color: var(--color-accent-soft);
+}
+
+/* 프리셋 카드 내 카테고리 경로 표시 */
+.preset-card__category {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ===== 3단계: 디자인 파일 등록 페이지 ===== */
 
 /* 업로드 진행 메시지 (버튼 옆에 표시) */

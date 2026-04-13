@@ -181,6 +181,7 @@ grader/
 | 6단계 | 통과 | 18/19 | analyze_color가 그레이딩 결과 PDF(Form XObject 래핑)를 Unknown으로 판정 (개선 제안) |
 | 엑셀 주문서 | 통과 | 11/11 | 없음 (가로/세로/복잡형 정확, 에러 4종 정상, 빌드 OK, 회귀 없음) |
 | 다중 업로드 | 통과 | 11/11 | 없음 (tsc+vite+cargo 통과, 핵심 함수 존재, invoke_handler 등록, 하위 호환 OK) |
+| 카테고리 트리 | 통과 | 5/5 | 없음 (tsc+vite 통과, 타입/store/트리/레이아웃/하위호환 OK) |
 
 ### [2026-04-08] 6단계 E2E: 통과 (18/19, Form XObject 개선 제안 1건 -> 수정 완료)
 ### [2026-04-08] 5단계 검증: 통과 (10/10, 빌드+CLI 3종+호환성+파일크기 정상)
@@ -264,6 +265,52 @@ grader/
 - 드롭 시 경로가 폴더인지 파일인지 구분: `list_svg_files` invoke 성공 → 폴더, 실패 → 파일
 - 대표 SVG 선택 우선순위: M → L → 첫 번째
 
+### [2026-04-08] 패턴 카테고리 트리 분류 시스템
+
+📝 구현 요약:
+- PatternCategory 타입 + PatternPreset에 categoryId 선택적 필드 추가 (기존 프리셋 하위 호환)
+- categoryStore.ts 신규 — categories.json으로 AppData에 저장, CRUD + 트리 유틸리티 함수(경로/옵션/순서 계산)
+- CategoryTree.tsx 신규 — 재귀 트리 컴포넌트, 접기/펼치기, 인라인 이름 변경(더블클릭), 호버 시 +/x 버튼
+- PatternManage.tsx 목록 모드를 좌측 트리 + 우측 카드 2컬럼 레이아웃으로 변경
+- 빵가루 경로 표시 (카테고리 > 하위카테고리)
+- 편집/생성 폼에 카테고리 드롭다운 추가 (계층 구조 들여쓰기 표시)
+- 카테고리 선택 시 하위 카테고리 프리셋도 함께 표시
+- 빈 카테고리만 삭제 허용 (하위 카테고리/프리셋 있으면 경고)
+
+| 파일 | 변경 | 신규/수정 |
+|------|------|----------|
+| src/types/pattern.ts | PatternCategory 인터페이스 + PatternPreset.categoryId 추가 | 수정 |
+| src/stores/categoryStore.ts | loadCategories, saveCategories + 트리 유틸리티 함수 7개 | 신규 |
+| src/components/CategoryTree.tsx | 재귀 트리 컴포넌트 + SelectedCategory 타입 | 신규 |
+| src/pages/PatternManage.tsx | 2컬럼 레이아웃 + 카테고리 필터링 + 드롭다운 + 빵가루 | 수정 |
+| src/App.css | pattern-layout, pattern-breadcrumb, cat-tree 전체 스타일 (~200줄) | 수정 |
+
+💡 tester 참고:
+- 테스트 방법:
+  1. `npx tsc --noEmit` 통과 확인 (통과)
+  2. `npx vite build` 통과 확인 (통과, 297KB JS / 23.3KB CSS)
+  3. `dev.bat`으로 실행 → 패턴 관리 페이지 → 좌측 카테고리 트리 + 우측 프리셋 목록 표시 확인
+  4. [+ 카테고리] 클릭 → 이름 입력 → 루트 카테고리 추가 확인
+  5. 카테고리 호버 → [+] 클릭 → 하위 카테고리 추가 확인
+  6. 카테고리 더블클릭 → 이름 변경 확인
+  7. 빈 카테고리 [x] 클릭 → 삭제 확인 / 프리셋 있는 카테고리 삭제 시 경고
+  8. 프리셋 생성/편집 → 카테고리 드롭다운에서 선택 → 저장 → 트리에 반영
+  9. 카테고리 클릭 → 우측에 해당 카테고리 프리셋만 표시 + 빵가루 경로
+  10. "전체" 클릭 → 모든 프리셋 / "미분류" 클릭 → categoryId 없는 프리셋만
+  11. 기존 프리셋 (categoryId 없음) → "미분류"에 정상 표시 (하위 호환)
+- 정상 동작:
+  - 카테고리 없이도 기존처럼 플랫 목록으로 동작 ("전체" 선택)
+  - 기존 프리셋은 자동으로 "미분류"에 분류됨
+  - 드래그앤드롭/다중 업로드 기능 그대로 유지
+- 주의할 입력:
+  - 카테고리 이름이 빈 문자열이면 추가 안됨 (prompt 취소)
+  - 깊은 중첩 (5단계 이상) 시 UI 좁아질 수 있음 (MVP 범위 내 OK)
+
+⚠️ reviewer 참고:
+- categoryId는 선택적 필드(`?`)로 기존 프리셋 JSON 완전 호환
+- 카테고리 필터링 시 getPresetBelongsToCategory()로 부모 체인 탐색 (O(depth) per preset)
+- prompt()로 카테고리 이름 입력 — 별도 모달 없이 간소화 (향후 인라인 입력으로 개선 가능)
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -285,3 +332,5 @@ grader/
 | 2026-04-08 | developer | 엑셀 주문서 자동 인식 (order_parser.py + SizeSelect 엑셀 업로드) | 완료 |
 | 2026-04-08 | tester | 엑셀 주문서 검증 (3종 샘플+에러4종+빌드+회귀) | 통과 (11/11) |
 | 2026-04-08 | developer | 패턴 다중 업로드+드래그앤드롭+폴더+사이즈 자동 추출 | 완료 |
+| 2026-04-08 | developer | 패턴 카테고리 트리 분류 시스템 (CategoryTree+categoryStore+2컬럼 레이아웃) | 완료 |
+| 2026-04-08 | tester | 카테고리 트리 빠른 검증 (tsc+vite+코드리뷰 5항목) | 통과 (5/5) |
