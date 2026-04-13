@@ -212,6 +212,27 @@ grader/
 - 정상 동작: `<svg width="520mm" height="710mm">` → width=520, height=710 자동 입력
 - 주의할 입력: viewBox만 있는 SVG, px 단위 SVG, width/height 없는 SVG
 
+#### 수정 이력
+| 회차 | 날짜 | 수정 내용 | 수정 파일 | 사유 |
+|------|------|----------|----------|------|
+| 1차 | 2026-04-08 | Python svg_bbox 커맨드로 실제 도형 bounding box 추출 + PatternManage에서 bbox 우선 호출 | svg_parser.py(신규), main.py, PatternManage.tsx | debugger 분석: Illustrator SVG의 viewBox가 아트보드 고정값이라 모든 사이즈가 동일한 치수로 추출됨 |
+
+**1차 수정 상세 (2026-04-08) -- SVG 실제 도형 bounding box 추출**
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| python-engine/svg_parser.py | SVG 내 polyline/polygon/path/rect/circle/ellipse/line 좌표에서 전체 bbox 계산 | 신규 |
+| python-engine/main.py | svg_bbox 커맨드 추가 + svg_parser import | 수정 |
+| src/pages/PatternManage.tsx | getSvgBboxDimensions/getSvgActualDimensions 함수 추가, addSvgFiles 2곳에서 비동기 bbox 추출로 변경 | 수정 |
+
+💡 tester 참고:
+- 검증: `npx tsc --noEmit` 통과, `npx vite build` 통과 (303KB JS)
+- Python CLI 테스트: `python main.py svg_bbox test.svg` -> viewBox=4337x3401, 실제 bbox=3318x2348 (정확)
+- 테스트 방법:
+  1. 사이즈별 SVG 폴더 업로드 -> 사이즈별 치수가 서로 다른 값으로 입력되는지 확인 (이전에는 모두 동일)
+  2. Python 호출 실패 환경(venv 없음 등) -> viewBox 기반 폴백으로 기존과 동일하게 동작
+- 핵심 검증: XS와 3XL의 width/height가 다르면 성공
+
 ## 테스트 결과 (tester)
 | 단계 | 판정 | 항목 | 이슈 |
 |------|------|------|------|
@@ -393,8 +414,6 @@ grader/
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-04-10 | developer | 4단계: SizeSelect/FileGenerate + pattern_scaler/pdf_grader (CMYK 보존) | 완료 |
-| 2026-04-10 | tester | 4단계 검증 | 통과 (30/30) |
 | 2026-04-08 | developer | 5단계: analyze_color + 벡터 연산자 감지 + 파일 크기 리포트 + 상세 배지 UI | 완료 |
 | 2026-04-08 | tester | 5단계 검증 (빌드+Python CLI 3종+호환성+파일크기필드) | 통과 (10/10) |
 | 2026-04-08 | tester | 6단계 E2E 통합 테스트 (워크플로우+빌드+데이터흐름) | 통과 (18/19, 개선 제안 1건) |
@@ -405,3 +424,4 @@ grader/
 | 2026-04-08 | developer | 패턴 다중 업로드+드래그앤드롭+폴더+사이즈 자동 추출 | 완료 |
 | 2026-04-08 | developer | 패턴 카테고리 트리 분류 시스템 (CategoryTree+categoryStore+2컬럼 레이아웃) | 완료 |
 | 2026-04-08 | tester | 카테고리 트리 빠른 검증 (tsc+vite+코드리뷰 5항목) | 통과 (5/5) |
+| 2026-04-08 | developer | SVG 실제 도형 bounding box 추출 (svg_parser.py + PatternManage bbox 우선 호출) | 완료 |

@@ -121,6 +121,53 @@ function parseSvgDimensions(svgData: string): SvgDimensions {
 }
 
 /**
+ * Python svg_bbox 커맨드를 호출하여 SVG 내 실제 도형의 bounding box 크기를 가져온다.
+ *
+ * Illustrator SVG는 viewBox가 아트보드 크기(모든 사이즈 동일)이므로,
+ * viewBox 대신 polyline 등 실제 도형 좌표에서 크기를 추출해야 정확한 스케일 비율이 나온다.
+ *
+ * 파일 경로가 필요하므로 svgData(문자열)로는 호출 불가 — 반드시 파일 경로 사용.
+ * Python 호출 실패 시 null을 반환하여 호출자가 폴백 처리할 수 있게 한다.
+ */
+async function getSvgBboxDimensions(svgFilePath: string): Promise<SvgDimensions | null> {
+  try {
+    const result = await invoke<string>("run_python", {
+      command: "svg_bbox",
+      args: [svgFilePath],
+    });
+    const parsed = JSON.parse(result);
+    if (parsed.success && parsed.width > 0 && parsed.height > 0) {
+      return {
+        width: Math.round(parsed.width * 100) / 100,
+        height: Math.round(parsed.height * 100) / 100,
+      };
+    }
+  } catch (err) {
+    // Python 호출 실패 시 폴백으로 넘긴다
+    console.warn("svg_bbox Python 호출 실패, viewBox 폴백 사용:", err);
+  }
+  return null;
+}
+
+/**
+ * SVG 파일의 실제 치수를 가져온다.
+ * 1순위: Python svg_bbox (도형 bounding box 기반 — 정확)
+ * 2순위: viewBox/width/height 파싱 (폴백 — Illustrator SVG에서 부정확할 수 있음)
+ */
+async function getSvgActualDimensions(
+  svgFilePath: string,
+  svgData: string
+): Promise<SvgDimensions> {
+  // 1순위: Python bounding box
+  const bboxDims = await getSvgBboxDimensions(svgFilePath);
+  if (bboxDims && bboxDims.width > 0 && bboxDims.height > 0) {
+    return bboxDims;
+  }
+  // 2순위: 기존 viewBox 기반 폴백
+  return parseSvgDimensions(svgData);
+}
+
+/**
  * 파일명에서 사이즈를 추출한다.
  * 예: "농구유니폼_U넥_스탠다드_암홀X_2XL.svg" → "2XL"
  * 마지막 언더스코어(_) 이후, .svg 확장자 이전 부분을 사이즈 키워드와 매칭.
@@ -454,6 +501,8 @@ function PatternManage() {
     }
 
     const newPieces: PatternPiece[] = [];
+    // piece별 사이즈→파일경로 매핑 (Python bbox 호출용)
+    const piecePathBySize = new Map<string, Map<string, string>>();
 
     for (const [pieceName, sizeMap] of grouped) {
       const representativeSize = sizeMap.has("M")
@@ -474,14 +523,17 @@ function PatternManage() {
         }
       }
 
+      const pieceId = generateId();
       const newPiece: PatternPiece = {
-        id: generateId(),
+        id: pieceId,
         name: pieceName,
         svgPath: representativePath,
         svgData: representativeSvg,
         svgBySize,
       };
       newPieces.push(newPiece);
+      // 이 piece의 사이즈별 파일 경로 저장
+      piecePathBySize.set(pieceId, sizeMap);
     }
 
     for (const fp of ungrouped) {
@@ -490,13 +542,18 @@ function PatternManage() {
         const filename = getFilenameFromPath(fp);
         const defaultName = filename.replace(/\.svg$/i, "");
 
+        const pieceId = generateId();
         const newPiece: PatternPiece = {
-          id: generateId(),
+          id: pieceId,
           name: defaultName,
           svgPath: fp,
           svgData,
         };
         newPieces.push(newPiece);
+        // 사이즈 없는 SVG도 경로 저장 (모든 사이즈에 동일 경로 사용)
+        const singleMap = new Map<string, string>();
+        singleMap.set("__default__", fp);
+        piecePathBySize.set(pieceId, singleMap);
       } catch (err) {
         console.warn(`SVG 읽기 실패: ${fp}`, err);
       }
@@ -507,17 +564,41 @@ function PatternManage() {
     const updatedPieces = [...formPieces, ...newPieces];
     setFormPieces(updatedPieces);
 
-    // 사이즈별 SVG에서 치수를 자동 추출하여 테이블에 채운다.
-    // 해당 사이즈의 SVG가 있으면 그 SVG에서, 없으면 대표 SVG에서 크기를 읽는다.
+    // 사이즈별 치수를 Python bbox로 미리 계산한다 (비동기).
+    // 키: "pieceId::size" → SvgDimensions
+    const dimsCache = new Map<string, SvgDimensions>();
+
+    // 모든 piece × size 조합에 대해 치수 추출 프로미스 생성
+    const dimsPromises: Promise<void>[] = [];
+    for (const np of newPieces) {
+      const pathMap = piecePathBySize.get(np.id);
+      // formSizes의 각 사이즈에 대해 치수를 추출
+      for (const sizeSpec of formSizes) {
+        const cacheKey = `${np.id}::${sizeSpec.size}`;
+        // 이 사이즈 전용 SVG 파일 경로가 있으면 사용, 없으면 대표 경로 사용
+        const svgPath = pathMap?.get(sizeSpec.size)
+          || pathMap?.get("__default__")
+          || np.svgPath;
+        const svgData = np.svgBySize?.[sizeSpec.size] || np.svgData || "";
+
+        dimsPromises.push(
+          getSvgActualDimensions(svgPath, svgData).then((dims) => {
+            dimsCache.set(cacheKey, dims);
+          })
+        );
+      }
+    }
+    await Promise.all(dimsPromises);
+
+    // 캐싱된 치수를 사이즈 테이블에 적용
     setFormSizes((prev) =>
       prev.map((sizeSpec) => ({
         ...sizeSpec,
         pieces: [
           ...sizeSpec.pieces,
           ...newPieces.map((np) => {
-            // 이 사이즈 전용 SVG가 있으면 그것에서 크기 추출
-            const svgForSize = np.svgBySize?.[sizeSpec.size];
-            const dims = parseSvgDimensions(svgForSize || np.svgData || "");
+            const cacheKey = `${np.id}::${sizeSpec.size}`;
+            const dims = dimsCache.get(cacheKey) || { width: 0, height: 0 };
             return {
               pieceId: np.id,
               width: dims.width,
@@ -566,15 +647,30 @@ function PatternManage() {
     const updatedPieces = [...formPieces, ...newPieces];
     setFormPieces(updatedPieces);
 
-    // 개별 SVG에서도 치수를 자동 추출하여 기본값으로 채운다.
-    // 사이즈별 SVG가 없으므로, 대표 svgData에서 크기를 읽어 모든 사이즈에 동일하게 적용.
+    // 개별 SVG에서도 Python bbox로 치수를 추출한다.
+    // 사이즈별 SVG가 없으므로, 하나의 SVG 파일에서 크기를 읽어 모든 사이즈에 동일하게 적용.
+    const dimsPromises: Promise<{ pieceId: string; dims: SvgDimensions }>[] = [];
+    for (const np of newPieces) {
+      dimsPromises.push(
+        getSvgActualDimensions(np.svgPath, np.svgData || "").then((dims) => ({
+          pieceId: np.id,
+          dims,
+        }))
+      );
+    }
+    const dimsResults = await Promise.all(dimsPromises);
+    const dimsMap = new Map<string, SvgDimensions>();
+    for (const { pieceId, dims } of dimsResults) {
+      dimsMap.set(pieceId, dims);
+    }
+
     setFormSizes((prev) =>
       prev.map((sizeSpec) => ({
         ...sizeSpec,
         pieces: [
           ...sizeSpec.pieces,
           ...newPieces.map((np) => {
-            const dims = parseSvgDimensions(np.svgData || "");
+            const dims = dimsMap.get(np.id) || { width: 0, height: 0 };
             return {
               pieceId: np.id,
               width: dims.width,

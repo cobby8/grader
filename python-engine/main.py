@@ -32,6 +32,7 @@ from pdf_handler import (
 from pattern_scaler import calculate_scale_factor
 from pdf_grader import generate_graded_pdf
 from order_parser import parse_order_excel
+from svg_parser import get_svg_bounding_box
 
 
 def print_json(data: dict) -> None:
@@ -57,6 +58,7 @@ def show_help() -> None:
             "calc_scale <preset_json_path> <base_size> <target_size>": "프리셋 JSON 파일에서 기준/타겟 사이즈 비율을 계산합니다",
             "generate_graded <src_pdf> <out_pdf> <scale_x> <scale_y>": "원본 PDF를 주어진 비율로 스케일링해 새 PDF를 생성합니다 (CMYK 보존)",
             "parse_order <excel_path>": "엑셀 주문서에서 사이즈 목록과 수량을 자동 추출합니다 (xlsx)",
+            "svg_bbox <svg_path>": "SVG 파일 내 실제 도형의 bounding box를 계산합니다 (viewBox가 아닌 실제 크기)",
         },
         "examples": [
             'python main.py get_pdf_info "C:/designs/front.pdf"',
@@ -66,6 +68,7 @@ def show_help() -> None:
             'python main.py calc_scale "C:/temp/preset.json" "L" "XL"',
             'python main.py generate_graded "C:/src.pdf" "C:/out.pdf" 1.05 1.08',
             'python main.py parse_order "C:/orders/order.xlsx"',
+            'python main.py svg_bbox "C:/patterns/front_L.svg"',
         ],
     }
     print_json(help_text)
@@ -154,6 +157,21 @@ def main() -> None:
                 print_error(f"엑셀 파일을 찾을 수 없습니다: {args[1]}")
                 sys.exit(1)
             result = parse_order_excel(args[1])
+            print_json(result)
+            if not result.get("success"):
+                sys.exit(1)
+
+        elif command == "svg_bbox":
+            # SVG 파일 내 실제 도형의 bounding box 계산
+            # viewBox(아트보드)가 아닌, polyline 등 도형의 실제 크기를 추출
+            if len(args) < 2:
+                print_error("SVG 파일 경로가 필요합니다. 예: python main.py svg_bbox pattern.svg")
+                sys.exit(1)
+            import os as _os3
+            if not _os3.path.exists(args[1]):
+                print_error(f"SVG 파일을 찾을 수 없습니다: {args[1]}")
+                sys.exit(1)
+            result = get_svg_bounding_box(args[1])
             print_json(result)
             if not result.get("success"):
                 sys.exit(1)

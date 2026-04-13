@@ -131,7 +131,12 @@
       "Bash(netstat -ano)",
       "Bash(findstr :1420)",
       "Bash(taskkill //f //pid 7300)",
-      "Bash(taskkill //f //pid 43260)"
+      "Bash(taskkill //f //pid 43260)",
+      "Bash(findstr LISTENING)",
+      "Bash(./venv/Scripts/python.exe -c \"from svg_parser import get_svg_bounding_box; print\\('import OK'\\)\")",
+      "Bash(./venv/Scripts/python.exe main.py svg_bbox --help)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(./venv/Scripts/python.exe main.py svg_bbox test_bbox.svg)"
     ]
   }
 }
