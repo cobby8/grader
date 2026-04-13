@@ -402,34 +402,22 @@ def generate_graded_pdf_by_pieces(
     pdf_rect = src_page.rect  # 원본 PDF 페이지 크기 (pt)
 
     # 5. SVG → PDF 좌표 변환 함수
-    # SVG viewBox(보정된)와 PDF MediaBox의 비율로 매핑
-    # normalize_artboard가 SVG viewBox를 1580x2000mm에 맞게 보정했으므로
-    # 보정된 viewBox와 PDF 크기가 같은 비율이다.
-    base_vb = piece_data["base_viewbox"]
-    target_vb = piece_data["target_viewbox"]
+    # SVG 좌표는 pt 단위 (1pt = 0.3528mm). PDF도 pt 단위.
+    # 따라서 X좌표는 그대로, Y좌표만 반전 (SVG: 좌상단 원점, PDF: 좌하단 원점).
+    # viewBox 비율 매핑이 아닌 직접 pt→pt 변환.
+    pdf_h = pdf_rect.height
 
-    def svg_to_pdf_rect(svg_bbox: dict, vb: dict) -> fitz.Rect:
+    def svg_to_pdf_rect(svg_bbox: dict) -> fitz.Rect:
         """
-        SVG bbox를 PDF 페이지 좌표의 Rect로 변환한다.
-
-        변환 원리:
-          1. SVG 좌표를 viewBox 내 비율(0~1)로 정규화
-          2. 그 비율을 PDF 페이지 크기에 곱함
-          3. Y축 반전: SVG는 위→아래, PDF는 아래→위
+        SVG bbox(pt 좌표)를 PDF Rect(pt 좌표)로 변환한다.
+        X는 그대로, Y만 반전.
         """
-        # 정규화 (0~1 범위로 변환)
-        nx0 = (svg_bbox["min_x"] - vb["x"]) / vb["w"]
-        ny0 = (svg_bbox["min_y"] - vb["y"]) / vb["h"]
-        nx1 = (svg_bbox["max_x"] - vb["x"]) / vb["w"]
-        ny1 = (svg_bbox["max_y"] - vb["y"]) / vb["h"]
-
-        # PDF 좌표로 변환 (Y축 반전)
-        pdf_x0 = nx0 * pdf_rect.width
-        pdf_y0 = (1.0 - ny1) * pdf_rect.height  # SVG y1(아래) → PDF y0(위)
-        pdf_x1 = nx1 * pdf_rect.width
-        pdf_y1 = (1.0 - ny0) * pdf_rect.height  # SVG y0(위) → PDF y1(아래)
-
-        return fitz.Rect(pdf_x0, pdf_y0, pdf_x1, pdf_y1)
+        return fitz.Rect(
+            svg_bbox["min_x"],                # X 그대로
+            pdf_h - svg_bbox["max_y"],        # SVG max_y(아래) → PDF y0(위)
+            svg_bbox["max_x"],                # X 그대로
+            pdf_h - svg_bbox["min_y"],        # SVG min_y(위) → PDF y1(아래)
+        )
 
     # 6. 출력 PDF 생성 — 기준 PDF와 같은 페이지 크기 유지
     # 이유: 공장에서 동일 아트보드 크기로 작업하는 것이 편하다.
@@ -439,10 +427,10 @@ def generate_graded_pdf_by_pieces(
     # 7. 각 조각마다 show_pdf_page 호출
     for piece in piece_data["pieces"]:
         # 기준 조각의 PDF clip 영역 (원본 디자인에서 잘라낼 부분)
-        base_clip = svg_to_pdf_rect(piece["base_bbox"], base_vb)
+        base_clip = svg_to_pdf_rect(piece["base_bbox"])
 
         # 타겟 조각의 PDF target 영역 (출력 PDF에서 배치할 위치)
-        target_rect = svg_to_pdf_rect(piece["target_bbox"], target_vb)
+        target_rect = svg_to_pdf_rect(piece["target_bbox"])
 
         # show_pdf_page: base_clip 영역을 target_rect 위치에 배치
         # keep_proportion=False → 가로/세로 독립 스케일 허용
