@@ -1,22 +1,19 @@
 /**
- * grading.jsx -- Illustrator ExtendScript 그레이딩 스크립트 (패턴 기반 채워넣기 방식)
+ * grading.jsx -- Illustrator ExtendScript 그레이딩 스크립트 (패턴 선 복사 + 단색 배경 채우기)
  *
  * 동작 흐름:
  *   1. config.json 읽기 (스크립트와 같은 폴더)
- *   2. 타겟 패턴 SVG 열기 (이것이 "틀"이 됨)
- *   3. 패턴 경로(polyline → pathItem) 수집 + 열린 경로 닫기
- *   4. 디자인 PDF를 Place로 배치 (벡터 데이터 + CMYK 보존)
- *   5. 디자인을 아트보드 크기에 맞게 리사이즈 + 좌상단 정렬
- *   6. 디자인을 뒤로 보내기 (패턴이 앞에 와야 클리핑 마스크 작동)
- *   7. 패턴 경로들을 복합 경로로 합치기
- *   8. 클리핑 마스크 적용 (패턴 모양으로 자르기)
- *   9. CMYK PDF로 저장
- *  10. result.json 작성 + 문서 닫기
+ *   2. 기준 디자인 PDF 열기 → 배경 메인 색상(가장 큰 면적 pathItem의 fillColor) 추출
+ *   3. 디자인 닫기 (색상만 추출했으므로)
+ *   4. 타겟 사이즈 패턴 SVG 열기 (이것이 "틀"이 됨)
+ *   5. 패턴 각 조각(polyline→pathItem)에 추출한 색상으로 fill 적용
+ *   6. PDF로 저장
+ *   7. result.json 작성 + 문서 닫기
  *
- * 핵심 변경점 (이전 버전 대비):
- *   - 이전: 디자인 열기 → 스케일링 → 패턴 복사/붙여넣기 → 클리핑
- *   - 현재: 패턴 SVG 열기 → 디자인 Place → 크기 맞추기 → 복합경로 → 클리핑
- *   - scaleX/scaleY 불필요 — 디자인과 패턴 SVG의 아트보드가 같은 크기(1580x2000mm)
+ * 왜 이 방식인가:
+ *   - 디자인은 현재 단색 배경이므로, 배경색만 추출해서 패턴 조각에 채우면 충분하다.
+ *   - 그라데이션/레이어 구분은 추후 진행한다.
+ *   - 클리핑 마스크 방식보다 단순하고 확실하다.
  *
  * 주의: ExtendScript는 ES3 기반!
  *   - var만 사용 (let/const 불가)
@@ -162,7 +159,6 @@ function createPdfSaveOptions() {
 /**
  * 스크립트와 같은 폴더의 config.json을 읽어서 파싱한다.
  * config 구조: { designPdfPath, patternSvgPath, outputPdfPath, resultJsonPath }
- * (scaleX/scaleY는 이제 불필요 — 아트보드 크기 비교로 자동 계산)
  */
 function readConfig() {
     var scriptFile = new File($.fileName);
@@ -181,26 +177,198 @@ function readConfig() {
     return config;
 }
 
+// ===== 색상 관련 함수 =====
+
+/**
+ * CMYK 색상을 새 객체로 복제한다.
+ * 왜 복제가 필요한가:
+ *   - ExtendScript에서 fillColor를 다른 객체에 할당하면 참조만 복사될 수 있다.
+ *   - 원본 문서를 닫으면 참조가 무효화되어 에러가 발생한다.
+ *   - 따라서 CMYK 값을 새 객체에 하나씩 복사해야 안전하다.
+ */
+function cloneCMYKColor(color) {
+    var c = new CMYKColor();
+    c.cyan = color.cyan;
+    c.magenta = color.magenta;
+    c.yellow = color.yellow;
+    c.black = color.black;
+    return c;
+}
+
+/**
+ * 다양한 색상 타입을 안전하게 복제한다.
+ * CMYKColor, RGBColor, GrayColor 등 타입에 따라 분기 처리한다.
+ * 알 수 없는 타입은 그대로 반환 (참조 복사 — 같은 문서 내에서만 안전).
+ */
+function cloneColor(color) {
+    // CMYKColor — 인쇄용 표준, 가장 흔한 경우
+    if (color.typename === "CMYKColor") {
+        return cloneCMYKColor(color);
+    }
+    // RGBColor — 화면용 디자인에서 올 수 있음
+    if (color.typename === "RGBColor") {
+        var rgb = new RGBColor();
+        rgb.red = color.red;
+        rgb.green = color.green;
+        rgb.blue = color.blue;
+        return rgb;
+    }
+    // GrayColor — 흑백 디자인
+    if (color.typename === "GrayColor") {
+        var gray = new GrayColor();
+        gray.gray = color.gray;
+        return gray;
+    }
+    // SpotColor — 별색 (판톤 등)
+    if (color.typename === "SpotColor") {
+        var spot = new SpotColor();
+        spot.spot = color.spot;       // 스팟 색상 참조
+        spot.tint = color.tint;       // 농도
+        return spot;
+    }
+    // GradientColor — 그라데이션은 추후 처리 예정
+    // 현재는 참조 그대로 반환 (단색 배경에서는 발생하지 않을 것)
+    $.writeln("[grading.jsx] 경고: 미지원 색상 타입 — " + color.typename);
+    return color;
+}
+
+/**
+ * 그룹 아이템 내부를 재귀 탐색하여 가장 큰 면적의 fill 색상을 찾는다.
+ * 왜 재귀 탐색이 필요한가:
+ *   - PDF를 Illustrator로 열면 요소들이 그룹으로 중첩될 수 있다.
+ *   - doc.pathItems는 최상위 경로만 포함하므로 그룹 내부를 별도로 탐색해야 한다.
+ */
+function findLargestFillInGroups(container) {
+    var largestArea = 0;
+    var mainColor = null;
+
+    for (var i = 0; i < container.groupItems.length; i++) {
+        var group = container.groupItems[i];
+
+        // 그룹 내 pathItems 순회
+        for (var j = 0; j < group.pathItems.length; j++) {
+            var item = group.pathItems[j];
+            if (item.filled) {
+                var area = Math.abs(item.width * item.height);
+                if (area > largestArea) {
+                    largestArea = area;
+                    mainColor = item.fillColor;
+                }
+            }
+        }
+
+        // 중첩 그룹도 재귀 탐색
+        var nested = findLargestFillInGroups(group);
+        if (nested && !mainColor) {
+            // 최상위에서 못 찾았을 때만 중첩 결과 사용
+            mainColor = nested;
+        }
+    }
+
+    return mainColor;
+}
+
+/**
+ * 디자인 문서에서 배경 메인 색상을 추출한다.
+ * 방법: 가장 큰 면적(width * height)을 가진 pathItem의 fillColor를 반환한다.
+ * 왜 면적 기준인가:
+ *   - 배경은 보통 전체를 덮는 가장 큰 사각형이므로 면적이 가장 크다.
+ *   - 로고/텍스트 등 작은 요소는 자연스럽게 제외된다.
+ */
+function extractMainColor(doc) {
+    var largestArea = 0;
+    var mainColor = null;
+
+    // 모든 최상위 pathItem을 순회하여 가장 큰 면적의 fillColor 찾기
+    for (var i = 0; i < doc.pathItems.length; i++) {
+        var item = doc.pathItems[i];
+        if (item.filled) {
+            var area = Math.abs(item.width * item.height);
+            if (area > largestArea) {
+                largestArea = area;
+                mainColor = item.fillColor;
+            }
+        }
+    }
+
+    // 최상위에서 못 찾으면 그룹 내부도 탐색 (PDF는 그룹 중첩이 흔함)
+    if (!mainColor) {
+        $.writeln("[grading.jsx] 최상위 pathItems에서 색상 못 찾음 — 그룹 내부 탐색");
+        mainColor = findLargestFillInGroups(doc);
+    }
+
+    // 그래도 못 찾으면 기본 CMYK 색상 사용 (안전 폴백)
+    if (!mainColor) {
+        var fallback = new CMYKColor();
+        fallback.cyan = 80;
+        fallback.magenta = 30;
+        fallback.yellow = 0;
+        fallback.black = 0;
+        mainColor = fallback;
+        $.writeln("[grading.jsx] 경고: 메인 색상 자동 추출 실패, 기본 색상(C80 M30) 사용");
+    }
+
+    return mainColor;
+}
+
 // ===== 메인 로직 =====
 
 /**
  * 그레이딩 메인 함수.
- * 패턴 SVG를 틀로 사용하여 디자인을 배치하고 클리핑 마스크로 잘라낸다.
+ * 디자인에서 메인 색상을 추출한 뒤, 패턴 조각에 해당 색상을 채운다.
  *
  * 왜 이 방식인가:
- *   - 패턴 SVG의 polyline들이 이미 올바른 좌표에 있으므로
- *     패턴을 "틀"로 열고 디자인을 "채워넣는" 방식이 가장 정확하다.
- *   - 디자인과 패턴의 아트보드가 같은 크기이므로 별도 스케일 계산이 불필요하다.
+ *   - 현재 디자인은 단색 배경이므로 색상 추출 + 채우기만으로 충분하다.
+ *   - 클리핑 마스크 방식보다 단순하고, 패턴 형태 그대로 출력된다.
+ *   - 그라데이션/다중 레이어는 추후 확장한다.
  */
 function main() {
-    $.writeln("[grading.jsx] 스크립트 시작 (패턴 기반 채워넣기 방식)");
+    $.writeln("[grading.jsx] 스크립트 시작 (패턴 선 복사 + 단색 배경 채우기)");
 
     var config = readConfig();
     var resultPath = config.resultJsonPath;
     var patternDoc = null;
+    var designDoc = null;
 
     try {
-        // ---- STEP 1: 타겟 패턴 SVG 열기 ----
+        // ===== STEP 1: 기준 디자인에서 메인 색상 추출 =====
+        // 디자인 PDF를 열어서 가장 큰 면적의 pathItem 색상을 가져온다.
+        var designFile = new File(config.designPdfPath);
+        if (!designFile.exists) {
+            throw new Error("디자인 PDF를 찾을 수 없습니다: " + config.designPdfPath);
+        }
+
+        // PDF 열기 옵션 설정 — 다이얼로그 팝업 방지
+        var pdfOpenOpts = new PDFFileOptions();
+        pdfOpenOpts.pageToOpen = 1;                         // 첫 페이지만
+        pdfOpenOpts.pDFCropToBox = PDFBoxType.PDFARTBOX;    // 아트보드 기준으로 크롭
+
+        // CMYK 색상 공간으로 열기 (디자인이 CMYK일 것이므로)
+        designDoc = app.open(designFile, DocumentColorSpace.CMYK, pdfOpenOpts);
+        $.writeln("[grading.jsx] 디자인 PDF 열림: " + designDoc.name);
+
+        // 배경 메인 색상 추출
+        var rawMainColor = extractMainColor(designDoc);
+
+        // 색상 값을 새 객체로 복제 — 문서 닫은 후에도 사용 가능하도록
+        var mainColor = cloneColor(rawMainColor);
+
+        // 추출한 색상 정보 로그
+        if (mainColor.typename === "CMYKColor") {
+            $.writeln("[grading.jsx] 메인 색상: C=" + mainColor.cyan.toFixed(1)
+                + " M=" + mainColor.magenta.toFixed(1)
+                + " Y=" + mainColor.yellow.toFixed(1)
+                + " K=" + mainColor.black.toFixed(1));
+        } else {
+            $.writeln("[grading.jsx] 메인 색상 타입: " + mainColor.typename);
+        }
+
+        // 디자인 문서 닫기 (색상만 추출했으므로 더 이상 불필요)
+        designDoc.close(SaveOptions.DONOTSAVECHANGES);
+        designDoc = null;
+        $.writeln("[grading.jsx] 디자인 문서 닫음 (색상 추출 완료)");
+
+        // ===== STEP 2: 타겟 패턴 SVG 열기 =====
         // 패턴 SVG가 "틀"이 된다. polyline들이 이미 올바른 좌표에 있다.
         var patternFile = new File(config.patternSvgPath);
         if (!patternFile.exists) {
@@ -209,121 +377,66 @@ function main() {
         patternDoc = app.open(patternFile);
         $.writeln("[grading.jsx] 패턴 SVG 열림: " + patternDoc.name);
 
-        // 아트보드 크기 확인 (패턴과 디자인이 같은 크기여야 함)
+        // 아트보드 크기 확인
         var ab = patternDoc.artboards[0];
         var abRect = ab.artboardRect;  // [left, top, right, bottom] (pt 단위)
-        var docWidth = abRect[2] - abRect[0];    // 아트보드 폭
-        var docHeight = abRect[1] - abRect[3];   // 아트보드 높이 (top - bottom)
-        $.writeln("[grading.jsx] 아트보드: " + docWidth + " x " + docHeight + " pt");
+        var docWidth = abRect[2] - abRect[0];
+        var docHeight = abRect[1] - abRect[3];
+        $.writeln("[grading.jsx] 아트보드: " + docWidth.toFixed(1) + " x " + docHeight.toFixed(1) + " pt");
 
-        // ---- STEP 2: 패턴 경로들 수집 ----
+        // ===== STEP 3: 패턴 조각에 색상 채우기 =====
         // SVG를 열면 polyline이 pathItem으로 변환됨
-        // 면적이 너무 작은 경로는 가이드선 등이므로 제외
-        var patternPaths = [];
+        // 면적이 충분히 큰 경로만 패턴 조각으로 인정 (가이드선/마크 제외)
+        var filledCount = 0;
         for (var i = 0; i < patternDoc.pathItems.length; i++) {
-            var p = patternDoc.pathItems[i];
-            // 가로/세로 모두 10pt 이상인 경로만 패턴 조각으로 인정
-            if (Math.abs(p.width) > 10 && Math.abs(p.height) > 10) {
-                patternPaths.push(p);
-                // 열린 경로면 닫기 — 클리핑 마스크는 닫힌 경로만 가능
-                if (!p.closed) {
-                    p.closed = true;
+            var path = patternDoc.pathItems[i];
+
+            // 가로/세로 모두 50pt 이상인 경로만 패턴 조각으로 인정
+            // (50pt ≈ 17.6mm — 가이드선/마크보다 크고, 패턴 조각보다 작은 기준)
+            if (Math.abs(path.width) > 50 && Math.abs(path.height) > 50) {
+                // 열린 경로면 닫기 — fill은 닫힌 경로에서만 정상 작동
+                if (!path.closed) {
+                    path.closed = true;
                 }
+
+                // 메인 색상으로 채우기
+                path.filled = true;
+                path.fillColor = mainColor;
+
+                // 선(stroke)은 제거 — 깔끔한 출력을 위해
+                path.stroked = false;
+
+                filledCount++;
             }
         }
-        $.writeln("[grading.jsx] 패턴 조각 수: " + patternPaths.length);
+        $.writeln("[grading.jsx] 패턴 " + filledCount + "개 조각에 색상 채움");
 
-        if (patternPaths.length === 0) {
-            throw new Error("패턴 SVG에 유효한 경로가 없습니다 (10pt 이상 크기 필요)");
+        if (filledCount === 0) {
+            $.writeln("[grading.jsx] 경고: 50pt 이상 조각이 없음 — 패턴 SVG를 확인하세요");
         }
 
-        // ---- STEP 3: 디자인 PDF를 Place ----
-        // groupItems.createFromFile()은 벡터 데이터 그대로 가져옴 (CMYK 보존)
-        // 이것이 app.open()과 복사/붙여넣기보다 안정적인 이유:
-        //   - 문서 전환 없이 현재 문서(패턴)에 바로 배치
-        //   - 클립보드 의존성 없음
-        var designFile = new File(config.designPdfPath);
-        if (!designFile.exists) {
-            throw new Error("디자인 PDF를 찾을 수 없습니다: " + config.designPdfPath);
-        }
-
-        var designGroup = patternDoc.groupItems.createFromFile(designFile);
-        $.writeln("[grading.jsx] 디자인 배치 완료: " + designGroup.width + " x " + designGroup.height + " pt");
-
-        // ---- STEP 4: 디자인을 아트보드에 맞게 크기/위치 조정 ----
-        // 디자인 PDF와 패턴 SVG의 아트보드가 같은 크기(1580x2000mm)이므로
-        // 이론적으로 1:1이지만, PDF→Illustrator 변환 과정에서
-        // 미세한 pt 변환 차이가 있을 수 있으므로 비율 계산
-        var scaleXPct = (docWidth / designGroup.width) * 100;
-        var scaleYPct = (docHeight / designGroup.height) * 100;
-
-        // 0.1% 이상 차이가 있을 때만 리사이즈 (불필요한 변환 방지)
-        if (Math.abs(scaleXPct - 100) > 0.1 || Math.abs(scaleYPct - 100) > 0.1) {
-            designGroup.resize(
-                scaleXPct,   // 가로 비율 (%)
-                scaleYPct,   // 세로 비율 (%)
-                true,        // 패턴 변환
-                true,        // 획(stroke) 변환
-                true         // 효과 변환
-            );
-            $.writeln("[grading.jsx] 디자인 리사이즈: " + scaleXPct.toFixed(1) + "% x " + scaleYPct.toFixed(1) + "%");
-        } else {
-            $.writeln("[grading.jsx] 디자인 크기 일치 — 리사이즈 불필요");
-        }
-
-        // 아트보드 좌상단에 정렬 (패턴 좌표와 정확히 일치시키기 위해)
-        designGroup.position = [abRect[0], abRect[1]];
-        $.writeln("[grading.jsx] 디자인 위치 정렬: [" + abRect[0] + ", " + abRect[1] + "]");
-
-        // ---- STEP 5: 디자인을 패턴 뒤로 보내기 ----
-        // 클리핑 마스크에서 "최상위 객체"가 마스크 경로가 된다.
-        // 따라서 디자인을 뒤로 보내고 패턴 경로가 앞에 있어야 한다.
-        designGroup.zOrder(ZOrderMethod.SENDTOBACK);
-        $.writeln("[grading.jsx] 디자인을 뒤로 보냄 (패턴이 앞으로)");
-
-        // ---- STEP 6: 패턴 경로들을 복합 경로로 합치기 ----
-        // 여러 조각(앞판+뒷판+칼라 등)을 하나의 복합 경로(compound path)로 합쳐야
-        // 클리핑 마스크가 모든 조각을 한 번에 적용할 수 있다.
-        if (patternPaths.length > 1) {
-            // 기존 선택 해제
-            patternDoc.selection = null;
-            // 패턴 경로들만 선택
-            for (var j = 0; j < patternPaths.length; j++) {
-                patternPaths[j].selected = true;
-            }
-            // 메뉴 명령으로 복합 경로 생성 (Object > Compound Path > Make)
-            app.executeMenuCommand("compoundPath");
-            $.writeln("[grading.jsx] 복합 경로 생성 완료 (" + patternPaths.length + "개 조각 합침)");
-        } else {
-            $.writeln("[grading.jsx] 패턴 조각 1개 — 복합 경로 불필요");
-        }
-
-        // ---- STEP 7: 클리핑 마스크 생성 ----
-        // 전체 선택 (복합 경로/패턴 + 디자인 그룹)
-        patternDoc.selectObjectsOnActiveArtboard();
-        // 클리핑 마스크 적용 (Object > Clipping Mask > Make)
-        // 최상위 객체(패턴 복합 경로)가 마스크가 되고, 아래 객체(디자인)가 잘린다.
-        app.executeMenuCommand("makeMask");
-        $.writeln("[grading.jsx] 클리핑 마스크 적용 완료");
-
-        // ---- STEP 8: PDF로 저장 ----
+        // ===== STEP 4: PDF로 저장 =====
         var outputFile = new File(config.outputPdfPath);
         var pdfOpts = createPdfSaveOptions();
         patternDoc.saveAs(outputFile, pdfOpts);
         $.writeln("[grading.jsx] PDF 저장 완료: " + config.outputPdfPath);
 
-        // ---- STEP 9: 정리 ----
+        // ===== STEP 5: 정리 =====
         patternDoc.close(SaveOptions.DONOTSAVECHANGES);
         patternDoc = null;
 
         // 성공 결과 기록
-        writeSuccessResult(resultPath, config.outputPdfPath, "그레이딩 완료 (패턴 기반)");
+        writeSuccessResult(resultPath, config.outputPdfPath,
+            "그레이딩 완료 - " + filledCount + "개 조각 색상 채움");
         $.writeln("[grading.jsx] 완료!");
 
     } catch (err) {
         $.writeln("[grading.jsx] 오류: " + err.message);
 
         // 열린 문서 정리 (에러 시에도 문서를 닫아야 다음 실행에 문제 없음)
+        try {
+            if (designDoc) designDoc.close(SaveOptions.DONOTSAVECHANGES);
+        } catch (e) { /* 무시 */ }
         try {
             if (patternDoc) patternDoc.close(SaveOptions.DONOTSAVECHANGES);
         } catch (e) { /* 무시 */ }

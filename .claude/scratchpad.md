@@ -111,6 +111,35 @@ doc.save(output_path, deflate=True, garbage=4, clean=True)
 ### [2026-04-08] 클리핑 마스크 기반 그레이딩 기술 타당성 분석
 (대체됨 -> 아래 ExtendScript 전환 참조)
 
+### [2026-04-08] 요소 재구성 방식 타당성 검토
+
+목표: "디자인을 통째로 축소하지 말고 요소별로 분해해서 재구성" 방식 검토
+
+핵심 결정: Level 1(배경색 채우기)부터 단계적 접근. 현재 grading.jsx 유지 + 배경색 추출/채우기 추가.
+- **상세**: REPORT-ELEMENT-REBUILD.md 참조
+
+만들/수정할 위치와 구조:
+| 파일 경로 | 역할 | 신규/수정 |
+|----------|------|----------|
+| illustrator-scripts/grading.jsx | STEP 2A~2C(배경색 추출+채우기) 추가 | 수정 |
+| illustrator-scripts/config.json | fillBackground, backgroundSource 필드 추가 | 수정 |
+| src-tauri/src/lib.rs | 새 config 필드 전달 | 수정 |
+| src/pages/FileGenerate.tsx | fillBackground 옵션 UI | 수정 |
+
+실행 계획 (Level 1):
+| 순서 | 작업 | 담당 | 선행 조건 |
+|------|------|------|----------|
+| 1 | grading.jsx에 배경색 추출 함수 추가 | developer | 없음 |
+| 2 | 패턴 조각 fillColor 적용 로직 추가 | developer | 1 |
+| 3 | config.json + Rust/프론트 연동 | developer | 2 |
+| 4 | 실제 디자인 파일로 테스트 + 폴백 | tester + developer | 3 |
+
+developer 주의사항:
+- 배경색 자동 감지: pathItem 면적 기준 최대 요소의 fillColor 추출
+- 그라데이션은 GradientColor 객체 전체 복사 (각도/정지점 포함)
+- 실패 시 기존 방식(클리핑만)으로 폴백해야 함
+- ExtendScript ES3 제약 유지 (var만, JSON 수동 등)
+
 ### [2026-04-08] Illustrator ExtendScript 그레이딩 엔진 전환
 
 목표: PyMuPDF 방식의 근본적 한계를 극복하기 위해 Illustrator ExtendScript로 전환
@@ -687,20 +716,30 @@ tester 참고:
 - find_illustrator_exe는 "C:\Program Files\Adobe\Adobe Illustrator *" 경로 탐색
 - run_illustrator_script는 result.json 폴링으로 완료 감지 (500ms 간격)
 
-### [2026-04-08] grading.jsx 패턴 기반 채워넣기 방식 전면 재작성
+### [2026-04-08] grading.jsx "패턴 선 복사 + 단색 배경 채우기" 방식으로 재작성
 
-구현한 기능: grading.jsx의 핵심 로직을 "디자인 열기->스케일링->패턴 붙여넣기" 에서 "패턴 SVG 열기->디자인 Place->크기 맞추기->복합경로->클리핑"으로 전면 교체
+구현한 기능: grading.jsx를 "디자인 배경색 추출 + 패턴 조각에 fill" 방식으로 전면 재작성
+
+이전 방식: 패턴 SVG 열기 -> 디자인 Place -> 복합경로 -> 클리핑 마스크
+새 방식: 디자인 PDF 열기 -> 메인 색상 추출 -> 디자인 닫기 -> 패턴 SVG 열기 -> 조각에 색상 fill -> PDF 저장
 
 | 파일 경로 | 변경 내용 | 신규/수정 |
 |----------|----------|----------|
-| illustrator-scripts/grading.jsx | 패턴 SVG 기반 채워넣기 방식으로 전면 재작성 (scaleX/scaleY 제거) | 수정 |
-| illustrator-scripts/config.json | baseSize/targetSize/scaleX/scaleY 필드 제거 | 수정 |
+| illustrator-scripts/grading.jsx | 단색 배경 채우기 방식으로 전면 재작성 (클리핑/Place/복합경로 제거) | 수정 |
+
+추가된 함수:
+- extractMainColor(doc) — 최상위 pathItems에서 가장 큰 면적의 fillColor 추출
+- findLargestFillInGroups(container) — 그룹 내부 재귀 탐색
+- cloneCMYKColor(color) — CMYK 값을 새 객체로 안전 복제
+- cloneColor(color) — CMYK/RGB/Gray/Spot 타입별 분기 복제
 
 tester 참고:
 - ES3 호환성 확인 완료: let/const 0건, arrow function 0건, template literal 0건
-- config.json은 이제 4개 필드만 사용: designPdfPath, patternSvgPath, outputPdfPath, resultJsonPath
-- 테스트 방법: Illustrator에서 File > Scripts > Other Script... > grading.jsx 실행 (config.json 필요)
-- 정상 동작: 패턴 SVG 열기 -> 디자인 Place -> 아트보드 맞춤 -> 복합 경로 -> 클리핑 마스크 -> PDF 저장
+- config.json 구조 동일: designPdfPath, patternSvgPath, outputPdfPath, resultJsonPath
+- 테스트 방법: Illustrator에서 File > Scripts > Other Script... > grading.jsx 실행
+- 정상 동작: 디자인에서 색상 추출 -> 패턴 조각에 fill -> PDF 저장
+- 핵심 검증: 출력 PDF에서 패턴 조각들이 디자인 배경색으로 채워져 있는지 확인
+- 주의: PDF 열기 시 다이얼로그 방지를 위해 PDFFileOptions 사용
 
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
@@ -714,17 +753,13 @@ tester 참고:
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-04-08 | developer | grading.jsx를 "패턴 SVG 기반 채워넣기" 방식으로 전면 재작성 + config.json에서 scaleX/scaleY 제거 | 완료 |
+| 2026-04-08 | developer | grading.jsx "패턴 선 복사 + 단색 배경 채우기" 방식으로 재작성 (extractMainColor+cloneColor+fill) | 완료 |
+| 2026-04-08 | planner-architect | 요소 재구성 방식 타당성 검토 + Level 1 구현 계획 (REPORT-ELEMENT-REBUILD.md) | 완료 |
 | 2026-04-08 | developer | 7단계 Phase 1: FileGenerate 롤백(단순 스케일링) + ExtendScript 프로토타입 + Rust AI 커맨드 3개 | 완료 |
 | 2026-04-13 | tester | 실사용 시나리오 E2E (A3 복잡 CMYK + Form XObject 재귀) | 통과 (21/21) |
 | 2026-04-08 | developer | 엑셀 주문서 자동 인식 (order_parser.py + SizeSelect 엑셀 업로드) | 완료 |
-| 2026-04-08 | tester | 엑셀 주문서 검증 (3종 샘플+에러4종+빌드+회귀) | 통과 (11/11) |
 | 2026-04-08 | developer | 패턴 다중 업로드+드래그앤드롭+폴더+사이즈 자동 추출 | 완료 |
 | 2026-04-08 | developer | 패턴 카테고리 트리 분류 시스템 (CategoryTree+categoryStore+2컬럼 레이아웃) | 완료 |
-| 2026-04-08 | tester | 카테고리 트리 빠른 검증 (tsc+vite+코드리뷰 5항목) | 통과 (5/5) |
-| 2026-04-08 | developer | SVG 실제 도형 bounding box 추출 (svg_parser.py + PatternManage bbox 우선 호출) | 완료 |
 | 2026-04-08 | developer | 데이터 보호 안전장치 (3 store 로드/저장 빈배열 차단 + 백업) | 완료 |
 | 2026-04-08 | developer | SVG 아트보드 자동 보정 (normalize_artboard: viewBox 확장 1580x2000mm) | 완료 |
-| 2026-04-08 | developer | SVG 패턴 클리핑 마스크+bleed 적용 (svg_parser+pdf_grader+main+FileGenerate) | 완료 |
-| 2026-04-08 | developer | 클리핑 마스크 좌표계 불일치 버그 수정 (viewBox 원점 고려+정규화+직접 PDF 변환) | 완료 |
-| 2026-04-08 | developer | PDF 그레이딩을 조각별 채워넣기 방식으로 전면 교체 (extract_piece_bboxes+calculate_piece_scale_factors+generate_by_pieces+FileGenerate) | 완료 |
+| 2026-04-08 | developer | SVG 패턴 클리핑 마스크+bleed 적용 + 좌표계 버그 수정 + 조각별 채워넣기 | 완료 |

@@ -85,3 +85,9 @@
 - **발견자**: planner-architect
 - **내용**: PyMuPDF로 PDF를 프로그래밍 조작하는 5가지 방식(show_pdf_page, CTM 직접 삽입, clip+show_pdf_page, PDF W 연산자, 조각별 채워넣기)이 모두 근본적 한계(좌표 변환 오차, 사각형만 클리핑, 조각 겹침 등)에 도달. Illustrator ExtendScript로 그레이딩 엔진을 완전 전환하기로 결정. 이유: (1) 클리핑 마스크가 네이티브 기능(곡선/복합 경로 지원), (2) item.resize() API로 정밀 스케일링, (3) CMYK 100% 보존(Illustrator 자체 처리), (4) SVG/PDF 좌표 자동 변환. 실행 방법: 커맨드라인 Illustrator.exe /run script.jsx (방법 A) 우선 채택, 필요 시 COM 자동화(방법 B)로 업그레이드. Python 엔진은 PDF 분석 전용으로 유지. 전제조건: Illustrator CC 2020+ 설치 필수. 예상 소요: 2~3주 (Phase 1 MVP 1주, Phase 2 UI 통합 1주, Phase 3 안정화 1주). 상세: REPORT-EXTENDSCRIPT.md 참조.
 - **참조횟수**: 0
+
+### [2026-04-08] 요소 재구성 방식: Level 1(배경색 채우기)부터 단계적 접근
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: 사용자 제안 "디자인을 통째로 축소하지 말고 요소별로 분해해서 재구성" 방식의 타당성 검토 완료. 결론: 기술적으로 완전히 가능하나 3단계로 나눠서 접근. Level 1(배경색 추출+패턴 채우기, 1~2주)부터 시작. 현재 grading.jsx를 폐기하지 않고 배경색 추출/채우기 단계만 추가하는 방식. Level 2(요소별 자동 배치, 3~4주)는 Level 1 검증 후 진행, 디자인 파일 레이어 구조 표준화가 선행 조건. Level 3(AI 기반 완전 자동화, 2~3개월+)은 현 단계 불필요. 핵심 근거: ExtendScript가 레이어/그룹/fillColor/GradientColor 등 모든 API를 제공하므로 기술 장벽 없음. 자동 배경색 감지는 pathItem 면적 기준 최대 요소의 fillColor 추출로 구현. 상세: REPORT-ELEMENT-REBUILD.md 참조.
+- **참조횟수**: 0
