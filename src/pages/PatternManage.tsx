@@ -18,7 +18,7 @@ import { readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { PatternPreset, PatternPiece, PatternCategory, SizeSpec } from "../types/pattern";
-import { SIZE_LIST, STANDARD_ARTBOARD } from "../types/pattern";
+import { SIZE_LIST } from "../types/pattern";
 import { loadPresets, savePresets, generateId } from "../stores/presetStore";
 import {
   loadCategories,
@@ -165,40 +165,6 @@ async function getSvgActualDimensions(
   }
   // 2순위: 기존 viewBox 기반 폴백
   return parseSvgDimensions(svgData);
-}
-
-/**
- * SVG 아트보드(viewBox)를 기준 아트보드 크기(STANDARD_ARTBOARD)로 보정한다.
- *
- * 패턴 SVG의 아트보드가 디자인 PDF 아트보드보다 작을 때,
- * viewBox를 확장하여 아트보드를 맞추고 패턴을 중앙에 배치한다.
- * 도형 좌표는 변경하지 않으므로 패턴 크기는 그대로 유지된다.
- *
- * Python normalize_artboard 커맨드를 호출한다.
- * 실패 시 원본 SVG 데이터를 그대로 반환한다 (폴백).
- */
-async function normalizeSvgArtboard(svgFilePath: string, svgData: string): Promise<string> {
-  try {
-    const result = await invoke<string>("run_python", {
-      command: "normalize_artboard",
-      args: [
-        svgFilePath,
-        String(STANDARD_ARTBOARD.width),
-        String(STANDARD_ARTBOARD.height),
-      ],
-    });
-    const parsed = JSON.parse(result);
-    if (parsed.success && parsed.normalized_svg) {
-      console.log(
-        `아트보드 보정 완료: ${parsed.original_artboard_mm.w}x${parsed.original_artboard_mm.h}mm → ${parsed.target_artboard_mm.w}x${parsed.target_artboard_mm.h}mm`
-      );
-      return parsed.normalized_svg;
-    }
-  } catch (err) {
-    // Python 호출 실패 시 원본 SVG를 그대로 사용한다
-    console.warn("normalize_artboard 호출 실패, 원본 SVG 사용:", err);
-  }
-  return svgData;
 }
 
 /**
@@ -546,17 +512,13 @@ function PatternManage() {
           : sizeMap.keys().next().value!;
 
       const representativePath = sizeMap.get(representativeSize)!;
-      // 원본 SVG를 읽은 뒤 아트보드를 기준 크기(1580x2000mm)로 보정한다.
-      // 패턴 도형 좌표는 변하지 않고 viewBox만 확장된다.
-      const rawRepresentativeSvg = await readTextFile(representativePath);
-      const representativeSvg = await normalizeSvgArtboard(representativePath, rawRepresentativeSvg);
+      // 원본 SVG를 그대로 저장 (Illustrator가 직접 처리하므로 보정 불필요)
+      const representativeSvg = await readTextFile(representativePath);
 
       const svgBySize: Record<string, string> = {};
       for (const [size, path] of sizeMap) {
         try {
-          const rawSvg = await readTextFile(path);
-          // 각 사이즈별 SVG도 동일하게 아트보드 보정 적용
-          svgBySize[size] = await normalizeSvgArtboard(path, rawSvg);
+          svgBySize[size] = await readTextFile(path);
         } catch (err) {
           console.warn(`SVG 읽기 실패 (${size}): ${path}`, err);
         }
@@ -577,9 +539,8 @@ function PatternManage() {
 
     for (const fp of ungrouped) {
       try {
-        const rawSvgData = await readTextFile(fp);
-        // 아트보드 보정 적용 (ungrouped SVG도 동일하게 처리)
-        const svgData = await normalizeSvgArtboard(fp, rawSvgData);
+        // 원본 SVG 그대로 저장
+        const svgData = await readTextFile(fp);
         const filename = getFilenameFromPath(fp);
         const defaultName = filename.replace(/\.svg$/i, "");
 
@@ -667,9 +628,8 @@ function PatternManage() {
 
     for (const fp of filePaths) {
       try {
-        const rawSvgData = await readTextFile(fp);
-        // 아트보드를 기준 크기(1580x2000mm)로 보정한다
-        const svgData = await normalizeSvgArtboard(fp, rawSvgData);
+        // 원본 SVG 그대로 저장
+        const svgData = await readTextFile(fp);
         const filename = getFilenameFromPath(fp);
         const defaultName = filename.replace(/\.svg$/i, "");
 
