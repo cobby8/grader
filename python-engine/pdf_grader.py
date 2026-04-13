@@ -76,9 +76,7 @@ def generate_graded_pdf(
         "scale_x": ..., "scale_y": ...,
         "file_size_bytes": ..., "original_size_bytes": ...,
         "compression_ratio": ...,
-        "method": "clip" 또는 "clip+mask",
-        "clipping_applied": True/False,
-        "clipping_paths_count": N
+        "method": "scale+clip"
       }
     """
     # 1. 원본 존재 확인
@@ -225,7 +223,6 @@ def generate_graded_pdf(
         "original_size_bytes": original_size_bytes,
         "compression_ratio": compression_ratio,
         "method": "scale+clip",
-        "clipping_paths_count": clipping_paths_count,
     }
 
 
