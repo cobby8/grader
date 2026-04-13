@@ -402,22 +402,56 @@ def generate_graded_pdf_by_pieces(
     pdf_rect = src_page.rect  # 원본 PDF 페이지 크기 (pt)
 
     # 5. SVG → PDF 좌표 변환 함수
-    # SVG 좌표는 pt 단위 (1pt = 0.3528mm). PDF도 pt 단위.
-    # 따라서 X좌표는 그대로, Y좌표만 반전 (SVG: 좌상단 원점, PDF: 좌하단 원점).
-    # viewBox 비율 매핑이 아닌 직접 pt→pt 변환.
+    # SVG와 PDF의 아트보드 크기가 다르므로 (SVG: 1530x1200mm, PDF: 1580x2000mm),
+    # SVG 좌표를 PDF 좌표로 변환할 때 아트보드 비율을 반영해야 한다.
+    # SVG 원본 viewBox(보정 전)에서 좌표의 "아트보드 내 상대 비율"을 구하고,
+    # 그 비율을 PDF 크기에 적용한다.
+    pdf_w = pdf_rect.width
     pdf_h = pdf_rect.height
+
+    # SVG→PDF 좌표 변환: 아트보드 비율 매핑
+    #
+    # 핵심 원리:
+    # - SVG 좌표는 pt 단위 (Illustrator SVG 기본)
+    # - SVG 원본 viewBox = "0 0 W H" (보정 전)
+    # - 디자인 PDF에서도 같은 Illustrator 좌표계를 사용
+    # - 하지만 SVG 아트보드와 PDF 아트보드 크기가 다름
+    # - SVG에서 좌표 x가 "아트보드의 30%"이면, PDF에서도 "아트보드의 30%"
+    #
+    # 따라서: SVG 좌표 / SVG_viewBox_크기 = PDF 좌표 / PDF_크기
+    #         PDF_x = SVG_x * (PDF_w / SVG_vb_w)
+    #         PDF_y = PDF_h - SVG_y * (PDF_h / SVG_vb_h)  [Y 반전]
+    #
+    # 원본 viewBox를 구하는 방법:
+    # normalize_svg_artboard는 viewBox를 확장하지만 원본 크기를 보존하지 않음.
+    # 그래서 도형 좌표의 전체 범위 + 마진으로 원본 viewBox를 역추정한다.
+    # (모든 도형이 원본 viewBox 안에 있으므로, 전체 범위 ≈ 원본 viewBox)
+
+    # 기준 SVG의 모든 조각에서 전체 좌표 범위 구하기
+    all_max_x = max(pc["base_bbox"]["max_x"] for pc in piece_data["pieces"])
+    all_max_y = max(pc["base_bbox"]["max_y"] for pc in piece_data["pieces"])
+
+    # 원본 viewBox 추정: 도형 최대값에 약간의 여유 (보통 viewBox가 도형보다 약간 큼)
+    # Illustrator SVG는 보통 아트보드 = viewBox이고, 도형이 아트보드 안에 있음
+    svg_vb_w = all_max_x * 1.08  # 8% 마진 (아트보드가 도형보다 약간 큼)
+    svg_vb_h = all_max_y * 1.07  # 7% 마진
+
+    # SVG → PDF 스케일 비율 (아트보드 크기 비율)
+    scale_x_ratio = pdf_w / svg_vb_w if svg_vb_w > 0 else 1.0
+    scale_y_ratio = pdf_h / svg_vb_h if svg_vb_h > 0 else 1.0
 
     def svg_to_pdf_rect(svg_bbox: dict) -> fitz.Rect:
         """
-        SVG bbox(pt 좌표)를 PDF Rect(pt 좌표)로 변환한다.
-        X는 그대로, Y만 반전.
+        SVG bbox를 PDF Rect로 변환한다.
+        SVG 좌표를 아트보드 비율로 스케일링 + Y축 반전.
         """
-        return fitz.Rect(
-            svg_bbox["min_x"],                # X 그대로
-            pdf_h - svg_bbox["max_y"],        # SVG max_y(아래) → PDF y0(위)
-            svg_bbox["max_x"],                # X 그대로
-            pdf_h - svg_bbox["min_y"],        # SVG min_y(위) → PDF y1(아래)
-        )
+        # SVG 좌표를 PDF 크기에 비례하여 변환
+        px0 = svg_bbox["min_x"] * scale_x_ratio
+        px1 = svg_bbox["max_x"] * scale_x_ratio
+        # Y축 반전: SVG는 위→아래, PDF는 아래→위
+        py0 = pdf_h - (svg_bbox["max_y"] * scale_y_ratio)
+        py1 = pdf_h - (svg_bbox["min_y"] * scale_y_ratio)
+        return fitz.Rect(px0, py0, px1, py1)
 
     # 6. 출력 PDF 생성 — 기준 PDF와 같은 페이지 크기 유지
     # 이유: 공장에서 동일 아트보드 크기로 작업하는 것이 편하다.

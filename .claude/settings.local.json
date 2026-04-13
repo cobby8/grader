@@ -152,7 +152,8 @@
       "Bash(taskkill //f //pid 19328)",
       "Bash(python-engine/venv/Scripts/python.exe -c ':*)",
       "Bash(./venv/Scripts/python.exe -c \"import py_compile; py_compile.compile\\('svg_parser.py', doraise=True\\); py_compile.compile\\('pattern_scaler.py', doraise=True\\); py_compile.compile\\('pdf_grader.py', doraise=True\\); py_compile.compile\\('main.py', doraise=True\\); print\\('All files compiled OK'\\)\")",
-      "Bash(taskkill //f //pid 83056)"
+      "Bash(taskkill //f //pid 83056)",
+      "Bash(dir:*)"
     ]
   }
 }
