@@ -73,3 +73,9 @@
 - **발견자**: planner-architect
 - **내용**: 패턴 사이즈별 비례가 균일하지 않으므로(부위별 다른 비율 변화) 단순 스케일링만으로는 정확한 그레이딩 불가. SVG 패턴 윤곽선을 PDF 클리핑 마스크로 적용하는 방식이 필요. 5가지 방법(A:PyMuPDF클리핑, B:reportlab, C:화이트마스크, D:Illustrator, E:PDF W연산자) 비교 후, 방법 E를 최우선 추천. 이유: CTM 직접 삽입(검증 완료)의 자연스러운 확장, CMYK 완벽 보존, Illustrator 불필요, 추가 라이브러리 svgpathtools만 필요. 단계적 접근: Phase1 화이트마스크(3~5일) -> Phase2 PDF W연산자(1~2주) -> Phase3 Illustrator(필요시). 핵심 리스크: SVG-PDF 좌표 변환(Y축 반전)과 디자인-패턴 정렬 규칙 정의 필요.
 - **참조횟수**: 0
+
+### [2026-04-08] 조각별 채워넣기 방식: 기술적으로 가능, show_pdf_page clip+비율매핑 구현 추천
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: "패턴 조각별 디자인 채워넣기" 방식의 타당성 검토 결과 -- 기술적으로 가능하며 기존 show_pdf_page + clip API를 활용하여 구현할 수 있다. 핵심 발견: (1) SVG 모든 사이즈가 동일한 viewBox(4337.01x3401.57)를 공유하므로 조각 위치의 상대 비율 매핑이 가능, (2) normalize_artboard 함수가 이미 SVG viewBox를 PDF 좌표계로 변환하는 로직을 보유, (3) svg_to_pdf 좌표 변환 함수가 svg_parser.py에 존재하며 정규화 방식으로 viewBox 원점 문제를 해결, (4) 각 polyline의 bbox가 명확히 분리되어 있어 조각 자동 구분 가능(X좌표 기준 좌/우 + 크기 기준 대/소). 접근법: XL SVG에서 각 조각 bbox의 viewBox 내 비율을 구한 뒤, PDF MediaBox에 같은 비율을 적용하여 clip 영역을 산출. 이전 방식(전체 비율 스케일링, PDF 콘텐츠 스트림 클리핑)의 실패 원인이었던 SVG-PDF 좌표 직접 변환 문제를 비율 매핑으로 우회. bleed 완전 제거. 조각별 독립 스케일링으로 4% 오차 해소.
+- **참조횟수**: 0

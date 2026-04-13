@@ -387,6 +387,136 @@ def get_svg_bounding_box(svg_path: str) -> dict:
     }
 
 
+# ─────────────────────────────────────────────────────────
+# 조각별(piece-wise) bounding box 추출
+# ─────────────────────────────────────────────────────────
+
+
+def extract_piece_bboxes(svg_path: str) -> dict:
+    """
+    SVG에서 각 도형(polyline/polygon/path/rect 등)의 개별 bounding box를 추출한다.
+    각 조각을 X 중심 좌표 기준 좌→우로 정렬하여 반환한다.
+
+    왜 필요한가:
+      기존 방식은 디자인 PDF 전체를 하나의 비율로 축소하여 약 4% 오차가 발생했다.
+      조각별로 디자인의 해당 영역만 추출하여 타겟 크기로 배치하면 정밀도가 높아진다.
+
+    반환:
+      성공: {
+        "success": True,
+        "pieces": [
+          {
+            "index": 0,
+            "bbox": {"min_x": 413, "min_y": 724, "max_x": 2181, "max_y": 2294},
+            "width": 1768, "height": 1570,
+            "center_x": 1297, "center_y": 1509,
+            "tag": "polyline"
+          }, ...
+        ],
+        "viewbox": {"x": -70.72, "y": -1133.68, "w": 4478.46, "h": 5668.93},
+        "piece_count": 3
+      }
+      실패: {"success": False, "error": "..."}
+    """
+    try:
+        tree = ET.parse(svg_path)
+        root = tree.getroot()
+    except ET.ParseError as e:
+        return {"success": False, "error": f"SVG XML 파싱 실패: {e}"}
+    except FileNotFoundError:
+        return {"success": False, "error": f"파일을 찾을 수 없습니다: {svg_path}"}
+
+    # viewBox 파싱 — 좌표 변환의 기준
+    vb_x, vb_y, vb_w, vb_h = 0.0, 0.0, 0.0, 0.0
+    vb = root.get("viewBox", "").strip().split()
+    if len(vb) >= 4:
+        try:
+            vb_x, vb_y, vb_w, vb_h = float(vb[0]), float(vb[1]), float(vb[2]), float(vb[3])
+        except ValueError:
+            pass
+
+    if vb_w <= 0 or vb_h <= 0:
+        return {"success": False, "error": "SVG에 유효한 viewBox가 없습니다."}
+
+    # 각 도형 요소별 개별 bbox를 수집
+    pieces: list[dict] = []
+
+    for tag in SHAPE_TAGS:
+        elements = root.findall(f".//{tag}", SVG_NS)
+        local_name = tag.split(":")[-1]
+
+        for elem in elements:
+            bbox = None
+
+            if local_name in ("polyline", "polygon"):
+                points = elem.get("points", "")
+                if points:
+                    bbox = _parse_points(points)
+
+            elif local_name == "rect":
+                bbox = _parse_rect(elem)
+
+            elif local_name == "circle":
+                bbox = _parse_circle(elem)
+
+            elif local_name == "ellipse":
+                bbox = _parse_ellipse(elem)
+
+            elif local_name == "line":
+                bbox = _parse_line(elem)
+
+            elif local_name == "path":
+                d = elem.get("d", "")
+                if d:
+                    bbox = _parse_path_bbox(d)
+
+            if bbox is not None:
+                min_x, min_y, max_x, max_y = bbox
+                w = max_x - min_x
+                h = max_y - min_y
+                # 너무 작은 도형(가이드선 등)은 무시 — viewBox 대비 1% 미만
+                if w < vb_w * 0.01 and h < vb_h * 0.01:
+                    continue
+                pieces.append({
+                    "bbox": {
+                        "min_x": round(min_x, 2),
+                        "min_y": round(min_y, 2),
+                        "max_x": round(max_x, 2),
+                        "max_y": round(max_y, 2),
+                    },
+                    "width": round(w, 2),
+                    "height": round(h, 2),
+                    "center_x": round((min_x + max_x) / 2.0, 2),
+                    "center_y": round((min_y + max_y) / 2.0, 2),
+                    "tag": local_name,
+                })
+
+    if not pieces:
+        return {
+            "success": False,
+            "error": "SVG 파일에서 유효한 도형 조각을 찾지 못했습니다.",
+        }
+
+    # X 중심 좌표 기준 좌→우 정렬
+    pieces.sort(key=lambda p: p["center_x"])
+
+    # 인덱스 부여
+    for i, p in enumerate(pieces):
+        p["index"] = i
+
+    return {
+        "success": True,
+        "pieces": pieces,
+        "viewbox": {
+            "x": round(vb_x, 2),
+            "y": round(vb_y, 2),
+            "w": round(vb_w, 2),
+            "h": round(vb_h, 2),
+        },
+        "piece_count": len(pieces),
+    }
+
+
 # SVG 좌표(pt) ↔ mm 변환 상수: 1pt = 0.3528mm, 1mm = 2.8346pt
 PT_TO_MM = 0.3528
 MM_TO_PT = 1.0 / PT_TO_MM  # ≈ 2.8346

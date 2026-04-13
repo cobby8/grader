@@ -606,6 +606,29 @@ doc.save(output_path, deflate=True, garbage=4, clean=True)
 |------|------|----------|----------|------|
 | 1차 | 2026-04-08 | viewBox 원점(x0,y0) 고려한 정규화 좌표 변환으로 전면 교체. extract에 target_width_pt/target_height_pt 파라미터 추가, scale_pdf_path 호출 제거 | svg_parser.py, pdf_grader.py | PM 분석: normalize_artboard로 보정된 SVG의 viewBox 원점이 음수(-70,-1133 등)인데, 기존 코드가 원점 0,0을 가정하여 클리핑 좌표가 디자인과 어긋남 |
 
+### [2026-04-08] PDF 그레이딩 조각별 채워넣기 방식 전면 교체
+
+구현한 기능: 기존 "전체 비율 축소" 방식 → "조각별 독립 스케일링" 방식으로 교체
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| python-engine/svg_parser.py | extract_piece_bboxes() 추가 — SVG 도형별 개별 bbox 추출, X중심 정렬 | 수정 |
+| python-engine/pattern_scaler.py | calculate_piece_scale_factors() 추가 — 기준/타겟 SVG 조각 1:1 매칭+비율 계산 | 수정 |
+| python-engine/pdf_grader.py | generate_graded_pdf_by_pieces() 추가 — 조각별 show_pdf_page(clip+target) | 수정 |
+| python-engine/main.py | extract_piece_bboxes + generate_by_pieces CLI 커맨드 추가 | 수정 |
+| src/pages/FileGenerate.tsx | calc_scale+generate_graded → generate_by_pieces로 교체, bleed/artboard 제거 | 수정 |
+| src/types/generation.ts | GenerateByPiecesResult 타입 추가, method에 piece_wise 추가 | 수정 |
+
+tester 참고:
+- 테스트 방법: 패턴 프리셋에 사이즈별 SVG가 등록된 상태에서 파일 생성 실행
+- 정상 동작: 각 조각(앞판/뒷판/칼라)이 타겟 사이즈 위치에 독립적으로 배치됨
+- CLI 테스트: `python main.py extract_piece_bboxes <svg_path>` → 조각별 bbox 확인
+- CLI 테스트: `python main.py generate_by_pieces <pdf> <out> <base_svg> <target_svg>`
+
+reviewer 참고:
+- 기존 generate_graded 함수/커맨드는 하위 호환을 위해 유지됨
+- SVG→PDF 좌표 변환에서 Y축 반전 로직이 핵심 (svg_to_pdf_rect 함수)
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -629,3 +652,4 @@ doc.save(output_path, deflate=True, garbage=4, clean=True)
 | 2026-04-08 | developer | SVG 아트보드 자동 보정 (normalize_artboard: viewBox 확장 1580x2000mm) | 완료 |
 | 2026-04-08 | developer | SVG 패턴 클리핑 마스크+bleed 적용 (svg_parser+pdf_grader+main+FileGenerate) | 완료 |
 | 2026-04-08 | developer | 클리핑 마스크 좌표계 불일치 버그 수정 (viewBox 원점 고려+정규화+직접 PDF 변환) | 완료 |
+| 2026-04-08 | developer | PDF 그레이딩을 조각별 채워넣기 방식으로 전면 교체 (extract_piece_bboxes+calculate_piece_scale_factors+generate_by_pieces+FileGenerate) | 완료 |

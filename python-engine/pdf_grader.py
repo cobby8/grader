@@ -26,6 +26,7 @@ v4 추가 — SVG 패턴 클리핑 마스크 + bleed:
 import fitz  # PyMuPDF
 import os
 from typing import Any
+from pattern_scaler import calculate_piece_scale_factors
 
 
 # PDF 단위 변환 상수 (1pt = 1/72 inch = 0.352778 mm)
@@ -337,4 +338,173 @@ def generate_graded_pdf_legacy(
         "original_size_bytes": original_size_bytes,
         "compression_ratio": compression_ratio,
         "method": "legacy_show_pdf_page",
+    }
+
+
+def generate_graded_pdf_by_pieces(
+    source_pdf_path: str,
+    output_pdf_path: str,
+    base_svg_path: str,
+    target_svg_path: str,
+) -> dict[str, Any]:
+    """
+    조각별 채워넣기 방식으로 그레이딩 PDF를 생성한다.
+
+    핵심 개념:
+      기존 방식은 디자인 PDF 전체를 하나의 비율로 축소해서 약 4% 오차가 발생했다.
+      새 방식은 각 패턴 조각(앞판/뒷판/칼라 등)마다 디자인의 해당 영역만 잘라내어
+      타겟 크기로 정밀 배치한다.
+
+    처리 순서:
+      1. base/target SVG에서 조각별 bbox 추출 + 매칭
+      2. SVG bbox를 PDF 좌표로 비율 매핑 (viewBox→PDF 변환)
+      3. 출력 PDF 생성 (기준 PDF와 같은 페이지 크기 유지)
+      4. 각 조각마다 show_pdf_page(clip=base_clip, target=target_rect) 호출
+      5. 저장
+
+    CMYK 보존: show_pdf_page 사용이므로 자동 보존된다.
+
+    Args:
+      source_pdf_path: 원본 기준 사이즈 디자인 PDF 경로
+      output_pdf_path: 출력할 그레이딩 PDF 경로
+      base_svg_path: 기준 사이즈(XL) 패턴 SVG 파일 경로
+      target_svg_path: 타겟 사이즈(XS) 패턴 SVG 파일 경로
+
+    Returns:
+      성공: {
+        "success": True, "output_path": "...",
+        "source_width_mm": ..., "source_height_mm": ...,
+        "output_width_mm": ..., "output_height_mm": ...,
+        "piece_count": 3, "file_size_bytes": ..., ...
+      }
+      실패: {"success": False, "error": "..."}
+    """
+    # 1. 원본 PDF 존재 확인
+    if not os.path.exists(source_pdf_path):
+        raise FileNotFoundError(f"원본 PDF를 찾을 수 없습니다: {source_pdf_path}")
+
+    # 2. 출력 디렉토리 자동 생성
+    output_dir = os.path.dirname(output_pdf_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+
+    # 3. 조각별 매칭 + 비율 계산
+    piece_data = calculate_piece_scale_factors(base_svg_path, target_svg_path)
+    if not piece_data.get("success"):
+        return {
+            "success": False,
+            "error": piece_data.get("error", "조각별 매칭 실패"),
+        }
+
+    # 4. 원본 PDF 열기
+    src_doc = fitz.open(source_pdf_path)
+    src_page = src_doc[0]
+    pdf_rect = src_page.rect  # 원본 PDF 페이지 크기 (pt)
+
+    # 5. SVG → PDF 좌표 변환 함수
+    # SVG viewBox(보정된)와 PDF MediaBox의 비율로 매핑
+    # normalize_artboard가 SVG viewBox를 1580x2000mm에 맞게 보정했으므로
+    # 보정된 viewBox와 PDF 크기가 같은 비율이다.
+    base_vb = piece_data["base_viewbox"]
+    target_vb = piece_data["target_viewbox"]
+
+    def svg_to_pdf_rect(svg_bbox: dict, vb: dict) -> fitz.Rect:
+        """
+        SVG bbox를 PDF 페이지 좌표의 Rect로 변환한다.
+
+        변환 원리:
+          1. SVG 좌표를 viewBox 내 비율(0~1)로 정규화
+          2. 그 비율을 PDF 페이지 크기에 곱함
+          3. Y축 반전: SVG는 위→아래, PDF는 아래→위
+        """
+        # 정규화 (0~1 범위로 변환)
+        nx0 = (svg_bbox["min_x"] - vb["x"]) / vb["w"]
+        ny0 = (svg_bbox["min_y"] - vb["y"]) / vb["h"]
+        nx1 = (svg_bbox["max_x"] - vb["x"]) / vb["w"]
+        ny1 = (svg_bbox["max_y"] - vb["y"]) / vb["h"]
+
+        # PDF 좌표로 변환 (Y축 반전)
+        pdf_x0 = nx0 * pdf_rect.width
+        pdf_y0 = (1.0 - ny1) * pdf_rect.height  # SVG y1(아래) → PDF y0(위)
+        pdf_x1 = nx1 * pdf_rect.width
+        pdf_y1 = (1.0 - ny0) * pdf_rect.height  # SVG y0(위) → PDF y1(아래)
+
+        return fitz.Rect(pdf_x0, pdf_y0, pdf_x1, pdf_y1)
+
+    # 6. 출력 PDF 생성 — 기준 PDF와 같은 페이지 크기 유지
+    # 이유: 공장에서 동일 아트보드 크기로 작업하는 것이 편하다.
+    out_doc = fitz.open()
+    out_page = out_doc.new_page(width=pdf_rect.width, height=pdf_rect.height)
+
+    # 7. 각 조각마다 show_pdf_page 호출
+    for piece in piece_data["pieces"]:
+        # 기준 조각의 PDF clip 영역 (원본 디자인에서 잘라낼 부분)
+        base_clip = svg_to_pdf_rect(piece["base_bbox"], base_vb)
+
+        # 타겟 조각의 PDF target 영역 (출력 PDF에서 배치할 위치)
+        target_rect = svg_to_pdf_rect(piece["target_bbox"], target_vb)
+
+        # show_pdf_page: base_clip 영역을 target_rect 위치에 배치
+        # keep_proportion=False → 가로/세로 독립 스케일 허용
+        # clip → 원본에서 해당 조각 부분만 잘라냄
+        out_page.show_pdf_page(
+            target_rect,       # 출력 위치 및 크기
+            src_doc,           # 원본 문서
+            0,                 # 원본 첫 페이지
+            clip=base_clip,    # 원본에서 잘라낼 영역
+            keep_proportion=False,
+        )
+
+    # 8. PDF 저장 (최적화 설정)
+    try:
+        out_doc.save(
+            output_pdf_path,
+            deflate=True,
+            deflate_images=True,
+            deflate_fonts=True,
+            garbage=4,
+            clean=True,
+        )
+    except TypeError:
+        # PyMuPDF 구버전 호환
+        out_doc.save(
+            output_pdf_path,
+            deflate=True,
+            garbage=4,
+            clean=True,
+        )
+
+    out_doc.close()
+    src_doc.close()
+
+    # 9. 파일 크기 측정
+    try:
+        original_size_bytes = os.path.getsize(source_pdf_path)
+    except OSError:
+        original_size_bytes = 0
+    try:
+        file_size_bytes = os.path.getsize(output_pdf_path)
+    except OSError:
+        file_size_bytes = 0
+
+    compression_ratio = (
+        round(file_size_bytes / original_size_bytes, 3)
+        if original_size_bytes > 0
+        else 0.0
+    )
+
+    # 10. 결과 반환
+    return {
+        "success": True,
+        "output_path": output_pdf_path,
+        "source_width_mm": round(pdf_rect.width * PT_TO_MM, 2),
+        "source_height_mm": round(pdf_rect.height * PT_TO_MM, 2),
+        "output_width_mm": round(pdf_rect.width * PT_TO_MM, 2),
+        "output_height_mm": round(pdf_rect.height * PT_TO_MM, 2),
+        "page_count": 1,
+        "piece_count": piece_data["piece_count"],
+        "file_size_bytes": file_size_bytes,
+        "original_size_bytes": original_size_bytes,
+        "compression_ratio": compression_ratio,
+        "method": "piece_wise",
     }

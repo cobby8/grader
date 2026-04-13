@@ -43,8 +43,7 @@ import type {
   GenerationRequest,
   GenerationResult,
   GenerationStatus,
-  CalcScaleResult,
-  GenerateGradedResult,
+  GenerateByPiecesResult,
 } from "../types/generation";
 
 /**
@@ -198,82 +197,64 @@ function FileGenerate() {
       const absOutputDir = await join(appData, "outputs", timestampDir);
       setOutputDir(absOutputDir);
 
-      // 2) 프리셋 JSON을 임시 파일로 기록
-      // Python calc_scale이 파일 경로로 JSON을 읽음
-      const tempPresetRel = `outputs/${timestampDir}/_preset.json`;
-      const tempPresetAbs = await join(absOutputDir, "_preset.json");
-      await writeTextFile(tempPresetRel, JSON.stringify(preset), {
-        baseDir: BaseDirectory.AppData,
-      });
-
-      // 2-b) 아트보드 크기 감지 (Illustrator PDF의 TrimBox 등)
-      // 아트보드가 MediaBox보다 작으면 crop 적용하여 밖 요소를 제거한다
-      let artboard: {
-        artboard_width_pt: number;
-        artboard_height_pt: number;
-        has_bleed: boolean;
-      } | null = null;
-      try {
-        artboard = await callPython<{
-          success: boolean;
-          artboard_width_pt: number;
-          artboard_height_pt: number;
-          has_bleed: boolean;
-          error?: string;
-        }>("detect_artboard", [design.storedPath]);
-      } catch {
-        // 아트보드 감지 실패 시 무시 (crop 없이 전체 스케일링)
-        console.warn("아트보드 감지 실패, crop 없이 진행");
-      }
-
-      // 3) 각 사이즈 순차 처리
+      // 2) 각 사이즈 순차 처리 (조각별 채워넣기 방식)
+      // 기준 사이즈의 SVG 데이터와 타겟 사이즈의 SVG 데이터를 임시 파일로 저장 후
+      // Python generate_by_pieces에 전달한다.
       const baseFileName = sanitizeFileName(design.name);
 
       // 임시 SVG 파일 경로를 추적 (사후 정리용)
       const tempSvgPaths: string[] = [];
+
+      // 기준 사이즈의 SVG 데이터를 임시 파일로 저장 (모든 사이즈에서 공통 사용)
+      // svgBySize에서 기준 사이즈의 보정된 SVG를 가져옴
+      const baseSvgData = preset.pieces[0]?.svgBySize?.[request.baseSize];
+      if (!baseSvgData) {
+        throw new Error(
+          `기준 사이즈(${request.baseSize})의 SVG 데이터가 프리셋에 없습니다. ` +
+          "패턴 관리 페이지에서 사이즈별 SVG를 등록해 주세요."
+        );
+      }
+      const baseSvgRel = `outputs/${timestampDir}/_base_${request.baseSize}.svg`;
+      const baseSvgAbs = await join(absOutputDir, `_base_${request.baseSize}.svg`);
+      await writeTextFile(baseSvgRel, baseSvgData, {
+        baseDir: BaseDirectory.AppData,
+      });
+      tempSvgPaths.push(baseSvgRel);
 
       for (const targetSize of request.selectedSizes) {
         // 상태: 처리중
         updateResult(targetSize, { status: "processing" });
 
         try {
-          // 3-a) 스케일 비율 계산
-          const scale = await callPython<CalcScaleResult>("calc_scale", [
-            tempPresetAbs,
-            request.baseSize,
-            targetSize,
-          ]);
+          // 2-a) 타겟 사이즈의 SVG 데이터를 임시 파일로 저장
+          const targetSvgData = preset.pieces[0]?.svgBySize?.[targetSize];
+          if (!targetSvgData) {
+            throw new Error(
+              `타겟 사이즈(${targetSize})의 SVG 데이터가 프리셋에 없습니다.`
+            );
+          }
+          const targetSvgRel = `outputs/${timestampDir}/_target_${targetSize}.svg`;
+          const targetSvgAbs = await join(absOutputDir, `_target_${targetSize}.svg`);
+          await writeTextFile(targetSvgRel, targetSvgData, {
+            baseDir: BaseDirectory.AppData,
+          });
+          tempSvgPaths.push(targetSvgRel);
 
-          // 3-b) 출력 PDF 경로 결정: {디자인명}_{사이즈}.pdf
+          // 2-b) 출력 PDF 경로 결정: {디자인명}_{사이즈}.pdf
           const outputFileName = `${baseFileName}_${targetSize}.pdf`;
           const outputAbs = await join(absOutputDir, outputFileName);
 
-          // 3-c) Python generate_graded 호출
-          // crop 파라미터가 있으면 아트보드 크기를 전달하여 CropBox 적용
-          const gradeArgs = [
-            design.storedPath,
-            outputAbs,
-            scale.scale_x.toString(),
-            scale.scale_y.toString(),
-          ];
-          if (artboard && artboard.has_bleed) {
-            gradeArgs.push(
-              artboard.artboard_width_pt.toString(),
-              artboard.artboard_height_pt.toString()
-            );
-          }
-
-          const graded = await callPython<GenerateGradedResult>(
-            "generate_graded",
-            gradeArgs
+          // 2-c) Python generate_by_pieces 호출
+          // 조각별 채워넣기 방식: 기준 SVG + 타겟 SVG로 각 조각을 독립 스케일링
+          const graded = await callPython<GenerateByPiecesResult>(
+            "generate_by_pieces",
+            [design.storedPath, outputAbs, baseSvgAbs, targetSvgAbs]
           );
 
-          // 상태: 성공 (5단계: 파일 크기/압축률 포함)
+          // 상태: 성공
           updateResult(targetSize, {
             status: "success",
             outputPath: graded.output_path,
-            scaleX: graded.scale_x,
-            scaleY: graded.scale_y,
             outputWidthMm: graded.output_width_mm,
             outputHeightMm: graded.output_height_mm,
             fileSizeBytes: graded.file_size_bytes,
@@ -291,13 +272,7 @@ function FileGenerate() {
         }
       }
 
-      // 4) 임시 파일 정리 (프리셋 JSON + 클리핑 SVG들, 실패해도 무시)
-      try {
-        await remove(tempPresetRel, { baseDir: BaseDirectory.AppData });
-      } catch {
-        // 무시
-      }
-      // 임시 SVG 파일들도 정리
+      // 3) 임시 SVG 파일들 정리 (실패해도 무시)
       for (const svgRel of tempSvgPaths) {
         try {
           await remove(svgRel, { baseDir: BaseDirectory.AppData });
@@ -467,8 +442,7 @@ function FileGenerate() {
                 <div className="gen-result__detail">
                   {r.status === "success" && (
                     <>
-                      {r.outputWidthMm}×{r.outputHeightMm}mm (스케일{" "}
-                      {r.scaleX?.toFixed(3)}×{r.scaleY?.toFixed(3)})
+                      {r.outputWidthMm}×{r.outputHeightMm}mm
                       {/* 5단계 신규: 파일 크기 및 압축률 표시 */}
                       {typeof r.fileSizeBytes === "number" && r.fileSizeBytes > 0 && (
                         <span className="gen-result__size-info">

@@ -69,9 +69,28 @@ export interface GenerateGradedResult {
   original_size_bytes?: number;
   compression_ratio?: number;
   // 사용된 스케일링 방식 표시
-  method?: "clip" | "clip+mask" | "ctm" | "legacy_show_pdf_page";
+  method?: "clip" | "clip+mask" | "ctm" | "legacy_show_pdf_page" | "piece_wise" | "scale+clip";
   // v4 신규: 클리핑 마스크 적용 여부
   clipping_applied?: boolean;
   clipping_paths_count?: number;
+  // 조각별 그레이딩 시 조각 수
+  piece_count?: number;
+  error?: string;
+}
+
+/** Python generate_by_pieces 명령 응답 (조각별 채워넣기 방식) */
+export interface GenerateByPiecesResult {
+  success: boolean;
+  output_path: string;
+  source_width_mm: number;
+  source_height_mm: number;
+  output_width_mm: number;
+  output_height_mm: number;
+  page_count: number;
+  piece_count: number;
+  file_size_bytes?: number;
+  original_size_bytes?: number;
+  compression_ratio?: number;
+  method?: string;
   error?: string;
 }
