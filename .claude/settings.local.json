@@ -153,7 +153,15 @@
       "Bash(python-engine/venv/Scripts/python.exe -c ':*)",
       "Bash(./venv/Scripts/python.exe -c \"import py_compile; py_compile.compile\\('svg_parser.py', doraise=True\\); py_compile.compile\\('pattern_scaler.py', doraise=True\\); py_compile.compile\\('pdf_grader.py', doraise=True\\); py_compile.compile\\('main.py', doraise=True\\); print\\('All files compiled OK'\\)\")",
       "Bash(taskkill //f //pid 83056)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(taskkill //f //pid 81192)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(where cl.exe)",
+      "Bash(where rustc:*)",
+      "Bash(cmd //c \"\\\\\"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\\\\2022\\\\BuildTools\\\\VC\\\\Auxiliary\\\\Build\\\\vcvarsall.bat\\\\\" x64 && cargo check\")",
+      "Bash(cmd //c \"call \\\\\"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\\\\2022\\\\BuildTools\\\\VC\\\\Auxiliary\\\\Build\\\\vcvarsall.bat\\\\\" x64 && set PATH=%USERPROFILE%\\\\.cargo\\\\bin;%PATH% && cargo check 2>&1\")",
+      "Bash(cmd //c 'call \"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\\\\2022\\\\BuildTools\\\\VC\\\\Auxiliary\\\\Build\\\\vcvarsall.bat\" x64 && set \"PATH=%USERPROFILE%\\\\.cargo\\\\bin;%PATH%\" && cargo check')",
+      "Bash(cmd:*)"
     ]
   }
 }

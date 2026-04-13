@@ -43,7 +43,8 @@ import type {
   GenerationRequest,
   GenerationResult,
   GenerationStatus,
-  GenerateByPiecesResult,
+  CalcScaleResult,
+  GenerateGradedResult,
 } from "../types/generation";
 
 /**
@@ -197,64 +198,48 @@ function FileGenerate() {
       const absOutputDir = await join(appData, "outputs", timestampDir);
       setOutputDir(absOutputDir);
 
-      // 2) 각 사이즈 순차 처리 (조각별 채워넣기 방식)
-      // 기준 사이즈의 SVG 데이터와 타겟 사이즈의 SVG 데이터를 임시 파일로 저장 후
-      // Python generate_by_pieces에 전달한다.
+      // 2) 프리셋 JSON을 임시 파일로 저장 (Python calc_scale이 읽을 수 있도록)
       const baseFileName = sanitizeFileName(design.name);
-
-      // 임시 SVG 파일 경로를 추적 (사후 정리용)
-      const tempSvgPaths: string[] = [];
-
-      // 기준 사이즈의 SVG 데이터를 임시 파일로 저장 (모든 사이즈에서 공통 사용)
-      // svgBySize에서 기준 사이즈의 보정된 SVG를 가져옴
-      const baseSvgData = preset.pieces[0]?.svgBySize?.[request.baseSize];
-      if (!baseSvgData) {
-        throw new Error(
-          `기준 사이즈(${request.baseSize})의 SVG 데이터가 프리셋에 없습니다. ` +
-          "패턴 관리 페이지에서 사이즈별 SVG를 등록해 주세요."
-        );
-      }
-      const baseSvgRel = `outputs/${timestampDir}/_base_${request.baseSize}.svg`;
-      const baseSvgAbs = await join(absOutputDir, `_base_${request.baseSize}.svg`);
-      await writeTextFile(baseSvgRel, baseSvgData, {
+      const presetJsonRel = `outputs/${timestampDir}/_preset.json`;
+      await writeTextFile(presetJsonRel, JSON.stringify(preset), {
         baseDir: BaseDirectory.AppData,
       });
-      tempSvgPaths.push(baseSvgRel);
+      const presetJsonAbs = await join(absOutputDir, "_preset.json");
 
+      // 3) 각 사이즈 순차 처리: calc_scale → generate_graded (단순 비례 스케일링)
+      // 추후 Illustrator ExtendScript 연동으로 교체 예정
       for (const targetSize of request.selectedSizes) {
         // 상태: 처리중
         updateResult(targetSize, { status: "processing" });
 
         try {
-          // 2-a) 타겟 사이즈의 SVG 데이터를 임시 파일로 저장
-          const targetSvgData = preset.pieces[0]?.svgBySize?.[targetSize];
-          if (!targetSvgData) {
-            throw new Error(
-              `타겟 사이즈(${targetSize})의 SVG 데이터가 프리셋에 없습니다.`
-            );
-          }
-          const targetSvgRel = `outputs/${timestampDir}/_target_${targetSize}.svg`;
-          const targetSvgAbs = await join(absOutputDir, `_target_${targetSize}.svg`);
-          await writeTextFile(targetSvgRel, targetSvgData, {
-            baseDir: BaseDirectory.AppData,
-          });
-          tempSvgPaths.push(targetSvgRel);
+          // 3-a) Python calc_scale 호출 → 가로/세로 비율 계산
+          const scale = await callPython<CalcScaleResult>(
+            "calc_scale",
+            [presetJsonAbs, request.baseSize, targetSize]
+          );
 
-          // 2-b) 출력 PDF 경로 결정: {디자인명}_{사이즈}.pdf
+          // 3-b) 출력 PDF 경로 결정: {디자인명}_{사이즈}.pdf
           const outputFileName = `${baseFileName}_${targetSize}.pdf`;
           const outputAbs = await join(absOutputDir, outputFileName);
 
-          // 2-c) Python generate_by_pieces 호출
-          // 조각별 채워넣기 방식: 기준 SVG + 타겟 SVG로 각 조각을 독립 스케일링
-          const graded = await callPython<GenerateByPiecesResult>(
-            "generate_by_pieces",
-            [design.storedPath, outputAbs, baseSvgAbs, targetSvgAbs]
+          // 3-c) Python generate_graded 호출 → 단순 비례 스케일링 PDF 생성
+          const graded = await callPython<GenerateGradedResult>(
+            "generate_graded",
+            [
+              design.storedPath,
+              outputAbs,
+              String(scale.scale_x),
+              String(scale.scale_y),
+            ]
           );
 
           // 상태: 성공
           updateResult(targetSize, {
             status: "success",
             outputPath: graded.output_path,
+            scaleX: scale.scale_x,
+            scaleY: scale.scale_y,
             outputWidthMm: graded.output_width_mm,
             outputHeightMm: graded.output_height_mm,
             fileSizeBytes: graded.file_size_bytes,
@@ -272,13 +257,11 @@ function FileGenerate() {
         }
       }
 
-      // 3) 임시 SVG 파일들 정리 (실패해도 무시)
-      for (const svgRel of tempSvgPaths) {
-        try {
-          await remove(svgRel, { baseDir: BaseDirectory.AppData });
-        } catch {
-          // 무시
-        }
+      // 4) 임시 프리셋 JSON 파일 정리 (실패해도 무시)
+      try {
+        await remove(presetJsonRel, { baseDir: BaseDirectory.AppData });
+      } catch {
+        // 무시
       }
     } catch (err) {
       console.error("파일 생성 실패:", err);

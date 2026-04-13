@@ -139,13 +139,181 @@ fn run_python(
     Ok(stdout)
 }
 
+/// Windows에서 Adobe Illustrator 실행 파일 경로를 찾는다.
+/// Program Files 하위의 여러 버전 폴더를 탐색하여 최신 버전을 반환한다.
+///
+/// 탐색 후보:
+///   C:\Program Files\Adobe\Adobe Illustrator 20XX\Support Files\Contents\Windows\Illustrator.exe
+///   C:\Program Files\Adobe\Adobe Illustrator CC 20XX\Support Files\Contents\Windows\Illustrator.exe
+#[tauri::command]
+fn find_illustrator_exe() -> Result<String, String> {
+    let adobe_dir = PathBuf::from(r"C:\Program Files\Adobe");
+
+    if !adobe_dir.is_dir() {
+        return Err("Adobe 폴더를 찾을 수 없습니다: C:\\Program Files\\Adobe".to_string());
+    }
+
+    // Adobe 폴더 내 Illustrator 폴더들을 탐색
+    let entries = std::fs::read_dir(&adobe_dir)
+        .map_err(|e| format!("Adobe 폴더 읽기 실패: {}", e))?;
+
+    let mut candidates: Vec<(String, PathBuf)> = Vec::new();
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        let folder_name = entry.file_name().to_string_lossy().to_string();
+
+        // "Adobe Illustrator" 로 시작하는 폴더만 대상
+        if !folder_name.starts_with("Adobe Illustrator") {
+            continue;
+        }
+
+        // Illustrator.exe 경로 확인
+        let exe_path = entry.path()
+            .join("Support Files")
+            .join("Contents")
+            .join("Windows")
+            .join("Illustrator.exe");
+
+        if exe_path.exists() {
+            candidates.push((folder_name.clone(), exe_path));
+        }
+    }
+
+    if candidates.is_empty() {
+        return Err(
+            "Adobe Illustrator를 찾을 수 없습니다. \
+            C:\\Program Files\\Adobe\\ 아래에 Illustrator가 설치되어 있는지 확인하세요."
+            .to_string()
+        );
+    }
+
+    // 폴더명 기준 내림차순 정렬 (최신 버전 우선)
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let best = &candidates[0];
+    Ok(best.1.to_string_lossy().to_string())
+}
+
+/// Illustrator ExtendScript(.jsx)를 실행하고, 결과 마커 파일(result.json)을 폴링하여 완료를 감지한다.
+///
+/// 인자:
+///   - illustrator_exe: Illustrator.exe 절대 경로
+///   - script_path: 실행할 .jsx 스크립트 절대 경로
+///   - result_json_path: 완료 시 생성될 result.json 경로
+///   - timeout_secs: 최대 대기 시간 (초)
+///
+/// 반환: result.json의 내용 (JSON 문자열)
+#[tauri::command]
+fn run_illustrator_script(
+    illustrator_exe: String,
+    script_path: String,
+    result_json_path: String,
+    timeout_secs: u64,
+) -> Result<String, String> {
+    // result.json이 이미 존재하면 삭제 (이전 실행 잔여물 정리)
+    let result_path = std::path::Path::new(&result_json_path);
+    if result_path.exists() {
+        let _ = std::fs::remove_file(result_path);
+    }
+
+    // Illustrator.exe /run "script.jsx" 형태로 실행
+    // Illustrator는 백그라운드에서 스크립트를 실행하고 종료하지 않음
+    let _child = Command::new(&illustrator_exe)
+        .arg("/run")
+        .arg(&script_path)
+        .spawn()
+        .map_err(|e| format!("Illustrator 실행 실패: {}", e))?;
+
+    // result.json 파일이 생성될 때까지 폴링
+    let poll_interval = std::time::Duration::from_millis(500);
+    let max_wait = std::time::Duration::from_secs(timeout_secs);
+    let start = std::time::Instant::now();
+
+    loop {
+        // 타임아웃 체크
+        if start.elapsed() > max_wait {
+            return Err(format!(
+                "Illustrator 스크립트 실행 시간 초과 ({}초). \
+                Illustrator가 정상적으로 설치되어 있는지, 스크립트에 오류가 없는지 확인하세요.",
+                timeout_secs
+            ));
+        }
+
+        // result.json 존재 여부 확인
+        if result_path.exists() {
+            // 파일이 완전히 쓰여졌는지 확인하기 위해 잠시 대기
+            std::thread::sleep(std::time::Duration::from_millis(200));
+
+            // 파일 읽기
+            let content = std::fs::read_to_string(result_path)
+                .map_err(|e| format!("result.json 읽기 실패: {}", e))?;
+
+            // 정리: result.json 삭제
+            let _ = std::fs::remove_file(result_path);
+
+            return Ok(content);
+        }
+
+        std::thread::sleep(poll_interval);
+    }
+}
+
+/// illustrator-scripts/ 폴더의 절대 경로를 찾는다.
+/// 개발 모드: 프로젝트 루트/illustrator-scripts/
+/// 프로덕션: 리소스 디렉토리/illustrator-scripts/
+fn get_illustrator_scripts_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    // 실행 파일 경로에서 역추적하여 프로젝트 루트 탐색
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("실행 파일 경로를 찾을 수 없습니다: {}", e))?;
+
+    let mut candidate = exe_path.clone();
+    for _ in 0..4 {
+        if let Some(parent) = candidate.parent() {
+            candidate = parent.to_path_buf();
+            let scripts_dir = candidate.join("illustrator-scripts");
+            if scripts_dir.exists() {
+                return Ok(scripts_dir);
+            }
+        }
+    }
+
+    // 폴백: 리소스 디렉토리 확인 (번들 배포용)
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let scripts_dir = resource_dir.join("illustrator-scripts");
+        if scripts_dir.exists() {
+            return Ok(scripts_dir);
+        }
+    }
+
+    Err("illustrator-scripts 폴더를 찾을 수 없습니다.".to_string())
+}
+
+/// illustrator-scripts/ 폴더의 절대 경로를 반환한다 (프론트에서 config.json 생성 시 필요).
+#[tauri::command]
+fn get_illustrator_scripts_path(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = get_illustrator_scripts_dir(&app)?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())  // 파일 선택 다이얼로그
         .plugin(tauri_plugin_fs::init())      // 파일 읽기/쓰기
-        .invoke_handler(tauri::generate_handler![greet, run_python, list_svg_files])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            run_python,
+            list_svg_files,
+            find_illustrator_exe,
+            run_illustrator_script,
+            get_illustrator_scripts_path
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

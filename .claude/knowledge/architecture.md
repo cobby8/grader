@@ -35,11 +35,17 @@
 ### [2026-04-10] CMYK 보존 PDF 스케일링 아키텍처 (v1: show_pdf_page -- 대체됨)
 - **분류**: architecture
 - **발견자**: developer
-- **내용**: [대체됨] show_pdf_page 방식은 Form XObject 래핑(`q /fzFrm0 Do Q`)으로 인해 일부 뷰어에서 사각형 중복 렌더링 문제 발생. 아래 v2로 대체.
+- **내용**: [대체됨] show_pdf_page 방식은 Form XObject 래핑으로 인해 일부 뷰어에서 사각형 중복 렌더링 문제 발생. v2 CTM 직접 삽입으로 대체되었으나, 이후 v3 Illustrator ExtendScript 방식으로 최종 대체.
 - **참조횟수**: 1
 
-### [2026-04-08] CMYK 보존 PDF 스케일링 아키텍처 (v2: CTM 직접 삽입)
+### [2026-04-08] CMYK 보존 PDF 스케일링 아키텍처 (v2: CTM 직접 삽입 -- 대체됨)
 - **분류**: architecture
 - **발견자**: planner-architect
-- **내용**: show_pdf_page 대신 CTM(Current Transformation Matrix) 직접 삽입 방식 채택. 원본 PDF의 콘텐츠 스트림 앞에 `q sx 0 0 sy tx ty cm` 연산자를 삽입하고 `Q`로 닫으면, 모든 벡터/텍스트/이미지 색상 공간(DeviceCMYK, ICCBased 포함)이 변환 없이 보존됨. Form XObject 래핑이 없으므로 사각형 중복 문제도 해결. 아트보드 밖 요소는 set_cropbox()로 제거. API 시퀀스: clean_contents() -> get_contents() -> read_contents() -> update_stream(xref, new_bytes) -> set_mediabox(). PyMuPDF 1.27.2에서 프로토타입 검증 완료.
+- **내용**: [대체됨] CTM 직접 삽입 방식도 CropBox/MediaBox 순서 버그, 축소 시 ValueError 등의 문제 발생. 이후 show_pdf_page+clip(v3), PDF W 연산자(v4), 조각별 채워넣기(v5) 모두 실패. 최종적으로 Illustrator ExtendScript 방식으로 전환. 상세: REPORT-EXTENDSCRIPT.md 참조.
+- **참조횟수**: 0
+
+### [2026-04-08] 그레이딩 엔진 v3: Illustrator ExtendScript 연동
+- **분류**: architecture
+- **발견자**: planner-architect
+- **내용**: 그레이딩 엔진을 PyMuPDF에서 Illustrator ExtendScript로 전환. 아키텍처: Tauri가 .jsx 스크립트를 동적 생성 -> Illustrator.exe /run 으로 실행 -> 완료 마커 파일을 폴링하여 결과 수신. Illustrator가 PDF 열기/스케일링/SVG 클리핑 마스크/CMYK PDF 저장을 네이티브로 처리. Python 엔진은 PDF 분석 전용(정보 추출, CMYK 검증, 미리보기)으로 역할 축소. 신규 디렉토리: illustrator-scripts/ (grading_template.jsx, utils.jsx). Rust 신규 커맨드: find_illustrator_exe, run_illustrator_script, generate_grading_jsx. 프론트 변경: FileGenerate.tsx가 Python generate_graded 대신 Illustrator 호출. 핵심 이점: 곡선 클리핑 마스크 네이티브 지원, SVG-PDF 좌표 자동 변환, CMYK 100% 보존.
 - **참조횟수**: 0

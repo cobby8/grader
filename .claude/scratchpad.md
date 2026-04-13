@@ -1,9 +1,9 @@
 # 작업 스크래치패드
 
 ## 현재 작업
-- **요청**: 승화전사 유니폼 패턴 자동 생성 프로그램 개발
-- **상태**: 확장 기능 개발 중 (엑셀 주문서 자동 인식)
-- **현재 담당**: developer
+- **요청**: Illustrator ExtendScript 연동으로 그레이딩 엔진 재설계
+- **상태**: 7단계 Phase 1 완료 (롤백 + ExtendScript 프로토타입 + Rust 커맨드)
+- **현재 담당**: developer (Phase 1 완료) -> tester (검증 대기)
 
 ## 진행 현황표
 
@@ -16,6 +16,7 @@
 | 4 | 사이즈 선택 + 그레이딩 파일 생성 (CMYK 보존 스케일링) | ✅ 완료 |
 | 5 | CMYK 보존 + 출력 고도화 (벡터 CMYK 감지 + 파일 크기 리포트) | ✅ 완료 |
 | 6 | 통합 테스트 (E2E 워크플로우 검증) | ✅ 완료 |
+| 7 | Illustrator ExtendScript 그레이딩 엔진 전환 | 🔄 Phase 1 완료 (롤백+프로토타입+Rust) |
 
 ## 프로젝트 핵심 정보
 
@@ -108,14 +109,50 @@ doc.save(output_path, deflate=True, garbage=4, clean=True)
 이전 기획: REPORT.md (10장) + decisions.md + architecture.md 참조
 
 ### [2026-04-08] 클리핑 마스크 기반 그레이딩 기술 타당성 분석
+(대체됨 -> 아래 ExtendScript 전환 참조)
 
-목표: 패턴 사이즈별 비균일 비례 문제를 해결하기 위한 클리핑 마스크 방식 분석
+### [2026-04-08] Illustrator ExtendScript 그레이딩 엔진 전환
 
-핵심 결론:
-- **추천**: 방법 E (PDF W 연산자 직접 삽입) — CTM 삽입 경험의 자연스러운 확장
-- **대안**: 방법 C (화이트 마스크) — 빠른 MVP용 (3~5일)
-- **상세**: REPORT-CLIPPING.md 참조
-- **핵심 리스크**: SVG-PDF 좌표 Y축 반전 + 디자인-패턴 정렬 규칙 정의 필요
+목표: PyMuPDF 방식의 근본적 한계를 극복하기 위해 Illustrator ExtendScript로 전환
+
+핵심 결정:
+- PyMuPDF 5가지 방식 모두 실패 -> Illustrator ExtendScript로 완전 전환
+- 실행 방법: Illustrator.exe /run script.jsx (커맨드라인, 방법 A)
+- Python 엔진은 PDF 분석 전용으로 유지
+- **상세**: REPORT-EXTENDSCRIPT.md 참조
+
+만들/수정할 위치와 구조:
+| 파일 경로 | 역할 | 신규/수정 |
+|----------|------|----------|
+| illustrator-scripts/grading_template.jsx | 그레이딩 메인 로직 | 신규 |
+| illustrator-scripts/utils.jsx | 헬퍼 함수 (JSON 직렬화 등) | 신규 |
+| src-tauri/src/lib.rs | find_illustrator_exe + run_illustrator_script + generate_grading_jsx | 수정 |
+| src/pages/FileGenerate.tsx | Python 호출 -> Illustrator 호출로 변경 | 수정 |
+| src/types/generation.ts | Illustrator 결과 타입 추가 | 수정 |
+
+기존 코드 연결:
+- pattern_scaler.py의 calc_scale은 그대로 사용 (스케일 비율 계산)
+- pdf_handler.py의 정보추출/미리보기는 그대로 사용
+- pdf_grader.py는 폴백으로 유지 (삭제 X)
+
+실행 계획:
+| 순서 | 작업 | 담당 | 선행 조건 |
+|------|------|------|----------|
+| 1-1 | ExtendScript 프로토타입: PDF 열기+스케일링+저장 | developer | 없음 |
+| 1-2 | ExtendScript 프로토타입: SVG 클리핑 마스크 | developer | 1-1 |
+| 1-3 | Rust: find_illustrator_exe + run_illustrator_script | developer | 없음 (1-1과 병렬) |
+| 1-4 | Rust: generate_grading_jsx (JSX 동적 생성) | developer | 1-2, 1-3 |
+| 1-5 | 통합 테스트: 단일 사이즈 E2E | tester | 1-4 |
+| 2-1 | FileGenerate.tsx 수정 + 다중 사이즈 | developer | 1-5 |
+| 2-2 | 통합 테스트 + 버그 수정 | tester | 2-1 |
+
+developer 주의사항:
+- ExtendScript는 ES3 기반 (let/const 불가, arrow function 불가)
+- JSON.stringify 미지원 -> 수동 구현 필요 (utils.jsx)
+- pathItem.clipping = true 설정 후 group.clipped = true 해야 마스크 작동
+- CompoundPathItem은 직접 clipping 불가 -> PathItem만 사용
+- Illustrator.exe 경로는 버전마다 다름 -> 다수 후보 탐색 필요
+- 결과 수신은 마커 파일 폴링 방식 (stdout 불가)
 
 ## 구현 기록 (developer)
 1~4단계 모두 완료. 각 단계 상세는 git 로그 참조 (커밋 메시지에 요약).
@@ -629,6 +666,27 @@ reviewer 참고:
 - 기존 generate_graded 함수/커맨드는 하위 호환을 위해 유지됨
 - SVG→PDF 좌표 변환에서 Y축 반전 로직이 핵심 (svg_to_pdf_rect 함수)
 
+### [2026-04-08] 7단계 Phase 1: FileGenerate 롤백 + Illustrator ExtendScript 프로토타입
+
+구현한 기능:
+1. FileGenerate.tsx를 generate_by_pieces -> calc_scale + generate_graded로 롤백 (임시 단순 스케일링)
+2. illustrator-scripts/grading.jsx 프로토타입 작성 (ES3 호환, config.json 기반)
+3. Rust 커맨드 3개 추가: find_illustrator_exe, run_illustrator_script, get_illustrator_scripts_path
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| src/pages/FileGenerate.tsx | generate_by_pieces -> calc_scale + generate_graded 롤백, SVG 임시파일 제거, 프리셋 JSON 임시파일 방식 복원 | 수정 |
+| illustrator-scripts/grading.jsx | ExtendScript 프로토타입 (JSON 파서, 파일 IO, PDF 열기/스케일링/클리핑/저장/결과 기록) | 신규 |
+| illustrator-scripts/README.md | 스크립트 사용법 문서 | 신규 |
+| src-tauri/src/lib.rs | find_illustrator_exe (AI exe 자동 탐색) + run_illustrator_script (실행+폴링) + get_illustrator_scripts_path | 수정 |
+
+tester 참고:
+- 검증 완료: `npx tsc --noEmit` 통과, `npx vite build` 통과 (304KB JS), `cargo check` 통과
+- FileGenerate는 이제 단순 스케일링 방식 (조각별 아닌 전체 비례), 추후 Illustrator 연동으로 교체
+- grading.jsx는 Illustrator에서 File > Scripts > Other Script...로 수동 테스트 가능 (config.json 필요)
+- find_illustrator_exe는 "C:\Program Files\Adobe\Adobe Illustrator *" 경로 탐색
+- run_illustrator_script는 result.json 폴링으로 완료 감지 (500ms 간격)
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -641,6 +699,7 @@ reviewer 참고:
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
+| 2026-04-08 | developer | 7단계 Phase 1: FileGenerate 롤백(단순 스케일링) + ExtendScript 프로토타입 + Rust AI 커맨드 3개 | 완료 |
 | 2026-04-13 | tester | 실사용 시나리오 E2E (A3 복잡 CMYK + Form XObject 재귀) | 통과 (21/21) |
 | 2026-04-08 | developer | 엑셀 주문서 자동 인식 (order_parser.py + SizeSelect 엑셀 업로드) | 완료 |
 | 2026-04-08 | tester | 엑셀 주문서 검증 (3종 샘플+에러4종+빌드+회귀) | 통과 (11/11) |

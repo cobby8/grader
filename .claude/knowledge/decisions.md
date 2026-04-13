@@ -79,3 +79,9 @@
 - **발견자**: planner-architect
 - **내용**: "패턴 조각별 디자인 채워넣기" 방식의 타당성 검토 결과 -- 기술적으로 가능하며 기존 show_pdf_page + clip API를 활용하여 구현할 수 있다. 핵심 발견: (1) SVG 모든 사이즈가 동일한 viewBox(4337.01x3401.57)를 공유하므로 조각 위치의 상대 비율 매핑이 가능, (2) normalize_artboard 함수가 이미 SVG viewBox를 PDF 좌표계로 변환하는 로직을 보유, (3) svg_to_pdf 좌표 변환 함수가 svg_parser.py에 존재하며 정규화 방식으로 viewBox 원점 문제를 해결, (4) 각 polyline의 bbox가 명확히 분리되어 있어 조각 자동 구분 가능(X좌표 기준 좌/우 + 크기 기준 대/소). 접근법: XL SVG에서 각 조각 bbox의 viewBox 내 비율을 구한 뒤, PDF MediaBox에 같은 비율을 적용하여 clip 영역을 산출. 이전 방식(전체 비율 스케일링, PDF 콘텐츠 스트림 클리핑)의 실패 원인이었던 SVG-PDF 좌표 직접 변환 문제를 비율 매핑으로 우회. bleed 완전 제거. 조각별 독립 스케일링으로 4% 오차 해소.
 - **참조횟수**: 0
+
+### [2026-04-08] 그레이딩 엔진 전환: PyMuPDF -> Illustrator ExtendScript
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: PyMuPDF로 PDF를 프로그래밍 조작하는 5가지 방식(show_pdf_page, CTM 직접 삽입, clip+show_pdf_page, PDF W 연산자, 조각별 채워넣기)이 모두 근본적 한계(좌표 변환 오차, 사각형만 클리핑, 조각 겹침 등)에 도달. Illustrator ExtendScript로 그레이딩 엔진을 완전 전환하기로 결정. 이유: (1) 클리핑 마스크가 네이티브 기능(곡선/복합 경로 지원), (2) item.resize() API로 정밀 스케일링, (3) CMYK 100% 보존(Illustrator 자체 처리), (4) SVG/PDF 좌표 자동 변환. 실행 방법: 커맨드라인 Illustrator.exe /run script.jsx (방법 A) 우선 채택, 필요 시 COM 자동화(방법 B)로 업그레이드. Python 엔진은 PDF 분석 전용으로 유지. 전제조건: Illustrator CC 2020+ 설치 필수. 예상 소요: 2~3주 (Phase 1 MVP 1주, Phase 2 UI 통합 1주, Phase 3 안정화 1주). 상세: REPORT-EXTENDSCRIPT.md 참조.
+- **참조횟수**: 0
