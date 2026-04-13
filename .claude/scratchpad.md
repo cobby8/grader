@@ -687,6 +687,21 @@ tester 참고:
 - find_illustrator_exe는 "C:\Program Files\Adobe\Adobe Illustrator *" 경로 탐색
 - run_illustrator_script는 result.json 폴링으로 완료 감지 (500ms 간격)
 
+### [2026-04-08] grading.jsx 패턴 기반 채워넣기 방식 전면 재작성
+
+구현한 기능: grading.jsx의 핵심 로직을 "디자인 열기->스케일링->패턴 붙여넣기" 에서 "패턴 SVG 열기->디자인 Place->크기 맞추기->복합경로->클리핑"으로 전면 교체
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| illustrator-scripts/grading.jsx | 패턴 SVG 기반 채워넣기 방식으로 전면 재작성 (scaleX/scaleY 제거) | 수정 |
+| illustrator-scripts/config.json | baseSize/targetSize/scaleX/scaleY 필드 제거 | 수정 |
+
+tester 참고:
+- ES3 호환성 확인 완료: let/const 0건, arrow function 0건, template literal 0건
+- config.json은 이제 4개 필드만 사용: designPdfPath, patternSvgPath, outputPdfPath, resultJsonPath
+- 테스트 방법: Illustrator에서 File > Scripts > Other Script... > grading.jsx 실행 (config.json 필요)
+- 정상 동작: 패턴 SVG 열기 -> 디자인 Place -> 아트보드 맞춤 -> 복합 경로 -> 클리핑 마스크 -> PDF 저장
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -699,6 +714,7 @@ tester 참고:
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
+| 2026-04-08 | developer | grading.jsx를 "패턴 SVG 기반 채워넣기" 방식으로 전면 재작성 + config.json에서 scaleX/scaleY 제거 | 완료 |
 | 2026-04-08 | developer | 7단계 Phase 1: FileGenerate 롤백(단순 스케일링) + ExtendScript 프로토타입 + Rust AI 커맨드 3개 | 완료 |
 | 2026-04-13 | tester | 실사용 시나리오 E2E (A3 복잡 CMYK + Form XObject 재귀) | 통과 (21/21) |
 | 2026-04-08 | developer | 엑셀 주문서 자동 인식 (order_parser.py + SizeSelect 엑셀 업로드) | 완료 |
