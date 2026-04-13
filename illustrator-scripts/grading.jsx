@@ -382,24 +382,30 @@ function main() {
         // ===== STEP 3: 패턴 조각에 색상 채우기 =====
         // SVG를 열면 polyline이 pathItem으로 변환됨
         // 면적이 충분히 큰 경로만 패턴 조각으로 인정 (가이드선/마크 제외)
+        // 큰 패턴 조각에만 fill 적용, 원본 경로(선+너치)는 위에 유지
+        // 방법: 큰 경로를 복제 → 복제본에 fill → 복제본을 뒤로 보내기
+        // 원본은 stroke만 유지 (패턴 선 + 너치가 보임)
         var filledCount = 0;
-        for (var i = 0; i < patternDoc.pathItems.length; i++) {
+        var pathCount = patternDoc.pathItems.length;
+        for (var i = pathCount - 1; i >= 0; i--) {
             var path = patternDoc.pathItems[i];
 
             // 가로/세로 모두 50pt 이상인 경로만 패턴 조각으로 인정
-            // (50pt ≈ 17.6mm — 가이드선/마크보다 크고, 패턴 조각보다 작은 기준)
             if (Math.abs(path.width) > 50 && Math.abs(path.height) > 50) {
-                // 열린 경로면 닫기 — fill은 닫힌 경로에서만 정상 작동
+                // 열린 경로면 닫기
                 if (!path.closed) {
                     path.closed = true;
                 }
 
-                // 메인 색상으로 채우기
-                path.filled = true;
-                path.fillColor = mainColor;
+                // 경로를 복제하여 배경용 fill 객체 생성
+                var fillCopy = path.duplicate();
+                fillCopy.filled = true;
+                fillCopy.fillColor = mainColor;
+                fillCopy.stroked = false;  // 배경은 선 없음
+                fillCopy.zOrder(ZOrderMethod.SENDTOBACK);  // 뒤로 보내기
 
-                // 선(stroke)은 제거 — 깔끔한 출력을 위해
-                path.stroked = false;
+                // 원본은 fill 없이 stroke만 유지 (패턴 선 + 너치 표시)
+                path.filled = false;
 
                 filledCount++;
             }
