@@ -936,6 +936,40 @@ html, body, #root {
   text-overflow: ellipsis;
 }
 
+/* 프리셋 카드 내 조각별 SVG 사이즈 현황 */
+.preset-card__pieces {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.preset-card__piece {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+}
+
+.preset-card__piece-name {
+  color: var(--color-text-primary);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.preset-card__piece-sizes {
+  color: var(--color-accent);
+  font-size: 0.75rem;
+}
+
+.preset-card__piece-sizes--single {
+  color: var(--color-text-muted);
+}
+
 /* ===== 3단계: 디자인 파일 등록 페이지 ===== */
 
 /* 업로드 진행 메시지 (버튼 옆에 표시) */

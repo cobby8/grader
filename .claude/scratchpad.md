@@ -775,8 +775,6 @@ tester 참고:
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-04-08 | developer | grading.jsx "패턴 선 복사 + 단색 배경 채우기" 방식으로 재작성 (extractMainColor+cloneColor+fill) | 완료 |
-| 2026-04-08 | planner-architect | 요소 재구성 방식 타당성 검토 + Level 1 구현 계획 (REPORT-ELEMENT-REBUILD.md) | 완료 |
 | 2026-04-08 | developer | 7단계 Phase 1: FileGenerate 롤백(단순 스케일링) + ExtendScript 프로토타입 + Rust AI 커맨드 3개 | 완료 |
 | 2026-04-13 | tester | 실사용 시나리오 E2E (A3 복잡 CMYK + Form XObject 재귀) | 통과 (21/21) |
 | 2026-04-08 | developer | 엑셀 주문서 자동 인식 (order_parser.py + SizeSelect 엑셀 업로드) | 완료 |
@@ -786,3 +784,4 @@ tester 참고:
 | 2026-04-08 | developer | SVG 아트보드 자동 보정 (normalize_artboard: viewBox 확장 1580x2000mm) | 완료 |
 | 2026-04-08 | developer | SVG 패턴 클리핑 마스크+bleed 적용 + 좌표계 버그 수정 + 조각별 채워넣기 | 완료 |
 | 2026-04-08 | developer | FileGenerate Illustrator grading.jsx 자동 호출 연동 (AI 있으면 AI방식, 없으면 Python 폴백) | 완료 |
+| 2026-04-08 | developer | (A) SVG 파일 쓰기 Rust 커맨드 전환 + (B) 패턴 카드에 조각별 SVG 사이즈 현황 표시 | 완료 |

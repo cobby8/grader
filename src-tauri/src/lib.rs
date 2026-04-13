@@ -300,6 +300,28 @@ fn get_illustrator_scripts_path(app: tauri::AppHandle) -> Result<String, String>
     Ok(dir.to_string_lossy().to_string())
 }
 
+/// 절대 경로에 텍스트 파일을 쓴다.
+/// Tauri fs 플러그인의 권한 제한을 우회하여, 임의의 절대 경로에 파일을 쓸 수 있다.
+/// 주 용도: illustrator-scripts/ 폴더에 config.json, 임시 SVG 등을 저장할 때.
+#[tauri::command]
+fn write_file_absolute(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, &content).map_err(|e| format!("파일 쓰기 실패: {}", e))
+}
+
+/// 절대 경로에서 텍스트 파일을 읽는다.
+/// Tauri fs 플러그인의 권한 제한을 우회하여, 임의의 절대 경로에서 파일을 읽을 수 있다.
+#[tauri::command]
+fn read_file_absolute(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("파일 읽기 실패: {}", e))
+}
+
+/// 절대 경로의 파일을 삭제한다.
+/// Tauri fs 플러그인의 권한 제한을 우회하여, 임의의 절대 경로의 파일을 삭제할 수 있다.
+#[tauri::command]
+fn remove_file_absolute(path: String) -> Result<(), String> {
+    std::fs::remove_file(&path).map_err(|e| format!("파일 삭제 실패: {}", e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -312,7 +334,10 @@ pub fn run() {
             list_svg_files,
             find_illustrator_exe,
             run_illustrator_script,
-            get_illustrator_scripts_path
+            get_illustrator_scripts_path,
+            write_file_absolute,
+            read_file_absolute,
+            remove_file_absolute
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -955,6 +955,31 @@ function PatternManage() {
                           개
                         </span>
                       </div>
+                      {/* 조각별 SVG 사이즈 현황 — 등록된 SVG 파일 목록을 한눈에 보여준다 */}
+                      {preset.pieces.length > 0 && (
+                        <div className="preset-card__pieces">
+                          {preset.pieces.map((piece) => {
+                            // svgBySize가 있으면 등록된 사이즈 목록을 표시
+                            const sizeKeys = piece.svgBySize ? Object.keys(piece.svgBySize) : [];
+                            return (
+                              <div key={piece.id} className="preset-card__piece">
+                                <span className="preset-card__piece-name">{piece.name}</span>
+                                {sizeKeys.length > 1 ? (
+                                  // 여러 사이즈가 등록된 경우: 사이즈 수 + 목록
+                                  <span className="preset-card__piece-sizes">
+                                    {sizeKeys.length}사이즈: {sizeKeys.join(", ")}
+                                  </span>
+                                ) : (
+                                  // 단일 SVG만 있는 경우
+                                  <span className="preset-card__piece-sizes preset-card__piece-sizes--single">
+                                    1개 SVG
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                       {/* 카테고리 태그 (있을 때만) */}
                       {preset.categoryId && (
                         <div className="preset-card__category">

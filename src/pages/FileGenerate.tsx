@@ -30,6 +30,9 @@ import {
   remove,
   BaseDirectory,
 } from "@tauri-apps/plugin-fs";
+// 참고: Tauri fs 플러그인은 AppData 범위 밖 절대 경로에 대한 쓰기 권한이 없다.
+// illustrator-scripts/ 폴더처럼 앱 외부 경로에 파일을 쓸 때는
+// Rust 커맨드(write_file_absolute 등)를 사용한다.
 import { openPath } from "@tauri-apps/plugin-opener";
 import { loadPresets } from "../stores/presetStore";
 import { loadDesigns } from "../stores/designStore";
@@ -300,22 +303,23 @@ function FileGenerate() {
         // 2-b) 타겟 SVG를 임시 파일로 저장
         // illustrator-scripts/ 폴더에 저장하여 Illustrator가 접근 가능하게 함
         const tempSvgPath = scriptsDir + `\\temp_pattern_${targetSize}.svg`;
-        // 절대 경로에 직접 쓰기 위해 Rust invoke 대신 plugin-fs 사용
-        // writeTextFile은 절대 경로일 때 baseDir를 생략한다
-        await writeTextFile(tempSvgPath, targetSvgData);
+        // Rust 커맨드로 절대 경로에 파일 쓰기 (Tauri fs 플러그인은 앱 외부 경로 권한 없음)
+        await invoke('write_file_absolute', { path: tempSvgPath, content: targetSvgData });
 
         // 2-c) 출력 PDF 경로 결정
         const outputFileName = `${baseFileName}_${targetSize}.pdf`;
         const outputPdfPath = await join(absOutputDir, outputFileName);
 
         // 2-d) config.json 작성 (grading.jsx가 읽는 형식)
+        // designPdfPath는 이미 절대 경로 (designStore.copyPdfToAppData가 절대 경로 반환)
         const config = {
           designPdfPath: dsg.storedPath,         // 기준 디자인 PDF (색상 추출용)
           patternSvgPath: tempSvgPath,           // 타겟 사이즈 SVG (틀)
           outputPdfPath: outputPdfPath,           // 출력 PDF 경로
           resultJsonPath: resultJsonPath,         // 결과 마커 파일 경로
         };
-        await writeTextFile(configJsonPath, JSON.stringify(config));
+        // Rust 커맨드로 절대 경로에 config.json 쓰기
+        await invoke('write_file_absolute', { path: configJsonPath, content: JSON.stringify(config) });
 
         // 2-e) Illustrator로 grading.jsx 실행
         // run_illustrator_script는 내부에서 result.json을 폴링하여 완료를 감지한다
@@ -343,7 +347,7 @@ function FileGenerate() {
 
         // 2-g) 임시 SVG 파일 정리 (실패해도 무시)
         try {
-          await remove(tempSvgPath);
+          await invoke('remove_file_absolute', { path: tempSvgPath });
         } catch {
           // 무시
         }
@@ -360,7 +364,7 @@ function FileGenerate() {
 
     // config.json 정리 (마지막 사이즈 처리 후)
     try {
-      await remove(configJsonPath);
+      await invoke('remove_file_absolute', { path: configJsonPath });
     } catch {
       // 무시
     }
