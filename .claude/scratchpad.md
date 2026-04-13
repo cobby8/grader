@@ -2,8 +2,8 @@
 
 ## 현재 작업
 - **요청**: 승화전사 유니폼 패턴 자동 생성 프로그램 개발
-- **상태**: 6단계 통합 테스트 진행 중
-- **현재 담당**: tester
+- **상태**: 🎉 MVP 완성 (1~6단계 전체 통과)
+- **현재 담당**: pm (사용자 실제 데이터 테스트 대기)
 
 ## 진행 현황표
 
@@ -109,6 +109,23 @@ grader/
 - reportlab의 실제 CMYK 출력 스트림 예: `0.5 0.3 0.2 0.1 k\n` (공백 구분, 소문자 k) → 정규식이 이 형태를 정확히 매칭
 - PyMuPDF 구버전 호환을 위해 `deflate_images/deflate_fonts` TypeError 폴백 추가함
 
+#### 개선 이력
+| 회차 | 날짜 | 수정 내용 | 수정 파일 | 사유 |
+|------|------|----------|----------|------|
+| 1차 | 2026-04-08 | Form XObject 내부 CMYK 감지 확장 | python-engine/pdf_handler.py | 6단계 E2E 발견: 그레이딩 결과 PDF(Form XObject 래핑) 재분석 시 Unknown 오판정 |
+
+**1차 수정 상세 (2026-04-08) — Form XObject 내부 CMYK 감지 확장**
+- **문제**: `pdf_grader.generate_graded_pdf`가 `show_pdf_page`로 원본을 Form XObject(/fzFrm0)로 래핑하여 저장 → 결과 PDF의 최상위 콘텐츠 스트림에는 `Do` 연산자만 있고 실제 `k/K`는 Form XObject 내부 스트림에 보존됨 → 기존 `page.read_contents()`만 스캔하는 `analyze_color_space_detailed`는 그레이딩 결과를 `overall: "Unknown"`으로 오판정
+- **수정**:
+  1. `pdf_handler.py`에 `_scan_form_xobjects(doc)` 신규 함수 추가 — `doc.xref_length()`로 전체 xref 순회 → `xref_get_key(xref, "Subtype")`가 `/Form`인 객체만 골라 `xref_stream()`으로 바이트 추출 → 기존 `_detect_vector_color_operators`를 재사용하여 cmyk/rgb/gray 플래그 반환. 예외는 xref별로 안전하게 스킵, 3종 모두 감지 시 조기 종료 최적화.
+  2. `analyze_color_space_detailed`에서 페이지 루프 직후 `_scan_form_xobjects(doc)` 호출하여 결과를 전역 `has_vector_cmyk/rgb/gray`에 OR 병합. 페이지별 `vector_*` 플래그도 Form XObject 감지 결과로 보완(단일 페이지 PDF 기준).
+- **검증 (6/6 통과)**:
+  - 회귀: CMYK 원본 → CMYK / RGB 원본 → RGB / Mixed 원본 → Mixed (이전 동작 유지)
+  - 핵심: CMYK 그레이딩 결과(Form XObject) → CMYK (이전 Unknown) / RGB 그레이딩 → RGB / Mixed 그레이딩 → Mixed
+  - 빌드: `npx tsc --noEmit` 통과, `npx vite build` 통과 (266.90 KB JS / 18.38 KB CSS — 이전과 동일)
+- **실제 변경 파일**: `python-engine/pdf_handler.py` 단일 파일 (신규 함수 +70줄, 기존 함수 +25줄 병합 로직)
+- **주의**: 프론트 TS 코드/타입/UI는 변경 없음 (백엔드 감지 로직만 확장). 사용자는 그레이딩 결과 재업로드 시 이제 CMYK 배지가 정상 표시됨.
+
 ## 테스트 결과 (tester)
 | 단계 | 판정 | 항목 | 이슈 |
 |------|------|------|------|
@@ -119,37 +136,29 @@ grader/
 | 5단계 | 통과 | 10/10 | 없음 (analyze_color 3종 PDF 정확, 기존 CLI 호환, file_size 필드 정상) |
 | 6단계 | 통과 | 18/19 | analyze_color가 그레이딩 결과 PDF(Form XObject 래핑)를 Unknown으로 판정 (개선 제안) |
 
-### [2026-04-08] 6단계 E2E 통합 테스트
-- 시나리오 1 (완전한 워크플로우): 통과 - 자산 생성→get_pdf_info→analyze_color→verify_cmyk→generate_preview→calc_scale(L→S/M/L/XL)→generate_graded(4종)→에러 5종 모두 정상
-- 시나리오 2 (빌드/구조): 통과 - tsc 통과, vite 빌드 통과(267KB JS), 프로젝트 구조 완전, .gitignore 정상
-- 시나리오 3 (데이터 흐름 트레이스): 통과 - PatternManage/DesignUpload/SizeSelect/FileGenerate 전부 store→callPython→AppData 흐름 정상 연결
-- 발견 이슈: 1건 (경미/개선 제안)
-- 종합: 통과
-- MVP 출시 준비 상태: 준비 완료 (단, 아래 개선 권장)
+### [2026-04-08] 6단계 E2E: 통과 (18/19, Form XObject 개선 제안 1건 -> 수정 완료)
+### [2026-04-08] 5단계 검증: 통과 (10/10, 빌드+CLI 3종+호환성+파일크기 정상)
 
-**발견 상세 (개선 제안 — 치명적 아님)**:
-- `analyze_color`는 `page.read_contents()`만 검사하는데, `pdf_grader`가 `show_pdf_page`로 만든 출력 PDF는 top-level 콘텐츠 스트림이 `/fzFrm0 Do`(Form XObject 호출)뿐이라 CMYK 연산자가 감지 안 됨
-- 실제 xref 스트림 직접 덤프 결과, Form XObject 내부에 `1 0 0 0 k` 등 CMYK 연산자가 **그대로 보존**됨을 확인 → 인쇄 품질에는 영향 없음
-- 개선 방법: `_detect_vector_color_operators`가 Form XObject 리소스까지 순회하도록 확장 (doc.xref_length() + xref_stream) — MVP 이후 보완 권장
-- 기능적 영향: 사용자가 그레이딩 결과를 재업로드 시에만 "Unknown" 배지가 보임. 일반 워크플로우(외부 디자인 → 그레이딩)에서는 영향 없음
+### [2026-04-13] 실사용 시나리오 E2E 테스트
+- Scenario A (A3 복잡 CMYK 유니폼 디자인 + 6사이즈 그레이딩): 통과 (12/12)
+- Scenario B (경계 조건 5종): 통과 (6/6)
+- Scenario C (Form XObject 재귀 체인 그레이딩): 통과 (3/3)
+- 핵심 발견: 이슈 없음. Form XObject 개선이 완벽하게 작동함
+- 종합: 통과 (21/21)
 
-**E2E 세부 결과**:
-- CMYK 원본 PDF: overall=CMYK, vector_cmyk=true, page 210x297mm, preview 1241x1754 OK
-- calc_scale: L→S=0.9, L→M=0.95, L→L=1.0, L→XL=1.05 (프리셋 치수 기반 정확)
-- generate_graded 출력 크기: S(189x266.58), M(199.5x281.79), L(210x297), XL(220.5x312.21) mm — scale 계산과 완전 일치
-- 파일 크기 리포트: compression_ratio 0.9 내외, 모든 응답에 file_size_bytes/original_size_bytes 포함
-- 에러 시나리오 5종: 존재하지 않는 PDF / 손상된 JSON / 0×0 치수 / 스케일 0 / 잘못된 커맨드 모두 success:false + exit 1 + 친절한 메시지
-- Python CLI 6개 커맨드 모두 정상 등록 (help 출력 확인)
+**사이즈 비교표** (원본 A3=297x420mm, 기준 L):
 
-### 5단계 검증 상세 (경량)
-- 빌드: `npx tsc --noEmit` 통과, `npx vite build` 통과 (266.90 KB JS / 18.38 KB CSS)
-- Python 코드: `_detect_vector_color_operators`, `analyze_color_space_detailed` 함수 존재 확인 / `main.py`에 `analyze_color` 서브커맨드 정상 분기
-- 신규 CLI: CMYK→`overall:CMYK vector_cmyk:true` / RGB→`overall:RGB vector_rgb:true warnings 2건` / Mixed→`overall:Mixed 양쪽 true`
-- 호환성: `verify_cmyk`(reportlab PDF→Unknown, 기존 동작 유지) / `get_pdf_info`(page_count=1 정상) / `generate_graded` 모두 동작
-- generate_graded 반환에 `file_size_bytes=1239, original_size_bytes=1373, compression_ratio=0.902` 정상 포함
-- 에러 케이스: 존재하지 않는 파일 → `{success:false, error:"파일을 찾을 수 없습니다..."}` + exit 1 (정상)
-- 하위 호환: `DesignFile.colorAnalysis?` 선택 필드 / `fileSizeBytes?` 등 모두 optional → TS 에러 없음
-- `toColorAnalysis` 매퍼: Python이 항상 pages 배열 반환하므로 `.map()` 호출 안전
+| Size | Scale X | Scale Y | Out(mm) | Expected(mm) | CMYK |
+|------|---------|---------|---------|---------------|------|
+| 2XS | 0.8543 | 0.8734 | 253.7x366.8 | 253.7x366.8 | CMYK |
+| XS | 0.8914 | 0.9030 | 264.7x379.2 | 264.7x379.2 | CMYK |
+| S | 0.9272 | 0.9325 | 275.4x391.6 | 275.4x391.7 | CMYK |
+| M | 0.9629 | 0.9662 | 286.0x405.8 | 286.0x405.8 | CMYK |
+| XL | 1.0437 | 1.0338 | 310.0x434.2 | 310.0x434.2 | CMYK |
+| 2XL | 1.0887 | 1.0675 | 323.4x448.4 | 323.4x448.4 | CMYK |
+
+**경계 조건**: 5XS(scale~0.5) 정상 / 5XL(scale~1.5) 정상 / L->L(scale 1.0) 원본과 동일 크기 / 0치수 에러 정상 / 없는 사이즈 에러 정상
+**Form XObject 재귀**: 1차 그레이딩->CMYK 감지 OK / 체인 그레이딩(2중 래핑)->CMYK 감지 OK
 
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
@@ -162,16 +171,12 @@ grader/
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-04-08 | planner-architect | 워크플로우 확정 + 기준디자인 PDF 채택 + REPORT.md 전면 업데이트 | 완료 |
-| 2026-04-09 | developer | 1단계: Tauri + React + TS 프로젝트 세팅 + UI 기본 틀 | 완료 |
-| 2026-04-09 | pm | Git 초기화 + GitHub(cobby8/grader) 연결 + 푸시 | 완료 |
-| 2026-04-08 | developer | 2단계: 패턴 프리셋 시스템 (CRUD + SVG + 치수 테이블 + 로컬 저장) | 완료 |
-| 2026-04-08 | tester | 2단계 검증 | 통과 (12/12) |
 | 2026-04-10 | developer | 3단계: Python엔진(PyMuPDF) + DesignUpload(업로드/CMYK/미리보기) | 완료 |
-| 2026-04-10 | developer | 3단계 버그 수정: pdf_handler page_count | 완료 |
 | 2026-04-10 | tester | 3단계 재검증 | 최종 통과 |
 | 2026-04-10 | developer | 4단계: SizeSelect/FileGenerate + pattern_scaler/pdf_grader (CMYK 보존) | 완료 |
 | 2026-04-10 | tester | 4단계 검증 | 통과 (30/30) |
 | 2026-04-08 | developer | 5단계: analyze_color + 벡터 연산자 감지 + 파일 크기 리포트 + 상세 배지 UI | 완료 |
 | 2026-04-08 | tester | 5단계 검증 (빌드+Python CLI 3종+호환성+파일크기필드) | 통과 (10/10) |
 | 2026-04-08 | tester | 6단계 E2E 통합 테스트 (워크플로우+빌드+데이터흐름) | 통과 (18/19, 개선 제안 1건) |
+| 2026-04-08 | developer | Form XObject 내부 CMYK 감지 확장 (_scan_form_xobjects 추가) | 완료 (6/6) |
+| 2026-04-13 | tester | 실사용 시나리오 E2E (A3 복잡 CMYK + Form XObject 재귀) | 통과 (21/21) |

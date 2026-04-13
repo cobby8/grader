@@ -240,6 +240,73 @@ def _detect_vector_color_operators(content_bytes: bytes) -> dict[str, bool]:
     return result
 
 
+def _scan_form_xobjects(doc) -> dict[str, bool]:
+    """
+    문서 전체의 Form XObject 내부 스트림에서 벡터 페인트 연산자를 감지한다.
+
+    왜 필요한가:
+      pdf_grader.generate_graded_pdf는 PyMuPDF의 show_pdf_page를 사용해
+      원본 PDF를 Form XObject로 래핑하여 새 PDF에 삽입한다. 그 결과:
+        - 새 페이지의 top-level 콘텐츠 스트림에는 "/fzFrm0 Do" 같은
+          Form XObject 호출만 남고 실제 색상 연산자(k, K)는 포함되지 않음
+        - 실제 CMYK 연산자는 Form XObject 내부 스트림에 그대로 보존됨
+      기존 페이지별 page.read_contents() 스캔만으로는 이 경우를 놓치므로
+      문서 전체 xref를 돌면서 Form XObject의 스트림도 함께 검사한다.
+
+    구현 방법(방법 A - 간단):
+      - doc.xref_length()로 전체 xref 수를 얻고 1부터 순회
+      - doc.xref_get_key(xref, "Subtype")로 객체 타입 확인
+      - "/Form"인 경우에만 doc.xref_stream(xref)로 바이트 스트림 추출
+      - 기존 _detect_vector_color_operators를 재사용하여 연산자 감지
+      - 중첩된 Form XObject도 자연스럽게 처리됨(모든 xref를 돌기 때문)
+
+    에러 처리:
+      - xref_get_key / xref_stream 실패 시 해당 객체만 건너뜀
+      - 전체 xref 수가 많아도 단순 순회이므로 선형 시간에 안전하게 동작
+
+    반환:
+      {"cmyk": bool, "rgb": bool, "gray": bool}
+    """
+    result = {"cmyk": False, "rgb": False, "gray": False}
+
+    try:
+        xref_count = doc.xref_length()
+    except Exception:
+        # xref_length 자체가 실패하면 빈 결과 반환 (안전 폴백)
+        return result
+
+    for xref in range(1, xref_count):
+        try:
+            # xref_get_key는 (type, value) 튜플을 반환한다.
+            # 예: ("name", "/Form") 또는 ("null", "null")
+            subtype_key = doc.xref_get_key(xref, "Subtype")
+            if not subtype_key or subtype_key[1] != "/Form":
+                continue
+
+            # Form XObject의 스트림 바이트 추출
+            stream = doc.xref_stream(xref)
+            if not stream:
+                continue
+
+            # 기존 벡터 연산자 감지 로직 재사용
+            detected = _detect_vector_color_operators(stream)
+            if detected["cmyk"]:
+                result["cmyk"] = True
+            if detected["rgb"]:
+                result["rgb"] = True
+            if detected["gray"]:
+                result["gray"] = True
+
+            # 이미 세 가지 모두 감지했다면 조기 종료 (최적화)
+            if result["cmyk"] and result["rgb"] and result["gray"]:
+                break
+        except Exception:
+            # 개별 xref 처리 실패는 무시하고 다음 객체로 진행
+            continue
+
+    return result
+
+
 def analyze_color_space_detailed(pdf_path: str) -> dict[str, Any]:
     """
     PDF의 색상 공간을 페이지별/객체별로 상세 분석한다.
@@ -357,6 +424,29 @@ def analyze_color_space_detailed(pdf_path: str) -> dict[str, Any]:
             "image_color_spaces": image_color_spaces,
             "has_icc_profile": page_has_icc,
         })
+
+    # (C2) Form XObject 내부 스트림 스캔 (그레이딩 결과 PDF 대응)
+    # 이유: pdf_grader의 show_pdf_page 출력은 원본을 Form XObject로 래핑하므로
+    # 페이지의 최상위 콘텐츠 스트림(page.read_contents)만으로는 CMYK 연산자를
+    # 찾지 못한다. 문서 전체의 Form XObject 스트림을 추가로 스캔하여 보완한다.
+    form_flags = _scan_form_xobjects(doc)
+    if form_flags["cmyk"]:
+        has_vector_cmyk = True
+    if form_flags["rgb"]:
+        has_vector_rgb = True
+    if form_flags["gray"]:
+        has_vector_gray = True
+
+    # 페이지별 플래그도 Form XObject 결과로 보완 (단일 페이지 PDF가 대부분이므로
+    # 페이지 구분 없이 "문서 전체" 감지 결과를 모든 페이지에 반영한다)
+    if form_flags["cmyk"] or form_flags["rgb"] or form_flags["gray"]:
+        for page_info in pages_info:
+            if form_flags["cmyk"]:
+                page_info["vector_cmyk"] = True
+            if form_flags["rgb"]:
+                page_info["vector_rgb"] = True
+            if form_flags["gray"]:
+                page_info["vector_gray"] = True
 
     doc.close()
 
