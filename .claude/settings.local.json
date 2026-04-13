@@ -110,7 +110,19 @@
       "Bash(./venv/Scripts/python.exe \"C:/Users/user/AppData/Local/Temp/grader_e2e/make_assets.py\")",
       "Bash(./venv/Scripts/python.exe _tmp_test_form_xobject.py)",
       "Bash(PYTHONIOENCODING=utf-8 ./venv/Scripts/python.exe _tmp_test_form_xobject.py)",
-      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/Users/user/AppData/Local/Temp/grader_e2e_real/test_scenario.py\")"
+      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/python.exe\" \"C:/Users/user/AppData/Local/Temp/grader_e2e_real/test_scenario.py\")",
+      "Bash(venv/Scripts/python main.py parse_order _test_horizontal.xlsx)",
+      "Bash(venv/Scripts/python main.py parse_order _test_vertical.xlsx)",
+      "Bash(venv/Scripts/python main.py parse_order _test_table.xlsx)",
+      "Bash(\"C:/0. Programing/grader/python-engine/venv/Scripts/pip.exe\" list)",
+      "Bash(./venv/Scripts/python.exe main.py parse_order C:/Users/user/AppData/Local/Temp/grader_test_gmxft8rr/horizontal.xlsx)",
+      "Bash(./venv/Scripts/python.exe main.py parse_order C:/Users/user/AppData/Local/Temp/grader_test_gmxft8rr/vertical.xlsx)",
+      "Bash(./venv/Scripts/python.exe main.py parse_order C:/Users/user/AppData/Local/Temp/grader_test_gmxft8rr/complex.xlsx)",
+      "Bash(./venv/Scripts/python.exe main.py parse_order C:/Users/user/AppData/Local/Temp/grader_test_gmxft8rr/no_size.xlsx)",
+      "Bash(echo \"Exit code: $?\")",
+      "Bash(./venv/Scripts/python.exe main.py parse_order C:/Users/user/AppData/Local/Temp/grader_test_gmxft8rr/empty.xlsx)",
+      "Bash(./venv/Scripts/python.exe main.py parse_order C:/Users/user/AppData/Local/Temp/grader_test_gmxft8rr/nonexist.xlsx)",
+      "Bash(./venv/Scripts/python.exe main.py parse_order)"
     ]
   }
 }

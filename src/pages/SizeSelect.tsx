@@ -13,12 +13,16 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { loadPresets } from "../stores/presetStore";
 import { loadDesigns } from "../stores/designStore";
 import { saveGenerationRequest, loadGenerationRequest } from "../stores/generationStore";
 import type { PatternPreset } from "../types/pattern";
 import type { DesignFile } from "../types/design";
 import { SIZE_LIST } from "../types/pattern";
+import type { OrderParseResult, OrderParseRawResult, OrderSize } from "../types/order";
+import { toOrderParseResult } from "../types/order";
 
 function SizeSelect() {
   const navigate = useNavigate();
@@ -37,6 +41,14 @@ function SizeSelect() {
 
   // 에러 메시지 (폼 유효성)
   const [errorMessage, setErrorMessage] = useState<string>("");
+
+  // 엑셀 주문서 관련 상태
+  // 엑셀에서 추출한 결과 (null이면 수동 모드)
+  const [orderResult, setOrderResult] = useState<OrderParseResult | null>(null);
+  // 엑셀 파싱 중 로딩 표시
+  const [orderLoading, setOrderLoading] = useState(false);
+  // 사이즈별 수량 맵 (엑셀에서 추출한 참고 정보)
+  const [sizeQuantities, setSizeQuantities] = useState<Map<string, number>>(new Map());
 
   // 초기 로드: 기존 데이터 + 이전 선택 복원
   useEffect(() => {
@@ -95,6 +107,81 @@ function SizeSelect() {
       setBaseSize(preferred);
     }
   }, [availablePresetSizes, baseSize]);
+
+  /** 엑셀 주문서 파일 선택 및 파싱 */
+  async function handleExcelUpload() {
+    try {
+      // Tauri 파일 다이얼로그로 xlsx 파일 선택
+      const filePath = await open({
+        title: "엑셀 주문서 선택",
+        filters: [{ name: "엑셀 파일", extensions: ["xlsx"] }],
+        multiple: false,
+      });
+
+      // 사용자가 취소한 경우
+      if (!filePath) return;
+
+      setOrderLoading(true);
+      setErrorMessage("");
+
+      // Python parse_order 호출
+      const raw = await invoke<string>("run_python", {
+        command: "parse_order",
+        args: [filePath as string],
+      });
+      const parsed: OrderParseRawResult = JSON.parse(raw);
+      const result = toOrderParseResult(parsed);
+
+      if (!result.success) {
+        setErrorMessage(result.error || "엑셀 파싱에 실패했습니다.");
+        setOrderLoading(false);
+        return;
+      }
+
+      if (result.sizes.length === 0) {
+        setErrorMessage("엑셀에서 사이즈 정보를 찾을 수 없습니다.");
+        setOrderLoading(false);
+        return;
+      }
+
+      // 파싱 결과 저장
+      setOrderResult(result);
+
+      // 수량 맵 구성 (사이즈 옆에 "12장" 표시용)
+      const qtyMap = new Map<string, number>();
+      result.sizes.forEach((s: OrderSize) => qtyMap.set(s.size, s.quantity));
+      setSizeQuantities(qtyMap);
+
+      // 추출된 사이즈로 체크박스 자동 선택
+      const extractedSizes = result.sizes.map((s: OrderSize) => s.size);
+      // 프리셋에 없는 사이즈 경고
+      const unknownSizes = extractedSizes.filter(
+        (s: string) => !availablePresetSizes.includes(s)
+      );
+      if (unknownSizes.length > 0) {
+        setErrorMessage(
+          `주의: 엑셀에서 추출한 사이즈 중 프리셋에 없는 것이 있습니다: ${unknownSizes.join(", ")}. 해당 사이즈는 선택에서 제외됩니다.`
+        );
+      }
+
+      // 프리셋에 등록된 사이즈만 체크
+      const validSizes = extractedSizes.filter((s: string) =>
+        availablePresetSizes.includes(s)
+      );
+      setSelectedSizes(new Set(validSizes));
+    } catch (err) {
+      setErrorMessage(`엑셀 파일 처리 중 오류: ${err}`);
+    } finally {
+      setOrderLoading(false);
+    }
+  }
+
+  /** 수동 선택 모드로 돌아가기 (엑셀 결과 초기화) */
+  function resetToManual() {
+    setOrderResult(null);
+    setSizeQuantities(new Map());
+    setSelectedSizes(new Set());
+  }
 
   /** 개별 사이즈 체크박스 토글 */
   function toggleSize(size: string) {
@@ -287,6 +374,25 @@ function SizeSelect() {
         <div className="size-section__header">
           <h2 className="size-section__title">4. 생성할 사이즈</h2>
           <div className="size-actions">
+            {/* 엑셀 주문서 업로드 버튼 */}
+            <button
+              type="button"
+              className="btn btn--small btn--excel"
+              onClick={handleExcelUpload}
+              disabled={!selectedPreset || orderLoading}
+            >
+              {orderLoading ? "분석 중..." : "엑셀 주문서로 선택"}
+            </button>
+            {/* 엑셀 모드일 때 수동 모드 복귀 버튼 */}
+            {orderResult && (
+              <button
+                type="button"
+                className="btn btn--small"
+                onClick={resetToManual}
+              >
+                수동 선택으로 돌아가기
+              </button>
+            )}
             <button
               type="button"
               className="btn btn--small"
@@ -306,12 +412,31 @@ function SizeSelect() {
           </div>
         </div>
 
+        {/* 엑셀 파싱 결과 요약 (엑셀 모드일 때만 표시) */}
+        {orderResult && (
+          <div className="order-summary">
+            <div className="order-summary__header">
+              <span className="order-summary__badge">엑셀 주문서</span>
+              <span className="order-summary__info">
+                시트: {orderResult.sourceSheet} / 형식: {
+                  orderResult.detectedFormat === "horizontal" ? "가로형"
+                  : orderResult.detectedFormat === "vertical" ? "세로형"
+                  : orderResult.detectedFormat === "table" ? "표형"
+                  : "자동감지"
+                } / 총 {orderResult.totalQuantity}장
+              </span>
+            </div>
+          </div>
+        )}
+
         <div className="size-grid">
           {SIZE_LIST.map((size) => {
             // 프리셋에 등록된 사이즈만 체크 가능
             const registered = availablePresetSizes.includes(size);
             const checked = selectedSizes.has(size);
             const isBase = size === baseSize;
+            // 엑셀에서 추출한 수량 (있으면 표시)
+            const quantity = sizeQuantities.get(size);
             return (
               <label
                 key={size}
@@ -333,6 +458,10 @@ function SizeSelect() {
                   onChange={() => toggleSize(size)}
                 />
                 <span className="size-cell__label">{size}</span>
+                {/* 수량 배지: 엑셀에서 수량이 추출된 경우에만 표시 */}
+                {quantity !== undefined && quantity > 0 && (
+                  <span className="size-cell__qty">{quantity}장</span>
+                )}
               </label>
             );
           })}
@@ -340,6 +469,12 @@ function SizeSelect() {
 
         <div className="size-count">
           선택됨: <strong>{selectedSizes.size}개</strong> / 전체 {SIZE_LIST.length}개
+          {/* 엑셀 모드에서는 총 수량도 표시 */}
+          {orderResult && orderResult.totalQuantity > 0 && (
+            <span className="size-count__total">
+              {" "}(주문 총 {orderResult.totalQuantity}장)
+            </span>
+          )}
         </div>
       </section>
 

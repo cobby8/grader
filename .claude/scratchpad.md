@@ -2,8 +2,8 @@
 
 ## 현재 작업
 - **요청**: 승화전사 유니폼 패턴 자동 생성 프로그램 개발
-- **상태**: 🎉 MVP 완성 (1~6단계 전체 통과)
-- **현재 담당**: pm (사용자 실제 데이터 테스트 대기)
+- **상태**: 확장 기능 개발 중 (엑셀 주문서 자동 인식)
+- **현재 담당**: developer
 
 ## 진행 현황표
 
@@ -126,6 +126,50 @@ grader/
 - **실제 변경 파일**: `python-engine/pdf_handler.py` 단일 파일 (신규 함수 +70줄, 기존 함수 +25줄 병합 로직)
 - **주의**: 프론트 TS 코드/타입/UI는 변경 없음 (백엔드 감지 로직만 확장). 사용자는 그레이딩 결과 재업로드 시 이제 CMYK 배지가 정상 표시됨.
 
+### [2026-04-08] 확장: 엑셀 주문서 자동 인식
+
+📝 구현 요약:
+- Python `order_parser.py` 신규 — openpyxl로 xlsx 파일 전체 셀을 스캔하여 사이즈 키워드(5XS~5XL) 자동 감지, 인접 셀에서 수량 추출. 가로형/세로형/분산형 3가지 레이아웃 자동 판별.
+- `main.py`에 `parse_order` CLI 서브커맨드 추가
+- `SizeSelect.tsx`에 "엑셀 주문서로 선택" 버튼 추가 — Tauri 파일 다이얼로그(xlsx 필터) → Python parse_order 호출 → 반환된 사이즈로 체크박스 자동 체크 + 수량 배지 표시
+- 기존 수동 체크박스 UI 완전 유지, "수동 선택으로 돌아가기" 버튼으로 초기화 가능
+- 프리셋에 없는 사이즈가 엑셀에 있으면 경고 메시지 표시 + 해당 사이즈 선택 제외
+
+| 파일 | 변경 | 신규/수정 |
+|------|------|----------|
+| python-engine/order_parser.py | 엑셀 주문서 파서 (사이즈 감지 + 수량 추출 + 형식 판별) | 신규 |
+| python-engine/main.py | parse_order 서브커맨드 추가 + import 추가 | 수정 |
+| python-engine/requirements.txt | openpyxl>=3.1.0 추가 | 수정 |
+| src/types/order.ts | OrderSize, OrderParseResult, toOrderParseResult 타입/변환 함수 | 신규 |
+| src/pages/SizeSelect.tsx | 엑셀 업로드 버튼 + 결과 요약 바 + 수량 배지 + 수동 복귀 | 수정 |
+| src/App.css | btn--excel, order-summary, size-cell__qty, size-count__total 스타일 | 수정 |
+
+🆕 새 Python CLI 커맨드:
+- `python main.py parse_order <excel_path>` → `{success, sizes[{size,quantity}], total_quantity, source_sheet, detected_format}`
+
+💡 tester 참고:
+- 테스트 방법:
+  1. `npx tsc --noEmit` 통과 확인 (통과)
+  2. `npx vite build` 통과 확인 (통과, 269KB JS / 19.3KB CSS)
+  3. Python CLI 수동 테스트: 가로형/세로형/표형 3종 엑셀 → 모두 success, 사이즈/수량 정확 추출
+  4. `dev.bat`으로 실행 → SizeSelect 페이지 → "엑셀 주문서로 선택" 버튼 → xlsx 파일 선택 → 체크박스 자동 선택 + 수량 배지 표시 확인
+  5. "수동 선택으로 돌아가기" → 체크 초기화 확인
+  6. 프리셋에 없는 사이즈가 엑셀에 있으면 경고 표시 확인
+- 정상 동작:
+  - 엑셀 업로드 시 프리셋에 등록된 사이즈만 자동 체크됨
+  - 수량은 참고 정보로만 표시 (파일 생성에는 영향 없음)
+  - 기존 수동 체크/전체선택/전체해제 기능 변함없이 동작
+- 주의할 입력:
+  - 사이즈 키워드가 없는 엑셀 → "사이즈 정보를 찾을 수 없습니다" 에러
+  - xls(구형) 파일은 미지원 (다이얼로그에서 xlsx만 필터)
+  - 수량이 없는 엑셀 → 사이즈는 추출되지만 수량 0 (배지 미표시)
+
+⚠️ reviewer 참고:
+- `_normalize_size` 정규식은 긴 키워드부터 매칭하여 "5XL"이 "XL"로 잘못 매칭되는 것을 방지
+- `read_only=True, data_only=True`로 엑셀을 열어 메모리 효율적 + 수식 대신 값 읽기
+- 수량 추출 시 "12장", "12개" 등 한국어 접미사 패턴도 처리
+- 엑셀의 여러 시트 중 가장 많은 사이즈를 찾은 시트를 자동 선택
+
 ## 테스트 결과 (tester)
 | 단계 | 판정 | 항목 | 이슈 |
 |------|------|------|------|
@@ -135,6 +179,7 @@ grader/
 | 4단계 | 통과 | 30/30 | 없음 (실제 Illustrator PDF 수동 검증 권장) |
 | 5단계 | 통과 | 10/10 | 없음 (analyze_color 3종 PDF 정확, 기존 CLI 호환, file_size 필드 정상) |
 | 6단계 | 통과 | 18/19 | analyze_color가 그레이딩 결과 PDF(Form XObject 래핑)를 Unknown으로 판정 (개선 제안) |
+| 엑셀 주문서 | 통과 | 11/11 | 없음 (가로/세로/복잡형 정확, 에러 4종 정상, 빌드 OK, 회귀 없음) |
 
 ### [2026-04-08] 6단계 E2E: 통과 (18/19, Form XObject 개선 제안 1건 -> 수정 완료)
 ### [2026-04-08] 5단계 검증: 통과 (10/10, 빌드+CLI 3종+호환성+파일크기 정상)
@@ -160,6 +205,16 @@ grader/
 **경계 조건**: 5XS(scale~0.5) 정상 / 5XL(scale~1.5) 정상 / L->L(scale 1.0) 원본과 동일 크기 / 0치수 에러 정상 / 없는 사이즈 에러 정상
 **Form XObject 재귀**: 1차 그레이딩->CMYK 감지 OK / 체인 그레이딩(2중 래핑)->CMYK 감지 OK
 
+### [2026-04-08] 엑셀 주문서 자동 인식: 통과 (11/11)
+- 빌드: tsc --noEmit 통과, vite build 통과 (269KB JS / 19.3KB CSS)
+- Python: openpyxl 3.1.5 설치 확인
+- 가로형(S~2XL 5개+수량): success, horizontal, 수량 정확(30합계)
+- 세로형(S~XL 4개+수량): success, vertical, 수량 정확(28합계)
+- 복잡형(한국어 "L사이즈/10장/5개"): success, vertical, 수량 정확(18합계)
+- 에러 4종: 사이즈 없음/빈 파일/없는 파일/인자 누락 모두 success:false + 적절한 에러 메시지 + exit code 1
+- 기존 CLI: --help에서 7개 커맨드 모두 정상 노출
+- 회귀: SizeSelect의 toggleSize/수동 체크박스 로직 영향 없음 (코드 확인)
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -180,3 +235,5 @@ grader/
 | 2026-04-08 | tester | 6단계 E2E 통합 테스트 (워크플로우+빌드+데이터흐름) | 통과 (18/19, 개선 제안 1건) |
 | 2026-04-08 | developer | Form XObject 내부 CMYK 감지 확장 (_scan_form_xobjects 추가) | 완료 (6/6) |
 | 2026-04-13 | tester | 실사용 시나리오 E2E (A3 복잡 CMYK + Form XObject 재귀) | 통과 (21/21) |
+| 2026-04-08 | developer | 엑셀 주문서 자동 인식 (order_parser.py + SizeSelect 엑셀 업로드) | 완료 |
+| 2026-04-08 | tester | 엑셀 주문서 검증 (3종 샘플+에러4종+빌드+회귀) | 통과 (11/11) |

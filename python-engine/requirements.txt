@@ -3,3 +3,5 @@
 PyMuPDF>=1.25.0
 # PDF 생성: CMYK 색상 유지하며 PDF 출력 (4단계 이후 사용)
 reportlab>=4.0
+# 엑셀 주문서 파싱: 사이즈/수량 자동 추출
+openpyxl>=3.1.0
