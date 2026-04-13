@@ -86,22 +86,8 @@ export async function saveDesigns(designs: DesignFile[]): Promise<void> {
   }
 
   try {
-    // AppData 루트 디렉토리 확인/생성
-    const dirExists = await exists("", { baseDir: BaseDirectory.AppData });
-    if (!dirExists) {
-      await mkdir("", { baseDir: BaseDirectory.AppData, recursive: true });
-    }
-
-    // designs/ 하위 폴더도 확인/생성
-    const subDirExists = await exists(DESIGNS_DIR, {
-      baseDir: BaseDirectory.AppData,
-    });
-    if (!subDirExists) {
-      await mkdir(DESIGNS_DIR, {
-        baseDir: BaseDirectory.AppData,
-        recursive: true,
-      });
-    }
+    // AppData 디렉토리 + designs/ 하위 폴더 생성 (이미 있으면 무시)
+    await mkdir(DESIGNS_DIR, { baseDir: BaseDirectory.AppData, recursive: true }).catch(() => {});
 
     // 안전장치 2: 저장 전 기존 파일을 백업
     try {

@@ -74,10 +74,8 @@ export async function saveCategories(categories: PatternCategory[]): Promise<voi
   }
 
   try {
-    const dirExists = await exists("", { baseDir: BaseDirectory.AppData });
-    if (!dirExists) {
-      await mkdir("", { baseDir: BaseDirectory.AppData, recursive: true });
-    }
+    // AppData 디렉토리 생성 (이미 있으면 무시)
+    await mkdir("", { baseDir: BaseDirectory.AppData, recursive: true }).catch(() => {});
 
     // 안전장치 2: 저장 전 기존 파일을 백업
     try {
