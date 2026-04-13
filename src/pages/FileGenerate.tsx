@@ -45,6 +45,7 @@ import type {
   GenerationStatus,
   CalcScaleResult,
   GenerateGradedResult,
+  IllustratorGradingResult,
 } from "../types/generation";
 
 /**
@@ -112,6 +113,8 @@ function FileGenerate() {
   const [globalError, setGlobalError] = useState<string>("");
   // 완료 후 결과 출력 디렉토리 (폴더 열기 버튼용)
   const [outputDir, setOutputDir] = useState<string>("");
+  // 어떤 엔진으로 처리하는지 (진행 메시지 표시용)
+  const [engineName, setEngineName] = useState<string>("");
 
   // 초기 로드: sessionStorage에서 요청 읽고 프리셋/디자인 객체 매칭
   useEffect(() => {
@@ -157,11 +160,18 @@ function FileGenerate() {
   /**
    * "파일 생성 시작" 핸들러
    *
-   * 단계:
-   *   1. 출력 디렉토리(AppData/outputs/{timestamp}) 생성
-   *   2. 프리셋 JSON을 임시 파일로 저장 (Python이 읽을 수 있도록)
-   *   3. 각 사이즈 순차 처리: calc_scale → generate_graded
-   *   4. 임시 프리셋 파일 삭제
+   * Illustrator가 설치되어 있으면 grading.jsx를 호출하여 처리하고,
+   * 없으면 기존 Python 엔진으로 폴백한다.
+   *
+   * Illustrator 방식 단계:
+   *   1. 출력 디렉토리 생성
+   *   2. Illustrator 존재 확인 + illustrator-scripts 경로 확보
+   *   3. 각 사이즈마다: 타겟 SVG 임시 파일 저장 -> config.json 작성 -> grading.jsx 실행 -> 결과 확인
+   *
+   * Python 폴백 단계:
+   *   1. 출력 디렉토리 생성
+   *   2. 프리셋 JSON 임시 파일 저장
+   *   3. 각 사이즈마다: calc_scale -> generate_graded
    */
   async function handleStart() {
     if (!request || !preset || !design) {
@@ -193,75 +203,37 @@ function FileGenerate() {
         recursive: true,
       });
 
-      // 절대 경로 확보 (Python에게 넘길 경로)
+      // 절대 경로 확보
       const appData = await appDataDir();
       const absOutputDir = await join(appData, "outputs", timestampDir);
       setOutputDir(absOutputDir);
 
-      // 2) 프리셋 JSON을 임시 파일로 저장 (Python calc_scale이 읽을 수 있도록)
-      const baseFileName = sanitizeFileName(design.name);
-      const presetJsonRel = `outputs/${timestampDir}/_preset.json`;
-      await writeTextFile(presetJsonRel, JSON.stringify(preset), {
-        baseDir: BaseDirectory.AppData,
-      });
-      const presetJsonAbs = await join(absOutputDir, "_preset.json");
+      // 2) Illustrator 존재 확인 — 없으면 Python 폴백
+      const aiExePath = await invoke<string>("find_illustrator_exe").catch(
+        () => null
+      );
 
-      // 3) 각 사이즈 순차 처리: calc_scale → generate_graded (단순 비례 스케일링)
-      // 추후 Illustrator ExtendScript 연동으로 교체 예정
-      for (const targetSize of request.selectedSizes) {
-        // 상태: 처리중
-        updateResult(targetSize, { status: "processing" });
-
-        try {
-          // 3-a) Python calc_scale 호출 → 가로/세로 비율 계산
-          const scale = await callPython<CalcScaleResult>(
-            "calc_scale",
-            [presetJsonAbs, request.baseSize, targetSize]
-          );
-
-          // 3-b) 출력 PDF 경로 결정: {디자인명}_{사이즈}.pdf
-          const outputFileName = `${baseFileName}_${targetSize}.pdf`;
-          const outputAbs = await join(absOutputDir, outputFileName);
-
-          // 3-c) Python generate_graded 호출 → 단순 비례 스케일링 PDF 생성
-          const graded = await callPython<GenerateGradedResult>(
-            "generate_graded",
-            [
-              design.storedPath,
-              outputAbs,
-              String(scale.scale_x),
-              String(scale.scale_y),
-            ]
-          );
-
-          // 상태: 성공
-          updateResult(targetSize, {
-            status: "success",
-            outputPath: graded.output_path,
-            scaleX: scale.scale_x,
-            scaleY: scale.scale_y,
-            outputWidthMm: graded.output_width_mm,
-            outputHeightMm: graded.output_height_mm,
-            fileSizeBytes: graded.file_size_bytes,
-            originalSizeBytes: graded.original_size_bytes,
-            compressionRatio: graded.compression_ratio,
-          });
-        } catch (err) {
-          // 한 사이즈 실패해도 전체 중단하지 않고 다음으로 진행
-          console.error(`사이즈 ${targetSize} 생성 실패:`, err);
-          updateResult(targetSize, {
-            status: "error",
-            errorMessage:
-              err instanceof Error ? err.message : "알 수 없는 오류",
-          });
-        }
-      }
-
-      // 4) 임시 프리셋 JSON 파일 정리 (실패해도 무시)
-      try {
-        await remove(presetJsonRel, { baseDir: BaseDirectory.AppData });
-      } catch {
-        // 무시
+      if (aiExePath) {
+        // ===== Illustrator 방식 =====
+        setEngineName("Illustrator");
+        await handleStartIllustrator(
+          aiExePath,
+          absOutputDir,
+          timestampDir,
+          request,
+          preset,
+          design
+        );
+      } else {
+        // ===== Python 폴백 =====
+        setEngineName("Python");
+        await handleStartPythonFallback(
+          absOutputDir,
+          timestampDir,
+          request,
+          preset,
+          design
+        );
       }
     } catch (err) {
       console.error("파일 생성 실패:", err);
@@ -270,6 +242,202 @@ function FileGenerate() {
       );
     } finally {
       setGenerating(false);
+    }
+  }
+
+  /**
+   * Illustrator 방식으로 각 사이즈별 그레이딩 수행.
+   *
+   * 흐름:
+   *   1. illustrator-scripts/ 폴더 경로 확보
+   *   2. 각 사이즈마다:
+   *      a. 타겟 사이즈 SVG를 임시 파일로 저장
+   *      b. config.json 작성 (grading.jsx와 같은 폴더)
+   *      c. run_illustrator_script 호출 (내부에서 result.json 폴링)
+   *      d. 결과 파싱하여 상태 업데이트
+   */
+  async function handleStartIllustrator(
+    aiExePath: string,
+    absOutputDir: string,
+    _timestampDir: string,
+    req: GenerationRequest,
+    pst: PatternPreset,
+    dsg: DesignFile
+  ) {
+    // illustrator-scripts/ 폴더 절대 경로
+    const scriptsDir = await invoke<string>("get_illustrator_scripts_path");
+    // grading.jsx 절대 경로
+    const gradingJsxPath = scriptsDir + "\\grading.jsx";
+    // config.json은 grading.jsx와 같은 폴더에 매번 덮어쓰기
+    const configJsonPath = scriptsDir + "\\config.json";
+    // result.json도 같은 폴더
+    const resultJsonPath = scriptsDir + "\\result.json";
+
+    const baseFileName = sanitizeFileName(dsg.name);
+
+    for (const targetSize of req.selectedSizes) {
+      // 상태: 처리중
+      updateResult(targetSize, { status: "processing" });
+
+      try {
+        // 2-a) 타겟 사이즈의 SVG 데이터를 가져온다
+        // 프리셋의 첫 번째 조각(pieces[0])에서 svgBySize를 찾는다
+        // 왜 pieces[0]인가: 현재 MVP에서는 단일 조각(앞판)만 사용하기 때문
+        let targetSvgData: string | undefined;
+        for (const piece of pst.pieces) {
+          if (piece.svgBySize && piece.svgBySize[targetSize]) {
+            targetSvgData = piece.svgBySize[targetSize];
+            break;
+          }
+        }
+
+        if (!targetSvgData) {
+          throw new Error(
+            `프리셋 "${pst.name}"에 사이즈 "${targetSize}"의 SVG 데이터가 없습니다.`
+          );
+        }
+
+        // 2-b) 타겟 SVG를 임시 파일로 저장
+        // illustrator-scripts/ 폴더에 저장하여 Illustrator가 접근 가능하게 함
+        const tempSvgPath = scriptsDir + `\\temp_pattern_${targetSize}.svg`;
+        // 절대 경로에 직접 쓰기 위해 Rust invoke 대신 plugin-fs 사용
+        // writeTextFile은 절대 경로일 때 baseDir를 생략한다
+        await writeTextFile(tempSvgPath, targetSvgData);
+
+        // 2-c) 출력 PDF 경로 결정
+        const outputFileName = `${baseFileName}_${targetSize}.pdf`;
+        const outputPdfPath = await join(absOutputDir, outputFileName);
+
+        // 2-d) config.json 작성 (grading.jsx가 읽는 형식)
+        const config = {
+          designPdfPath: dsg.storedPath,         // 기준 디자인 PDF (색상 추출용)
+          patternSvgPath: tempSvgPath,           // 타겟 사이즈 SVG (틀)
+          outputPdfPath: outputPdfPath,           // 출력 PDF 경로
+          resultJsonPath: resultJsonPath,         // 결과 마커 파일 경로
+        };
+        await writeTextFile(configJsonPath, JSON.stringify(config));
+
+        // 2-e) Illustrator로 grading.jsx 실행
+        // run_illustrator_script는 내부에서 result.json을 폴링하여 완료를 감지한다
+        // 타임아웃 60초 (사이즈당 10~30초 예상, 여유 확보)
+        const resultRaw = await invoke<string>("run_illustrator_script", {
+          illustratorExe: aiExePath,
+          scriptPath: gradingJsxPath,
+          resultJsonPath: resultJsonPath,
+          timeoutSecs: 60,
+        });
+
+        // 2-f) 결과 파싱
+        const result: IllustratorGradingResult = JSON.parse(resultRaw);
+
+        if (result.success) {
+          // 성공
+          updateResult(targetSize, {
+            status: "success",
+            outputPath: result.outputPath,
+          });
+        } else {
+          // Illustrator 내부에서 실패
+          throw new Error(result.message || "Illustrator 처리 실패");
+        }
+
+        // 2-g) 임시 SVG 파일 정리 (실패해도 무시)
+        try {
+          await remove(tempSvgPath);
+        } catch {
+          // 무시
+        }
+      } catch (err) {
+        // 한 사이즈 실패해도 전체 중단하지 않고 다음으로 진행
+        console.error(`사이즈 ${targetSize} Illustrator 생성 실패:`, err);
+        updateResult(targetSize, {
+          status: "error",
+          errorMessage:
+            err instanceof Error ? err.message : "알 수 없는 오류",
+        });
+      }
+    }
+
+    // config.json 정리 (마지막 사이즈 처리 후)
+    try {
+      await remove(configJsonPath);
+    } catch {
+      // 무시
+    }
+  }
+
+  /**
+   * Python 폴백 방식 (기존 로직).
+   * Illustrator가 없는 환경에서 calc_scale + generate_graded를 사용한다.
+   */
+  async function handleStartPythonFallback(
+    absOutputDir: string,
+    timestampDir: string,
+    req: GenerationRequest,
+    pst: PatternPreset,
+    dsg: DesignFile
+  ) {
+    const baseFileName = sanitizeFileName(dsg.name);
+    const presetJsonRel = `outputs/${timestampDir}/_preset.json`;
+    await writeTextFile(presetJsonRel, JSON.stringify(pst), {
+      baseDir: BaseDirectory.AppData,
+    });
+    const presetJsonAbs = await join(absOutputDir, "_preset.json");
+
+    for (const targetSize of req.selectedSizes) {
+      // 상태: 처리중
+      updateResult(targetSize, { status: "processing" });
+
+      try {
+        // Python calc_scale 호출 -> 가로/세로 비율 계산
+        const scale = await callPython<CalcScaleResult>("calc_scale", [
+          presetJsonAbs,
+          req.baseSize,
+          targetSize,
+        ]);
+
+        // 출력 PDF 경로 결정
+        const outputFileName = `${baseFileName}_${targetSize}.pdf`;
+        const outputAbs = await join(absOutputDir, outputFileName);
+
+        // Python generate_graded 호출 -> 단순 비례 스케일링 PDF 생성
+        const graded = await callPython<GenerateGradedResult>(
+          "generate_graded",
+          [
+            dsg.storedPath,
+            outputAbs,
+            String(scale.scale_x),
+            String(scale.scale_y),
+          ]
+        );
+
+        // 상태: 성공
+        updateResult(targetSize, {
+          status: "success",
+          outputPath: graded.output_path,
+          scaleX: scale.scale_x,
+          scaleY: scale.scale_y,
+          outputWidthMm: graded.output_width_mm,
+          outputHeightMm: graded.output_height_mm,
+          fileSizeBytes: graded.file_size_bytes,
+          originalSizeBytes: graded.original_size_bytes,
+          compressionRatio: graded.compression_ratio,
+        });
+      } catch (err) {
+        console.error(`사이즈 ${targetSize} Python 생성 실패:`, err);
+        updateResult(targetSize, {
+          status: "error",
+          errorMessage:
+            err instanceof Error ? err.message : "알 수 없는 오류",
+        });
+      }
+    }
+
+    // 임시 프리셋 JSON 파일 정리
+    try {
+      await remove(presetJsonRel, { baseDir: BaseDirectory.AppData });
+    } catch {
+      // 무시
     }
   }
 
@@ -379,7 +547,7 @@ function FileGenerate() {
           )}
           {generating && (
             <span className="design-progress">
-              생성 중... ({successCount + errorCount}/{totalCount} 완료
+              {engineName ? `${engineName}로 처리 중` : "생성 중"}... ({successCount + errorCount}/{totalCount} 완료
               {processingCount > 0 ? `, ${processingCount}개 처리중` : ""})
             </span>
           )}

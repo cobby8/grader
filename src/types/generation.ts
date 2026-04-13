@@ -78,6 +78,13 @@ export interface GenerateGradedResult {
   error?: string;
 }
 
+/** Illustrator grading.jsx 실행 결과 (result.json에서 읽음) */
+export interface IllustratorGradingResult {
+  success: boolean;
+  outputPath: string;       // 생성된 PDF 절대 경로
+  message: string;          // 완료/에러 메시지
+}
+
 /** Python generate_by_pieces 명령 응답 (조각별 채워넣기 방식) */
 export interface GenerateByPiecesResult {
   success: boolean;

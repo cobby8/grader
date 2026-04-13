@@ -741,6 +741,28 @@ tester 참고:
 - 핵심 검증: 출력 PDF에서 패턴 조각들이 디자인 배경색으로 채워져 있는지 확인
 - 주의: PDF 열기 시 다이얼로그 방지를 위해 PDFFileOptions 사용
 
+### [2026-04-08] FileGenerate Illustrator grading.jsx 자동 호출 연동
+
+구현한 기능: FileGenerate 페이지에서 Illustrator grading.jsx를 자동 호출하여 모든 사이즈 자동 생성
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| src/types/generation.ts | IllustratorGradingResult 타입 추가 | 수정 |
+| src/pages/FileGenerate.tsx | handleStart를 AI/Python 분기 + handleStartIllustrator + handleStartPythonFallback | 수정 |
+
+동작 흐름 (Illustrator 방식):
+1. find_illustrator_exe로 AI 설치 확인 (없으면 Python 폴백)
+2. get_illustrator_scripts_path로 scripts 폴더 경로 확보
+3. 각 사이즈마다: svgBySize에서 SVG 추출 -> 임시 파일 저장 -> config.json 작성 -> run_illustrator_script 호출 -> result.json 결과 확인
+4. 임시 파일 정리
+
+tester 참고:
+- Illustrator 설치 환경: AI로 처리 중... 메시지 + 각 사이즈 순차 처리
+- Illustrator 미설치 환경: 기존 Python 방식으로 자동 폴백
+- 타임아웃: 사이즈당 60초
+- 한 사이즈 실패해도 다음 사이즈 계속 진행
+- npx tsc --noEmit 통과, npx vite build 통과 (305.78 KB JS / 23.80 KB CSS)
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -763,3 +785,4 @@ tester 참고:
 | 2026-04-08 | developer | 데이터 보호 안전장치 (3 store 로드/저장 빈배열 차단 + 백업) | 완료 |
 | 2026-04-08 | developer | SVG 아트보드 자동 보정 (normalize_artboard: viewBox 확장 1580x2000mm) | 완료 |
 | 2026-04-08 | developer | SVG 패턴 클리핑 마스크+bleed 적용 + 좌표계 버그 수정 + 조각별 채워넣기 | 완료 |
+| 2026-04-08 | developer | FileGenerate Illustrator grading.jsx 자동 호출 연동 (AI 있으면 AI방식, 없으면 Python 폴백) | 완료 |
