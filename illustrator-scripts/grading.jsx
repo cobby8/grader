@@ -338,13 +338,8 @@ function main() {
             throw new Error("디자인 PDF를 찾을 수 없습니다: " + config.designPdfPath);
         }
 
-        // PDF 열기 옵션 설정 — 다이얼로그 팝업 방지
-        var pdfOpenOpts = new PDFFileOptions();
-        pdfOpenOpts.pageToOpen = 1;                         // 첫 페이지만
-        pdfOpenOpts.pDFCropToBox = PDFBoxType.PDFARTBOX;    // 아트보드 기준으로 크롭
-
-        // CMYK 색상 공간으로 열기 (디자인이 CMYK일 것이므로)
-        designDoc = app.open(designFile, DocumentColorSpace.CMYK, pdfOpenOpts);
+        // 디자인 PDF 열기 (단순하게 — 다이얼로그가 뜨면 수동 확인)
+        designDoc = app.open(designFile);
         $.writeln("[grading.jsx] 디자인 PDF 열림: " + designDoc.name);
 
         // 배경 메인 색상 추출
