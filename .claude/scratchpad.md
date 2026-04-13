@@ -166,6 +166,7 @@ doc.save(output_path, deflate=True, garbage=4, clean=True)
 | 회차 | 날짜 | 수정 내용 | 수정 파일 | 사유 |
 |------|------|----------|----------|------|
 | 1차 | 2026-04-08 | Form XObject 내부 CMYK 감지 확장 | python-engine/pdf_handler.py | 6단계 E2E 발견: 그레이딩 결과 PDF(Form XObject 래핑) 재분석 시 Unknown 오판정 |
+| 2차 | 2026-04-08 | CTM 방식 → 새 문서+clip 방식으로 전면 교체 | python-engine/pdf_grader.py | 버그 2건: 축소 시 CropBox ValueError + 출력이 원본과 동일 |
 
 **1차 수정 상세 (2026-04-08) — Form XObject 내부 CMYK 감지 확장**
 - **문제**: `pdf_grader.generate_graded_pdf`가 `show_pdf_page`로 원본을 Form XObject(/fzFrm0)로 래핑하여 저장 → 결과 PDF의 최상위 콘텐츠 스트림에는 `Do` 연산자만 있고 실제 `k/K`는 Form XObject 내부 스트림에 보존됨 → 기존 `page.read_contents()`만 스캔하는 `analyze_color_space_detailed`는 그레이딩 결과를 `overall: "Unknown"`으로 오판정
@@ -178,6 +179,24 @@ doc.save(output_path, deflate=True, garbage=4, clean=True)
   - 빌드: `npx tsc --noEmit` 통과, `npx vite build` 통과 (266.90 KB JS / 18.38 KB CSS — 이전과 동일)
 - **실제 변경 파일**: `python-engine/pdf_handler.py` 단일 파일 (신규 함수 +70줄, 기존 함수 +25줄 병합 로직)
 - **주의**: 프론트 TS 코드/타입/UI는 변경 없음 (백엔드 감지 로직만 확장). 사용자는 그레이딩 결과 재업로드 시 이제 CMYK 배지가 정상 표시됨.
+
+**2차 수정 상세 (2026-04-08) — CTM 방식 버그 2건 수정: 새 문서+clip 방식으로 전면 교체**
+- **문제 1**: 축소 사이즈(XS, S 등)에서 `set_mediabox(축소된 크기)` 호출 시 기존 CropBox보다 작아서 `ValueError: CropBox not in MediaBox` 발생
+- **문제 2**: 출력 PDF가 원본과 거의 동일(99% 크기) — `update_stream(xrefs[0], ...)` 이 첫 xref만 교체하고 나머지 원본 스트림이 그대로 렌더링됨
+- **수정**: `generate_graded_pdf`를 CTM 직접 삽입 방식에서 **새 문서 + show_pdf_page clip** 방식으로 전면 교체
+  - 원본을 읽기 전용으로 열고, 새 빈 문서(`fitz.open()`)에 페이지를 생성
+  - `show_pdf_page(target_rect, src_doc, page_num, clip=artboard, keep_proportion=False)` 사용
+  - clip 파라미터로 TrimBox(아트보드) 영역만 클리핑 + target rect로 자동 스케일링
+  - CropBox/MediaBox를 직접 설정하지 않으므로 순서 충돌 없음
+  - CTM 스트림을 삽입하지 않으므로 스트림 교체 누락 문제 없음
+  - `method` 반환값을 `"ctm"` → `"clip"`으로 변경
+- **검증 (3/3 통과)**:
+  - 확대(1.1x, 1.15x): 210x297mm → 231x341.55mm (정확, 실제 페이지 크기 일치)
+  - 축소(0.85x, 0.87x): 210x297mm → 178.5x258.39mm (에러 없음, 크기 정확)
+  - TrimBox 크롭+축소(0.8x, 0.85x): 600x800pt → 480x680pt (169.33x239.89mm, 정확)
+  - 빌드: `tsc --noEmit` 통과, `vite build` 통과 (304.77 KB JS / 23.80 KB CSS)
+- **실제 변경 파일**: `python-engine/pdf_grader.py` 단일 파일 (generate_graded_pdf 함수 전면 교체)
+- **주의**: 레거시 함수 `generate_graded_pdf_legacy`는 그대로 유지 (폴백용). 프론트 TS 코드 변경 없음.
 
 ### [2026-04-08] 확장: 엑셀 주문서 자동 인식
 
