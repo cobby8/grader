@@ -550,6 +550,78 @@ html, body, #root {
   max-width: 300px;
 }
 
+/* 조각 이름 행 (이름 + 사이즈 배지 가로 정렬) */
+.piece-item__name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 사이즈 배지: "13 사이즈" 같은 정보 표시 */
+.piece-item__size-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--color-bg-surface);
+  background-color: var(--color-accent);
+  border-radius: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* 사이즈 목록 텍스트 (XS, S, M, L, XL ...) */
+.piece-item__size-list {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 400px;
+}
+
+/* --- 드래그앤드롭 존 --- */
+.drop-zone {
+  border: 2px dashed var(--color-border-dashed);
+  border-radius: var(--radius-md);
+  padding: 28px 20px;
+  text-align: center;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast);
+  margin-bottom: 16px;
+  cursor: default;
+}
+
+/* 드래그 오버 시 시각 피드백 (테두리 강조 + 배경 연하게) */
+.drop-zone--active {
+  border-color: var(--color-accent);
+  background-color: var(--color-accent-soft);
+}
+
+.drop-zone__icon {
+  font-size: 2rem;
+  margin-bottom: 8px;
+  opacity: 0.6;
+}
+
+.drop-zone__text {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-text-dark);
+  margin-bottom: 4px;
+}
+
+.drop-zone__hint {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  margin-bottom: 16px;
+}
+
+.drop-zone__buttons {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
 /* --- 사이즈 치수 테이블 --- */
 .size-table-wrapper {
   overflow-x: auto; /* 조각이 많으면 가로 스크롤 */

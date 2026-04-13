@@ -180,6 +180,7 @@ grader/
 | 5단계 | 통과 | 10/10 | 없음 (analyze_color 3종 PDF 정확, 기존 CLI 호환, file_size 필드 정상) |
 | 6단계 | 통과 | 18/19 | analyze_color가 그레이딩 결과 PDF(Form XObject 래핑)를 Unknown으로 판정 (개선 제안) |
 | 엑셀 주문서 | 통과 | 11/11 | 없음 (가로/세로/복잡형 정확, 에러 4종 정상, 빌드 OK, 회귀 없음) |
+| 다중 업로드 | 통과 | 11/11 | 없음 (tsc+vite+cargo 통과, 핵심 함수 존재, invoke_handler 등록, 하위 호환 OK) |
 
 ### [2026-04-08] 6단계 E2E: 통과 (18/19, Form XObject 개선 제안 1건 -> 수정 완료)
 ### [2026-04-08] 5단계 검증: 통과 (10/10, 빌드+CLI 3종+호환성+파일크기 정상)
@@ -215,6 +216,54 @@ grader/
 - 기존 CLI: --help에서 7개 커맨드 모두 정상 노출
 - 회귀: SizeSelect의 toggleSize/수동 체크박스 로직 영향 없음 (코드 확인)
 
+### [2026-04-08] 패턴 다중 업로드 + 드래그앤드롭 + 폴더 + 사이즈 자동 추출
+
+📝 구현 요약:
+- PatternPiece 타입에 `svgBySize?: Record<string, string>` 필드 추가 (하위 호환)
+- Rust `list_svg_files` 커맨드 추가 — 폴더 내 .svg 파일 경로 목록 반환
+- PatternManage.tsx 전면 개선:
+  - 다중 파일 선택 (`multiple: true`)
+  - Tauri `onDragDropEvent` 기반 드래그앤드롭 (파일/폴더 모두 지원)
+  - "폴더로 등록" 버튼 — 폴더 선택 → SVG 스캔 → 파일명에서 사이즈 자동 추출 → svgBySize로 그룹핑
+  - 폴더명 → 프리셋 이름 자동 설정
+  - 조각명 자동 추출 (파일명에서 사이즈 부분 제거)
+  - 사이즈 배지 ("13 사이즈") + 사이즈 목록 텍스트 표시
+- 드래그앤드롭 존 UI + CSS (BEM + CSS 변수)
+
+| 파일 | 변경 | 신규/수정 |
+|------|------|----------|
+| src/types/pattern.ts | PatternPiece에 svgBySize 선택적 필드 추가 | 수정 |
+| src-tauri/src/lib.rs | list_svg_files Rust 커맨드 추가 + invoke_handler 등록 | 수정 |
+| src/pages/PatternManage.tsx | 다중 선택 + 드래그앤드롭 + 폴더 업로드 + 사이즈 그룹핑 + 드롭존 UI | 수정 |
+| src/App.css | drop-zone, piece-item__size-badge, piece-item__size-list 스타일 추가 | 수정 |
+
+💡 tester 참고:
+- 테스트 방법:
+  1. `npx tsc --noEmit` 통과 확인 (통과)
+  2. `npx vite build` 통과 확인 (통과, 289.94 KB JS / 20.39 KB CSS)
+  3. `cargo check` 통과 확인 (통과)
+  4. `dev.bat`으로 실행 → "새 프리셋 추가" → 드롭존 표시되는지 확인
+  5. "파일 선택 (다중)" → 여러 SVG 선택 → 조각 추가 확인
+  6. "폴더로 등록" → 사이즈별 SVG가 들어있는 폴더 선택 → 자동 그룹핑 + 사이즈 배지 표시 확인
+  7. SVG 파일/폴더를 드래그앤드롭 → 동일하게 동작 확인
+  8. 폴더명이 프리셋 이름으로 자동 설정되는지 확인
+  9. 기존 프리셋 편집 → 기존 데이터 정상 로드 확인 (하위 호환)
+- 정상 동작:
+  - 파일명에 사이즈 키워드(2XL 등)가 있으면 자동 그룹핑됨
+  - 사이즈 키워드가 없는 파일은 개별 조각으로 추가됨
+  - svgBySize가 없는 기존 프리셋도 정상 동작 (하위 호환)
+  - 드래그앤드롭 안 되는 환경에서도 버튼으로 동작
+- 주의할 입력:
+  - 폴더에 SVG가 아닌 파일이 섞여있어도 .svg만 필터링됨
+  - 빈 폴더 선택 시 "SVG 파일이 없습니다" 알림
+  - 사이즈 키워드가 파일명 마지막이 아닌 위치에 있으면 추출 안됨 (예: "2XL_앞판.svg")
+
+⚠️ reviewer 참고:
+- svgBySize는 선택적 필드(`?`)로 기존 데이터 완전 호환
+- Tauri `onDragDropEvent`는 편집 모드 진입 시에만 리스닝, 목록 모드 전환 시 unlisten
+- 드롭 시 경로가 폴더인지 파일인지 구분: `list_svg_files` invoke 성공 → 폴더, 실패 → 파일
+- 대표 SVG 선택 우선순위: M → L → 첫 번째
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -226,8 +275,6 @@ grader/
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-04-10 | developer | 3단계: Python엔진(PyMuPDF) + DesignUpload(업로드/CMYK/미리보기) | 완료 |
-| 2026-04-10 | tester | 3단계 재검증 | 최종 통과 |
 | 2026-04-10 | developer | 4단계: SizeSelect/FileGenerate + pattern_scaler/pdf_grader (CMYK 보존) | 완료 |
 | 2026-04-10 | tester | 4단계 검증 | 통과 (30/30) |
 | 2026-04-08 | developer | 5단계: analyze_color + 벡터 연산자 감지 + 파일 크기 리포트 + 상세 배지 UI | 완료 |
@@ -237,3 +284,4 @@ grader/
 | 2026-04-13 | tester | 실사용 시나리오 E2E (A3 복잡 CMYK + Form XObject 재귀) | 통과 (21/21) |
 | 2026-04-08 | developer | 엑셀 주문서 자동 인식 (order_parser.py + SizeSelect 엑셀 업로드) | 완료 |
 | 2026-04-08 | tester | 엑셀 주문서 검증 (3종 샘플+에러4종+빌드+회귀) | 통과 (11/11) |
+| 2026-04-08 | developer | 패턴 다중 업로드+드래그앤드롭+폴더+사이즈 자동 추출 | 완료 |

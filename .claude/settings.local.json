@@ -122,7 +122,12 @@
       "Bash(echo \"Exit code: $?\")",
       "Bash(./venv/Scripts/python.exe main.py parse_order C:/Users/user/AppData/Local/Temp/grader_test_gmxft8rr/empty.xlsx)",
       "Bash(./venv/Scripts/python.exe main.py parse_order C:/Users/user/AppData/Local/Temp/grader_test_gmxft8rr/nonexist.xlsx)",
-      "Bash(./venv/Scripts/python.exe main.py parse_order)"
+      "Bash(./venv/Scripts/python.exe main.py parse_order)",
+      "Bash(cmd //c dev.bat)",
+      "Bash(cmd.exe /c \"call \\\\\"C:\\\\\\\\Program Files \\(x86\\)\\\\\\\\Microsoft Visual Studio\\\\\\\\2022\\\\\\\\BuildTools\\\\\\\\VC\\\\\\\\Auxiliary\\\\\\\\Build\\\\\\\\vcvarsall.bat\\\\\" x64 >nul 2>&1 && set PATH=%USERPROFILE%\\\\\\\\.cargo\\\\\\\\bin;%PATH% && npm run tauri dev\")",
+      "Bash(cmd.exe //c dev.bat)",
+      "Bash(cmd.exe:*)",
+      "Bash(/c/Users/user/.cargo/bin/cargo check:*)"
     ]
   }
 }

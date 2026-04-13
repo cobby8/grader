@@ -8,6 +8,41 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+/// 지정된 디렉토리 내의 .svg 파일 경로 목록을 반환한다.
+/// 프론트에서 폴더를 선택했을 때, 그 폴더 안의 SVG 파일들을 스캔하기 위해 사용.
+#[tauri::command]
+fn list_svg_files(dir_path: String) -> Result<Vec<String>, String> {
+    let path = std::path::Path::new(&dir_path);
+    if !path.is_dir() {
+        return Err(format!("디렉토리가 아닙니다: {}", dir_path));
+    }
+
+    let mut svg_files: Vec<String> = Vec::new();
+
+    // 디렉토리 내 파일 목록을 읽고, .svg 확장자만 필터링
+    let entries = std::fs::read_dir(path)
+        .map_err(|e| format!("디렉토리 읽기 실패: {}", e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("항목 읽기 실패: {}", e))?;
+        let file_path = entry.path();
+
+        // 파일이고, 확장자가 .svg인 경우만 추가
+        if file_path.is_file() {
+            if let Some(ext) = file_path.extension() {
+                if ext.to_string_lossy().to_lowercase() == "svg" {
+                    svg_files.push(file_path.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
+
+    // 파일명 기준으로 정렬 (일관된 순서 보장)
+    svg_files.sort();
+
+    Ok(svg_files)
+}
+
 /// Python 엔진 폴더의 절대 경로를 찾는다.
 /// 개발 시에는 프로젝트 루트 기준으로 `python-engine/` 폴더를 찾는다.
 /// - tauri 개발 모드: src-tauri의 부모 폴더 = 프로젝트 루트
@@ -110,7 +145,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())  // 파일 선택 다이얼로그
         .plugin(tauri_plugin_fs::init())      // 파일 읽기/쓰기
-        .invoke_handler(tauri::generate_handler![greet, run_python])
+        .invoke_handler(tauri::generate_handler![greet, run_python, list_svg_files])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

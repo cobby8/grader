@@ -1,21 +1,92 @@
 /**
  * PatternManage 페이지
- * 1단계: SVG 패턴(옷 조각) 프리셋을 등록하고 관리하는 페이지.
+ * SVG 패턴(옷 조각) 프리셋을 등록하고 관리하는 페이지.
  *
  * 두 가지 화면(모드)이 있다:
  * 1) 목록 모드: 등록된 프리셋 카드 목록 + "새 프리셋 추가" 버튼
  * 2) 편집 모드: 프리셋 이름 입력, 조각 추가/삭제, 사이즈별 치수 입력
+ *
+ * 개선사항 (2026-04-08):
+ * - SVG 다중 파일 선택 지원
+ * - 드래그 앤 드롭 지원 (Tauri onDragDropEvent)
+ * - 폴더 업로드 → 파일명에서 사이즈 자동 추출 → svgBySize로 그룹핑
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, Fragment } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { PatternPreset, PatternPiece, SizeSpec } from "../types/pattern";
 import { SIZE_LIST } from "../types/pattern";
 import { loadPresets, savePresets, generateId } from "../stores/presetStore";
 
 /** 편집 모드 상태 타입 */
 type EditMode = "list" | "create" | "edit";
+
+// === 유틸리티 함수 ===
+
+/**
+ * 파일명에서 사이즈를 추출한다.
+ * 예: "농구유니폼_U넥_스탠다드_암홀X_2XL.svg" → "2XL"
+ * 마지막 언더스코어(_) 이후, .svg 확장자 이전 부분을 사이즈 키워드와 매칭.
+ */
+function extractSizeFromFilename(filename: string): string | null {
+  // .svg 확장자 제거
+  const nameWithoutExt = filename.replace(/\.svg$/i, "");
+  // 마지막 _ 이후 부분 추출
+  const lastPart = nameWithoutExt.split("_").pop() || "";
+  // 사이즈 키워드와 매칭 (대소문자 무시)
+  const normalized = lastPart.toUpperCase().replace(/\s/g, "");
+  // 긴 키워드부터 매칭해야 "5XL"이 "XL"로 잘못 매칭되지 않는다
+  const sizes = [
+    "5XS", "4XS", "3XS", "2XS", "XS",
+    "S", "M", "L",
+    "XL", "2XL", "3XL", "4XL", "5XL",
+  ];
+  if (sizes.includes(normalized)) return normalized;
+  return null;
+}
+
+/**
+ * 파일명에서 사이즈 부분을 제거하여 조각명을 추출한다.
+ * 예: "농구유니폼_U넥_스탠다드_암홀X_2XL.svg" → "농구유니폼_U넥_스탠다드_암홀X"
+ */
+function extractPieceNameFromFilename(filename: string): string {
+  const nameWithoutExt = filename.replace(/\.svg$/i, "");
+  const parts = nameWithoutExt.split("_");
+  const lastPart = parts[parts.length - 1] || "";
+  const normalized = lastPart.toUpperCase().replace(/\s/g, "");
+  const sizes = [
+    "5XS", "4XS", "3XS", "2XS", "XS",
+    "S", "M", "L",
+    "XL", "2XL", "3XL", "4XL", "5XL",
+  ];
+  // 마지막 부분이 사이즈면 제거하고 나머지를 조각명으로
+  if (sizes.includes(normalized)) {
+    return parts.slice(0, -1).join("_");
+  }
+  // 사이즈가 아니면 전체를 조각명으로
+  return nameWithoutExt;
+}
+
+/**
+ * 경로에서 파일명만 추출한다.
+ * 예: "C:/path/to/file.svg" → "file.svg"
+ */
+function getFilenameFromPath(filePath: string): string {
+  return filePath.split(/[\\/]/).pop() || "unknown.svg";
+}
+
+/**
+ * 경로에서 폴더명만 추출한다.
+ * 예: "C:/path/to/폴더명" → "폴더명"
+ */
+function getFolderNameFromPath(dirPath: string): string {
+  // 끝에 슬래시가 있으면 제거
+  const cleaned = dirPath.replace(/[\\/]+$/, "");
+  return cleaned.split(/[\\/]/).pop() || "프리셋";
+}
 
 function PatternManage() {
   // === 상태 관리 ===
@@ -31,12 +102,55 @@ function PatternManage() {
   const [loading, setLoading] = useState(true);  // 초기 로딩 상태
   const [saving, setSaving] = useState(false);   // 저장 중 상태
 
+  // 드래그앤드롭 상태
+  const [isDragOver, setIsDragOver] = useState(false); // 드래그 오버 중인지
+  const dropZoneRef = useRef<HTMLDivElement>(null);     // 드롭존 DOM 참조
+
   // === 앱 시작 시 프리셋 로드 ===
   useEffect(() => {
     loadPresets()
       .then((data) => setPresets(data))
       .finally(() => setLoading(false));
   }, []);
+
+  // === Tauri 드래그앤드롭 이벤트 리스닝 ===
+  // 편집 모드일 때만 리스닝 (목록 모드에서는 불필요)
+  useEffect(() => {
+    if (mode === "list") return;
+
+    let unlisten: (() => void) | null = null;
+
+    const setupDragDrop = async () => {
+      try {
+        unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+          if (event.payload.type === "over") {
+            // 드래그가 웹뷰 위에 있을 때 시각 피드백
+            setIsDragOver(true);
+          } else if (event.payload.type === "leave") {
+            // 드래그가 웹뷰를 떠날 때
+            setIsDragOver(false);
+          } else if (event.payload.type === "drop") {
+            // 파일이 드롭되었을 때
+            setIsDragOver(false);
+            const paths: string[] = event.payload.paths;
+            if (paths.length > 0) {
+              handleDroppedPaths(paths);
+            }
+          }
+        });
+      } catch (err) {
+        console.warn("드래그앤드롭 이벤트 등록 실패 (무시):", err);
+      }
+    };
+
+    setupDragDrop();
+
+    // 클린업: 리스너 해제
+    return () => {
+      if (unlisten) unlisten();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
 
   // === 프리셋 저장 (presets 상태가 바뀔 때마다 파일에 자동 저장) ===
   const persistPresets = useCallback(async (updated: PatternPreset[]) => {
@@ -77,49 +191,256 @@ function PatternManage() {
     await persistPresets(updated);
   };
 
-  // === SVG 파일 선택 및 추가 ===
-  const handleAddPiece = async () => {
+  // === SVG 파일 여러 개 선택 및 추가 (다중 선택) ===
+  const handleAddPieces = async () => {
     try {
-      // Tauri 파일 다이얼로그로 SVG 파일 선택
-      const filePath = await open({
-        title: "패턴 조각 SVG 파일 선택",
+      // Tauri 파일 다이얼로그로 SVG 파일 다중 선택
+      const result = await open({
+        title: "패턴 조각 SVG 파일 선택 (여러 개 가능)",
         filters: [{ name: "SVG 파일", extensions: ["svg"] }],
-        multiple: false,
+        multiple: true,  // 다중 선택 활성화
       });
 
-      if (!filePath) return; // 사용자가 취소한 경우
+      if (!result) return; // 사용자가 취소한 경우
 
-      // SVG 파일 내용 읽기
-      const svgData = await readTextFile(filePath as string);
+      // result는 multiple=true일 때 string[] 또는 string
+      const filePaths: string[] = Array.isArray(result) ? result : [result];
+      if (filePaths.length === 0) return;
 
-      // 파일명에서 확장자를 제거하여 기본 이름으로 사용
-      const fileName = (filePath as string).split(/[\\/]/).pop() || "조각";
-      const defaultName = fileName.replace(/\.svg$/i, "");
-
-      // 새 조각 생성
-      const newPiece: PatternPiece = {
-        id: generateId(),
-        name: defaultName,
-        svgPath: filePath as string,
-        svgData,
-      };
-
-      const updatedPieces = [...formPieces, newPiece];
-      setFormPieces(updatedPieces);
-
-      // 모든 사이즈의 pieces 배열에 새 조각의 빈 치수를 추가
-      setFormSizes((prev) =>
-        prev.map((sizeSpec) => ({
-          ...sizeSpec,
-          pieces: [
-            ...sizeSpec.pieces,
-            { pieceId: newPiece.id, width: 0, height: 0 },
-          ],
-        }))
-      );
+      // 선택한 파일들을 조각으로 추가
+      await addSvgFilesAsPieces(filePaths);
     } catch (err) {
       console.error("SVG 파일 추가 실패:", err);
     }
+  };
+
+  // === 폴더 선택 → 내부 SVG 파일 스캔 → 사이즈별 그룹핑 ===
+  const handleAddFolder = async () => {
+    try {
+      // 폴더 선택 다이얼로그
+      const dirPath = await open({
+        title: "패턴 폴더 선택 (SVG 파일이 들어있는 폴더)",
+        directory: true,  // 폴더 선택 모드
+        multiple: false,
+      });
+
+      if (!dirPath) return;
+
+      // Rust 커맨드로 폴더 내 SVG 파일 목록 가져오기
+      const svgFiles: string[] = await invoke("list_svg_files", {
+        dirPath: dirPath as string,
+      });
+
+      if (svgFiles.length === 0) {
+        alert("선택한 폴더에 SVG 파일이 없습니다.");
+        return;
+      }
+
+      // 폴더명으로 프리셋 이름 자동 설정 (이름이 비어있을 때만)
+      if (!formName.trim()) {
+        setFormName(getFolderNameFromPath(dirPath as string));
+      }
+
+      // 사이즈 추출이 가능한지 확인하여 그룹핑 또는 개별 추가 결정
+      await addSvgFilesWithSizeGrouping(svgFiles);
+    } catch (err) {
+      console.error("폴더 등록 실패:", err);
+    }
+  };
+
+  // === 드롭된 파일/폴더 경로 처리 ===
+  const handleDroppedPaths = async (paths: string[]) => {
+    try {
+      // 각 경로가 폴더인지 파일인지 확인
+      // 간단한 접근: 경로 중 하나라도 폴더면 폴더 모드로 처리
+      // (Tauri에서는 드롭 시 파일 경로만 전달, 폴더일 수도 있음)
+
+      const allSvgPaths: string[] = [];
+
+      for (const p of paths) {
+        // 폴더인 경우: Rust 커맨드로 내부 SVG 파일 목록 가져오기
+        try {
+          const svgFiles: string[] = await invoke("list_svg_files", {
+            dirPath: p,
+          });
+          // list_svg_files가 성공하면 폴더임
+          allSvgPaths.push(...svgFiles);
+
+          // 폴더명으로 프리셋 이름 자동 설정 (비어있을 때)
+          if (!formName.trim()) {
+            setFormName(getFolderNameFromPath(p));
+          }
+        } catch {
+          // 폴더가 아닌 경우 → 파일로 간주
+          const filename = getFilenameFromPath(p);
+          if (filename.toLowerCase().endsWith(".svg")) {
+            allSvgPaths.push(p);
+          }
+        }
+      }
+
+      if (allSvgPaths.length === 0) {
+        alert("SVG 파일이 없습니다. SVG 파일이나 SVG가 포함된 폴더를 드롭하세요.");
+        return;
+      }
+
+      // 사이즈 그룹핑 시도
+      await addSvgFilesWithSizeGrouping(allSvgPaths);
+    } catch (err) {
+      console.error("드롭 처리 실패:", err);
+    }
+  };
+
+  // === SVG 파일들을 사이즈별로 그룹핑하여 조각으로 추가 ===
+  const addSvgFilesWithSizeGrouping = async (filePaths: string[]) => {
+    // 파일명에서 사이즈를 추출하여 조각명별로 그룹핑
+    // { "농구유니폼_U넥_스탠다드_암홀X": { "2XL": "path", "L": "path", ... } }
+    const grouped = new Map<string, Map<string, string>>();
+    const ungrouped: string[] = []; // 사이즈 추출 실패한 파일
+
+    for (const fp of filePaths) {
+      const filename = getFilenameFromPath(fp);
+      const size = extractSizeFromFilename(filename);
+
+      if (size) {
+        const pieceName = extractPieceNameFromFilename(filename);
+        if (!grouped.has(pieceName)) {
+          grouped.set(pieceName, new Map());
+        }
+        grouped.get(pieceName)!.set(size, fp);
+      } else {
+        ungrouped.push(fp);
+      }
+    }
+
+    const newPieces: PatternPiece[] = [];
+
+    // 1) 사이즈 그룹핑된 조각 처리
+    for (const [pieceName, sizeMap] of grouped) {
+      // 대표 SVG: M사이즈를 우선, 없으면 L, 없으면 첫 번째
+      const representativeSize = sizeMap.has("M")
+        ? "M"
+        : sizeMap.has("L")
+          ? "L"
+          : sizeMap.keys().next().value!;
+
+      const representativePath = sizeMap.get(representativeSize)!;
+      const representativeSvg = await readTextFile(representativePath);
+
+      // 모든 사이즈의 SVG 데이터를 읽어서 svgBySize에 저장
+      const svgBySize: Record<string, string> = {};
+      for (const [size, path] of sizeMap) {
+        try {
+          svgBySize[size] = await readTextFile(path);
+        } catch (err) {
+          console.warn(`SVG 읽기 실패 (${size}): ${path}`, err);
+        }
+      }
+
+      const newPiece: PatternPiece = {
+        id: generateId(),
+        name: pieceName,
+        svgPath: representativePath,
+        svgData: representativeSvg,  // 대표 SVG (미리보기용)
+        svgBySize,                    // 사이즈별 SVG 전체
+      };
+      newPieces.push(newPiece);
+    }
+
+    // 2) 사이즈 추출 실패한 파일들은 개별 조각으로 추가
+    for (const fp of ungrouped) {
+      try {
+        const svgData = await readTextFile(fp);
+        const filename = getFilenameFromPath(fp);
+        const defaultName = filename.replace(/\.svg$/i, "");
+
+        const newPiece: PatternPiece = {
+          id: generateId(),
+          name: defaultName,
+          svgPath: fp,
+          svgData,
+        };
+        newPieces.push(newPiece);
+      } catch (err) {
+        console.warn(`SVG 읽기 실패: ${fp}`, err);
+      }
+    }
+
+    if (newPieces.length === 0) return;
+
+    // 폼 상태에 추가
+    const updatedPieces = [...formPieces, ...newPieces];
+    setFormPieces(updatedPieces);
+
+    // 모든 사이즈의 pieces 배열에 새 조각들의 빈 치수를 추가
+    setFormSizes((prev) =>
+      prev.map((sizeSpec) => ({
+        ...sizeSpec,
+        pieces: [
+          ...sizeSpec.pieces,
+          ...newPieces.map((np) => ({
+            pieceId: np.id,
+            width: 0,
+            height: 0,
+          })),
+        ],
+      }))
+    );
+  };
+
+  // === SVG 파일들을 개별 조각으로 추가 (다중 선택 시 사용) ===
+  const addSvgFilesAsPieces = async (filePaths: string[]) => {
+    // 파일명에 사이즈 키워드가 있는지 확인하여 자동 그룹핑 시도
+    const hasSizeInAny = filePaths.some((fp) => {
+      const filename = getFilenameFromPath(fp);
+      return extractSizeFromFilename(filename) !== null;
+    });
+
+    // 사이즈 키워드가 있는 파일이 있으면 그룹핑 모드로 전환
+    if (hasSizeInAny && filePaths.length > 1) {
+      await addSvgFilesWithSizeGrouping(filePaths);
+      return;
+    }
+
+    // 사이즈 키워드 없으면 개별 조각으로 추가
+    const newPieces: PatternPiece[] = [];
+
+    for (const fp of filePaths) {
+      try {
+        const svgData = await readTextFile(fp);
+        const filename = getFilenameFromPath(fp);
+        const defaultName = filename.replace(/\.svg$/i, "");
+
+        const newPiece: PatternPiece = {
+          id: generateId(),
+          name: defaultName,
+          svgPath: fp,
+          svgData,
+        };
+        newPieces.push(newPiece);
+      } catch (err) {
+        console.warn(`SVG 읽기 실패: ${fp}`, err);
+      }
+    }
+
+    if (newPieces.length === 0) return;
+
+    const updatedPieces = [...formPieces, ...newPieces];
+    setFormPieces(updatedPieces);
+
+    setFormSizes((prev) =>
+      prev.map((sizeSpec) => ({
+        ...sizeSpec,
+        pieces: [
+          ...sizeSpec.pieces,
+          ...newPieces.map((np) => ({
+            pieceId: np.id,
+            width: 0,
+            height: 0,
+          })),
+        ],
+      }))
+    );
   };
 
   // === 패턴 조각 삭제 ===
@@ -204,6 +525,29 @@ function PatternManage() {
   // === 편집 취소 ===
   const handleCancel = () => {
     setMode("list");
+  };
+
+  // === 사이즈 배지 텍스트 생성 ===
+  // svgBySize가 있는 조각의 경우 "13 사이즈" 같은 배지를 표시
+  const getSizeBadgeText = (piece: PatternPiece): string | null => {
+    if (!piece.svgBySize) return null;
+    const count = Object.keys(piece.svgBySize).length;
+    if (count <= 1) return null;
+    return `${count} 사이즈`;
+  };
+
+  // === 사이즈 목록 텍스트 생성 ===
+  const getSizeListText = (piece: PatternPiece): string | null => {
+    if (!piece.svgBySize) return null;
+    const sizeKeys = Object.keys(piece.svgBySize);
+    if (sizeKeys.length <= 1) return null;
+    // SIZE_LIST 순서대로 정렬
+    const sorted = [...sizeKeys].sort((a, b) => {
+      const idxA = SIZE_LIST.indexOf(a as typeof SIZE_LIST[number]);
+      const idxB = SIZE_LIST.indexOf(b as typeof SIZE_LIST[number]);
+      return (idxA === -1 ? 99 : idxA) - (idxB === -1 ? 99 : idxB);
+    });
+    return sorted.join(", ");
   };
 
   // === 로딩 화면 ===
@@ -329,47 +673,85 @@ function PatternManage() {
       <div className="form-section">
         <div className="form-section__header">
           <h2 className="form-section__title">패턴 조각</h2>
-          <button className="btn btn--primary btn--small" onClick={handleAddPiece}>
-            + 조각 추가 (SVG)
-          </button>
         </div>
 
-        {formPieces.length === 0 ? (
-          <p className="form-section__empty">
-            아직 추가된 조각이 없습니다. "조각 추가" 버튼으로 SVG 파일을
-            선택하세요.
+        {/* 드래그앤드롭 존 */}
+        <div
+          ref={dropZoneRef}
+          className={`drop-zone ${isDragOver ? "drop-zone--active" : ""}`}
+        >
+          <div className="drop-zone__icon">
+            {/* 폴더+파일 아이콘 텍스트 */}
+            &#128193;
+          </div>
+          <p className="drop-zone__text">
+            SVG 파일 또는 폴더를 여기에 드래그하세요
           </p>
-        ) : (
+          <p className="drop-zone__hint">
+            폴더를 드롭하면 내부 SVG 파일을 자동 스캔하고, 파일명에서 사이즈를 추출합니다
+          </p>
+          <div className="drop-zone__buttons">
+            <button className="btn btn--primary btn--small" onClick={handleAddPieces}>
+              파일 선택 (다중)
+            </button>
+            <button className="btn btn--small" onClick={handleAddFolder}>
+              폴더로 등록
+            </button>
+          </div>
+        </div>
+
+        {/* 추가된 조각 목록 */}
+        {formPieces.length > 0 && (
           <div className="piece-list">
-            {formPieces.map((piece) => (
-              <div key={piece.id} className="piece-item">
-                {/* SVG 미리보기 */}
-                <div
-                  className="piece-item__preview"
-                  dangerouslySetInnerHTML={{ __html: piece.svgData }}
-                />
-                <div className="piece-item__info">
-                  <input
-                    className="piece-item__name-input"
-                    type="text"
-                    value={piece.name}
-                    onChange={(e) =>
-                      handlePieceNameChange(piece.id, e.target.value)
-                    }
-                    placeholder="조각 이름"
+            {formPieces.map((piece) => {
+              const sizeBadge = getSizeBadgeText(piece);
+              const sizeList = getSizeListText(piece);
+              return (
+                <div key={piece.id} className="piece-item">
+                  {/* SVG 미리보기 */}
+                  <div
+                    className="piece-item__preview"
+                    dangerouslySetInnerHTML={{ __html: piece.svgData }}
                   />
-                  <span className="piece-item__path" title={piece.svgPath}>
-                    {piece.svgPath.split(/[\\/]/).pop()}
-                  </span>
+                  <div className="piece-item__info">
+                    <div className="piece-item__name-row">
+                      <input
+                        className="piece-item__name-input"
+                        type="text"
+                        value={piece.name}
+                        onChange={(e) =>
+                          handlePieceNameChange(piece.id, e.target.value)
+                        }
+                        placeholder="조각 이름"
+                      />
+                      {/* 사이즈 배지: svgBySize가 있으면 "13 사이즈" 표시 */}
+                      {sizeBadge && (
+                        <span className="piece-item__size-badge">
+                          {sizeBadge}
+                        </span>
+                      )}
+                    </div>
+                    {/* 사이즈 목록 표시 */}
+                    {sizeList && (
+                      <span className="piece-item__size-list">
+                        {sizeList}
+                      </span>
+                    )}
+                    {!sizeList && (
+                      <span className="piece-item__path" title={piece.svgPath}>
+                        {piece.svgPath.split(/[\\/]/).pop()}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    className="btn btn--small btn--danger"
+                    onClick={() => handleRemovePiece(piece.id)}
+                  >
+                    삭제
+                  </button>
                 </div>
-                <button
-                  className="btn btn--small btn--danger"
-                  onClick={() => handleRemovePiece(piece.id)}
-                >
-                  삭제
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -488,8 +870,5 @@ function PatternManage() {
     </div>
   );
 }
-
-// React에서 Fragment를 사용하기 위해 import (테이블에서 여러 td를 묶을 때 필요)
-import { Fragment } from "react";
 
 export default PatternManage;

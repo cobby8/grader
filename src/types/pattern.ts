@@ -11,7 +11,10 @@ export interface PatternPiece {
   id: string;
   name: string;        // "앞판", "뒷판", "왼쪽소매" 등
   svgPath: string;     // 원본 SVG 파일 경로 (참고용)
-  svgData: string;     // SVG 원본 데이터 (문자열로 저장)
+  svgData: string;     // SVG 원본 데이터 (문자열로 저장, 대표 미리보기용)
+  svgBySize?: {        // 사이즈별 SVG 데이터 (폴더 업로드 시 자동 생성, 선택적)
+    [size: string]: string;  // 예: { "L": "<svg...>", "XL": "<svg...>" }
+  };
 }
 
 /** 사이즈별 개별 조각의 치수 */
