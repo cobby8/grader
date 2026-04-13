@@ -622,6 +622,27 @@ html, body, #root {
   gap: 12px;
 }
 
+/* 큰 드롭 존: 디자인이 없을 때 빈 영역 전체를 차지 */
+.drop-zone--large {
+  min-height: 240px;
+  padding: 48px 24px;
+}
+
+/* 작은 드롭 존: 디자인 카드 목록 위에 항상 표시 */
+.drop-zone--compact {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 16px;
+  min-height: auto;
+}
+
+.drop-zone__compact-text {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
 /* --- 사이즈 치수 테이블 --- */
 .size-table-wrapper {
   overflow-x: auto; /* 조각이 많으면 가로 스크롤 */

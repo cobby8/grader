@@ -170,6 +170,28 @@ grader/
 - 수량 추출 시 "12장", "12개" 등 한국어 접미사 패턴도 처리
 - 엑셀의 여러 시트 중 가장 많은 사이즈를 찾은 시트를 자동 선택
 
+### [2026-04-08] 디자인 등록 드래그앤드롭 + 다중 PDF 업로드
+
+📝 구현 요약:
+- `handleUpload` → `processDesignFile(filePath)` 단일 PDF 처리 함수로 분리 (재사용 가능)
+- `processMultipleFiles(paths)` — 여러 PDF 순차 처리 + 진행 표시("N/M 파일 처리 중...") + 실패 파일 건너뛰기
+- `handleUploadClick()` — 파일 다이얼로그 `multiple: true`로 다중 선택 지원
+- `handleDrop(paths)` — 드롭된 경로에서 `.pdf`만 필터링 + processMultipleFiles 호출
+- Tauri `getCurrentWebview().onDragDropEvent` 이벤트 리스닝 (PatternManage.tsx와 동일 패턴)
+- 디자인 없을 때: 큰 드롭 존(`drop-zone--large`) / 있을 때: 카드 위 작은 드롭 존(`drop-zone--compact`)
+- CSS: 기존 `.drop-zone` 스타일 재사용 + `--large`, `--compact` 변형 추가
+
+| 파일 | 변경 | 신규/수정 |
+|------|------|----------|
+| src/pages/DesignUpload.tsx | DnD 이벤트 + processDesignFile 분리 + 다중 업로드 + 드롭 존 UI | 수정 |
+| src/App.css | drop-zone--large, drop-zone--compact, drop-zone__compact-text 스타일 | 수정 |
+
+💡 tester 참고:
+- 검증: `npx tsc --noEmit` 통과, `npx vite build` 통과 (298KB JS / 23.6KB CSS)
+- 테스트 방법: dev.bat 실행 → 디자인 등록 페이지 → PDF 파일 드래그앤드롭 / 파일 선택(다중) → 순차 처리 확인
+- 정상 동작: 드래그 시 테두리 색 변경, 여러 PDF 드롭 시 "1/3 파일 처리 중..." 형식 진행 표시
+- 주의할 입력: PDF 아닌 파일 드롭 → "PDF 파일만 업로드할 수 있습니다" 에러 메시지
+
 ## 테스트 결과 (tester)
 | 단계 | 판정 | 항목 | 이슈 |
 |------|------|------|------|

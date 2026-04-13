@@ -14,10 +14,11 @@
  *   Python이 stdout에 출력한 JSON을 받아서 파싱한다.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type {
   DesignFile,
   PdfInfoResult,
@@ -101,6 +102,10 @@ function DesignUpload() {
   const [errorMessage, setErrorMessage] = useState("");
   // 미리보기 이미지 data URL 캐시 (designId → base64 data URL)
   const [previewCache, setPreviewCache] = useState<Record<string, string>>({});
+  // 드래그앤드롭 오버 상태 (시각 피드백용)
+  const [isDragOver, setIsDragOver] = useState(false);
+  // 드롭 존 ref (레이아웃 참조용)
+  const dropZoneRef = useRef<HTMLDivElement>(null);
 
   // 초기 로드: 저장된 디자인 목록 불러오기
   useEffect(() => {
@@ -157,107 +162,204 @@ function DesignUpload() {
     return result;
   }
 
+  // === Tauri 드래그앤드롭 이벤트 리스닝 ===
+  // PatternManage.tsx와 동일한 패턴으로 Tauri 네이티브 드래그앤드롭을 사용한다.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    const setupDragDrop = async () => {
+      try {
+        unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+          if (event.payload.type === "over") {
+            setIsDragOver(true);
+          } else if (event.payload.type === "leave") {
+            setIsDragOver(false);
+          } else if (event.payload.type === "drop") {
+            setIsDragOver(false);
+            const paths: string[] = event.payload.paths;
+            if (paths.length > 0) {
+              // PDF 파일만 필터링하여 처리
+              handleDrop(paths);
+            }
+          }
+        });
+      } catch (err) {
+        console.warn("드래그앤드롭 이벤트 등록 실패 (무시):", err);
+      }
+    };
+
+    setupDragDrop();
+
+    // 클린업: 컴포넌트 언마운트 시 이벤트 해제
+    return () => {
+      if (unlisten) unlisten();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [designs]);
+
   /**
-   * 새 디자인 PDF 업로드 핸들러.
-   * 1) 파일 다이얼로그 → 2) 앱 데이터에 복사 → 3) PDF 정보 추출
-   * → 4) CMYK 검증 → 5) 미리보기 생성 → 6) 메타데이터 저장
+   * 단일 PDF 파일을 처리하는 핵심 함수.
+   * 기존 handleUpload에서 파일 처리 로직만 추출하여 재사용 가능하게 만들었다.
+   * 1) 앱 데이터에 복사 → 2) PDF 정보 추출 → 3) CMYK 검증
+   * → 4) 색상 상세 분석 → 5) 미리보기 생성 → 6) 메타데이터 반환
    */
-  async function handleUpload() {
+  async function processDesignFile(filePath: string): Promise<DesignFile> {
+    // 원본 파일명 추출 (경로 구분자는 \ 또는 / 모두 대응)
+    const fileName = filePath.split(/[\\/]/).pop() || "design.pdf";
+
+    // 1) 새 디자인 ID 생성 + 앱 데이터로 PDF 복사
+    const designId = generateDesignId();
+    const storedPath = await copyPdfToAppData(filePath, designId);
+
+    // 2) Python 엔진: PDF 정보 추출
+    const info = await callPython<PdfInfoResult>("get_pdf_info", [storedPath]);
+
+    // 3) Python 엔진: CMYK 검증 (기본 - 기존 호환)
+    const cmyk = await callPython<CmykVerifyResult>("verify_cmyk", [storedPath]);
+
+    // 4) Python 엔진: 색상 공간 상세 분석
+    // 실패해도 치명적이지 않으므로 try/catch로 보호하고 계속 진행한다.
+    let colorAnalysis: ColorAnalysis | undefined = undefined;
+    try {
+      const analyzed = await callPython<AnalyzeColorResult>("analyze_color", [
+        storedPath,
+      ]);
+      colorAnalysis = toColorAnalysis(analyzed);
+    } catch (err) {
+      console.warn("색상 상세 분석 실패 (계속 진행):", err);
+    }
+
+    // 5) Python 엔진: 미리보기 이미지 생성
+    const previewPath = await getDesignPreviewPath(designId);
+    const preview = await callPython<PreviewResult>("generate_preview", [
+      storedPath,
+      previewPath,
+      "150",
+    ]);
+
+    // 6) 메타데이터 객체 생성
+    // colorAnalysis가 있으면 overall 값으로 colorSpace를 덮어써서
+    // 더 정확한 판정을 사용한다 (벡터 CMYK 감지 포함).
+    const now = new Date().toISOString();
+    const finalColorSpace = colorAnalysis?.overall ?? info.color_space;
+    return {
+      id: designId,
+      name: fileName,
+      originalPath: filePath,
+      storedPath: storedPath,
+      previewPath: preview.preview_path,
+      pageCount: info.page_count,
+      pageWidth: info.page_width_mm,
+      pageHeight: info.page_height_mm,
+      colorSpace: finalColorSpace,
+      cmykVerified: cmyk.is_cmyk,
+      cmykMessage: cmyk.message,
+      fileSize: info.file_size,
+      createdAt: now,
+      updatedAt: now,
+      colorAnalysis,
+    };
+  }
+
+  /**
+   * 여러 PDF 파일을 순차적으로 처리하고 디자인 목록에 추가한다.
+   * 하나가 실패해도 나머지를 계속 처리하며, 실패 파일명을 에러 메시지에 모아서 표시한다.
+   */
+  async function processMultipleFiles(filePaths: string[]) {
+    setErrorMessage("");
+    setUploading(true);
+
+    const total = filePaths.length;
+    const failedFiles: string[] = [];
+    // 현재 designs 상태의 최신값을 로컬 변수로 추적 (순차 처리 중 setState 반영 지연 때문)
+    let currentDesigns = [...designs];
+
+    for (let i = 0; i < total; i++) {
+      const filePath = filePaths[i];
+      const fileName = filePath.split(/[\\/]/).pop() || "unknown.pdf";
+
+      // 진행 상황 표시: "2/5 파일 처리 중... (design.pdf)"
+      setProgressMessage(
+        `${i + 1}/${total} 파일 처리 중... (${fileName})`
+      );
+
+      try {
+        const newDesign = await processDesignFile(filePath);
+
+        // 목록에 추가 + 저장
+        currentDesigns = [...currentDesigns, newDesign];
+        setDesigns(currentDesigns);
+        await saveDesigns(currentDesigns);
+
+        // 미리보기 이미지 로드
+        await loadPreviewImage(newDesign);
+      } catch (err) {
+        console.error(`디자인 업로드 실패 (${fileName}):`, err);
+        failedFiles.push(fileName);
+      }
+    }
+
+    setProgressMessage("");
+    setUploading(false);
+
+    // 실패한 파일이 있으면 에러 메시지 표시
+    if (failedFiles.length > 0) {
+      setErrorMessage(
+        `다음 파일의 처리에 실패했습니다: ${failedFiles.join(", ")}`
+      );
+    }
+  }
+
+  /**
+   * 파일 다이얼로그를 열어 PDF를 선택하고 업로드하는 핸들러.
+   * 다중 선택을 지원하여 여러 PDF를 한 번에 등록할 수 있다.
+   */
+  async function handleUploadClick() {
     setErrorMessage("");
 
     try {
-      // 1) Tauri 파일 다이얼로그로 PDF 선택
+      // Tauri 파일 다이얼로그 — 다중 선택 지원
       const selected = await open({
-        multiple: false,
+        multiple: true,
         filters: [{ name: "PDF 파일", extensions: ["pdf"] }],
       });
 
-      if (!selected || typeof selected !== "string") {
-        return; // 취소됨
-      }
+      // 취소 또는 빈 결과 처리
+      if (!selected) return;
 
-      setUploading(true);
-      setProgressMessage("파일을 복사하는 중...");
+      // open({ multiple: true })는 string[] 반환, 단일 선택 시에도 배열
+      const paths = Array.isArray(selected) ? selected : [selected];
+      if (paths.length === 0) return;
 
-      // 원본 파일명 추출 (경로 구분자는 \ 또는 / 모두 대응)
-      const fileName = selected.split(/[\\/]/).pop() || "design.pdf";
-
-      // 2) 새 디자인 ID 생성 + 앱 데이터로 PDF 복사
-      const designId = generateDesignId();
-      const storedPath = await copyPdfToAppData(selected, designId);
-
-      // 3) Python 엔진: PDF 정보 추출
-      setProgressMessage("PDF 정보를 분석하는 중...");
-      const info = await callPython<PdfInfoResult>("get_pdf_info", [storedPath]);
-
-      // 4) Python 엔진: CMYK 검증 (기본 - 기존 호환)
-      setProgressMessage("색상 공간을 검증하는 중...");
-      const cmyk = await callPython<CmykVerifyResult>("verify_cmyk", [storedPath]);
-
-      // 4-b) Python 엔진: 색상 공간 상세 분석 (5단계 신규)
-      // 실패해도 치명적이지 않으므로 try/catch로 보호하고 계속 진행한다.
-      // 이유: analyze_color는 부가 정보이므로 CMYK 검증보다 실패 내성이 높아야 함.
-      setProgressMessage("색상 공간을 상세 분석하는 중...");
-      let colorAnalysis: ColorAnalysis | undefined = undefined;
-      try {
-        const analyzed = await callPython<AnalyzeColorResult>("analyze_color", [
-          storedPath,
-        ]);
-        colorAnalysis = toColorAnalysis(analyzed);
-      } catch (err) {
-        console.warn("색상 상세 분석 실패 (계속 진행):", err);
-      }
-
-      // 5) Python 엔진: 미리보기 이미지 생성
-      setProgressMessage("미리보기 이미지를 생성하는 중...");
-      const previewPath = await getDesignPreviewPath(designId);
-      const preview = await callPython<PreviewResult>("generate_preview", [
-        storedPath,
-        previewPath,
-        "150",
-      ]);
-
-      // 6) 메타데이터 객체 생성
-      // colorAnalysis가 있으면 overall 값으로 colorSpace를 덮어써서
-      // 더 정확한 판정을 사용한다 (벡터 CMYK 감지 포함).
-      const now = new Date().toISOString();
-      const finalColorSpace = colorAnalysis?.overall ?? info.color_space;
-      const newDesign: DesignFile = {
-        id: designId,
-        name: fileName,
-        originalPath: selected,
-        storedPath: storedPath,
-        previewPath: preview.preview_path,
-        pageCount: info.page_count,
-        pageWidth: info.page_width_mm,
-        pageHeight: info.page_height_mm,
-        colorSpace: finalColorSpace,
-        cmykVerified: cmyk.is_cmyk,
-        cmykMessage: cmyk.message,
-        fileSize: info.file_size,
-        createdAt: now,
-        updatedAt: now,
-        colorAnalysis,
-      };
-
-      // 7) 목록에 추가 후 저장
-      const updated = [...designs, newDesign];
-      setDesigns(updated);
-      await saveDesigns(updated);
-
-      // 8) 미리보기 이미지 로드
-      await loadPreviewImage(newDesign);
-
-      setProgressMessage("");
+      await processMultipleFiles(paths);
     } catch (err) {
-      console.error("디자인 업로드 실패:", err);
+      console.error("파일 다이얼로그 오류:", err);
       setErrorMessage(
         err instanceof Error ? err.message : "알 수 없는 오류가 발생했습니다."
       );
-      setProgressMessage("");
-    } finally {
-      setUploading(false);
     }
+  }
+
+  /**
+   * 드래그앤드롭으로 들어온 파일 경로에서 PDF만 필터링하여 처리한다.
+   * PDF가 아닌 파일은 무시하고, PDF가 하나도 없으면 경고 메시지를 표시한다.
+   */
+  async function handleDrop(paths: string[]) {
+    // .pdf 확장자만 필터링 (대소문자 무시)
+    const pdfPaths = paths.filter((p) => p.toLowerCase().endsWith(".pdf"));
+
+    if (pdfPaths.length === 0) {
+      setErrorMessage("PDF 파일만 업로드할 수 있습니다. PDF 파일을 드래그해 주세요.");
+      return;
+    }
+
+    // PDF가 아닌 파일이 섞여 있으면 알림
+    if (pdfPaths.length < paths.length) {
+      const skipped = paths.length - pdfPaths.length;
+      console.warn(`PDF가 아닌 파일 ${skipped}개를 건너뛰었습니다.`);
+    }
+
+    await processMultipleFiles(pdfPaths);
   }
 
   /**
@@ -302,19 +404,10 @@ function DesignUpload() {
         파일을 업로드해 주세요.
       </p>
 
-      {/* 상단 액션 바: 업로드 버튼 + 진행 메시지 */}
-      <div className="preset-actions">
-        <button
-          className="btn btn--primary"
-          onClick={handleUpload}
-          disabled={uploading}
-        >
-          {uploading ? "업로드 중..." : "새 디자인 업로드"}
-        </button>
-        {progressMessage && (
-          <span className="design-progress">{progressMessage}</span>
-        )}
-      </div>
+      {/* 진행 메시지 (다중 업로드 시 "2/5 파일 처리 중..." 형식) */}
+      {progressMessage && (
+        <div className="design-progress">{progressMessage}</div>
+      )}
 
       {/* 에러 메시지 표시 */}
       {errorMessage && (
@@ -332,16 +425,47 @@ function DesignUpload() {
 
       {/* 디자인 파일 목록 */}
       {designs.length === 0 ? (
-        <div className="page__placeholder">
-          <div className="page__placeholder-icon">🎨</div>
-          <p className="page__placeholder-text">
-            아직 등록된 디자인이 없습니다.
+        /* 디자인이 없을 때: 큰 드래그앤드롭 존을 플레이스홀더로 표시 */
+        <div
+          ref={dropZoneRef}
+          className={`drop-zone drop-zone--large ${isDragOver ? "drop-zone--active" : ""}`}
+        >
+          <div className="drop-zone__icon">&#127912;</div>
+          <p className="drop-zone__text">
+            PDF 파일을 여기에 드래그하세요
           </p>
-          <p className="preset-empty__hint">
-            "새 디자인 업로드" 버튼을 눌러 PDF 파일을 추가하세요.
+          <p className="drop-zone__hint">
+            또는 아래 버튼으로 파일을 선택할 수 있습니다
           </p>
+          <div className="drop-zone__buttons">
+            <button
+              className="btn btn--primary btn--small"
+              onClick={handleUploadClick}
+              disabled={uploading}
+            >
+              파일 선택
+            </button>
+          </div>
         </div>
       ) : (
+        <>
+        {/* 디자인이 있을 때: 카드 목록 위에 작은 드롭 존 유지 */}
+        <div
+          ref={dropZoneRef}
+          className={`drop-zone drop-zone--compact ${isDragOver ? "drop-zone--active" : ""}`}
+        >
+          <span className="drop-zone__compact-text">
+            PDF 파일을 드래그하거나
+          </span>
+          <button
+            className="btn btn--primary btn--small"
+            onClick={handleUploadClick}
+            disabled={uploading}
+          >
+            파일 선택
+          </button>
+        </div>
+
         <div className="design-grid">
           {designs.map((design) => (
             <div key={design.id} className="design-card">
@@ -463,6 +587,7 @@ function DesignUpload() {
             </div>
           ))}
         </div>
+        </>
       )}
     </div>
   );
