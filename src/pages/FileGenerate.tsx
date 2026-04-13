@@ -206,6 +206,26 @@ function FileGenerate() {
         baseDir: BaseDirectory.AppData,
       });
 
+      // 2-b) 아트보드 크기 감지 (Illustrator PDF의 TrimBox 등)
+      // 아트보드가 MediaBox보다 작으면 crop 적용하여 밖 요소를 제거한다
+      let artboard: {
+        artboard_width_pt: number;
+        artboard_height_pt: number;
+        has_bleed: boolean;
+      } | null = null;
+      try {
+        artboard = await callPython<{
+          success: boolean;
+          artboard_width_pt: number;
+          artboard_height_pt: number;
+          has_bleed: boolean;
+          error?: string;
+        }>("detect_artboard", [design.storedPath]);
+      } catch {
+        // 아트보드 감지 실패 시 무시 (crop 없이 전체 스케일링)
+        console.warn("아트보드 감지 실패, crop 없이 진행");
+      }
+
       // 3) 각 사이즈 순차 처리
       const baseFileName = sanitizeFileName(design.name);
 
@@ -226,14 +246,23 @@ function FileGenerate() {
           const outputAbs = await join(absOutputDir, outputFileName);
 
           // 3-c) Python generate_graded 호출
+          // crop 파라미터가 있으면 아트보드 크기를 전달하여 CropBox 적용
+          const gradeArgs = [
+            design.storedPath, // 원본 기준 디자인 PDF (AppData/designs/{id}.pdf)
+            outputAbs,
+            scale.scale_x.toString(),
+            scale.scale_y.toString(),
+          ];
+          // artboard 정보가 있고, 아트보드가 MediaBox보다 작으면 crop 적용
+          if (artboard && artboard.has_bleed) {
+            gradeArgs.push(
+              artboard.artboard_width_pt.toString(),
+              artboard.artboard_height_pt.toString()
+            );
+          }
           const graded = await callPython<GenerateGradedResult>(
             "generate_graded",
-            [
-              design.storedPath, // 원본 기준 디자인 PDF (AppData/designs/{id}.pdf)
-              outputAbs,
-              scale.scale_x.toString(),
-              scale.scale_y.toString(),
-            ]
+            gradeArgs
           );
 
           // 상태: 성공 (5단계: 파일 크기/압축률 포함)

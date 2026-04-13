@@ -32,8 +32,14 @@
 - **내용**: 4단계 그레이딩 결과 PDF는 AppData/outputs/{timestamp}/{디자인명}_{사이즈}.pdf 형식으로 저장된다. timestamp는 "YYYY-MM-DD_HH-mm-ss" 형식으로 매 생성 작업마다 새 하위 폴더 생성. 파일명은 sanitizeFileName으로 확장자 제거 + <>:"/\|?* 치환 처리. 생성 직전에 프리셋 전체 JSON을 같은 폴더 내 _preset.json 임시 파일로 기록하여 Python calc_scale에 경로로 전달, 모든 사이즈 처리 후 삭제. Python은 stdin 대신 파일 경로 입력을 선호(크기 제한/이스케이프 문제 회피). 출력 폴더는 opener 플러그인 `openPath`로 OS 탐색기에서 열 수 있음(capabilities에 `opener:allow-open-path` + `$APPDATA/**` 범위 필요).
 - **참조횟수**: 0
 
-### [2026-04-10] CMYK 보존 PDF 스케일링 아키텍처
+### [2026-04-10] CMYK 보존 PDF 스케일링 아키텍처 (v1: show_pdf_page -- 대체됨)
 - **분류**: architecture
 - **발견자**: developer
-- **내용**: PyMuPDF `show_pdf_page(target_rect, src_doc, page_num, keep_proportion=False)`를 사용하면 원본 PDF 페이지를 새 문서의 임의 크기 페이지에 "통째로 배치"할 수 있고, 내부적으로 XObject Form으로 원본 콘텐츠 스트림을 재사용하므로 벡터/텍스트/이미지의 색상 공간(/DeviceCMYK, ICCBased 포함)이 전혀 변환 없이 그대로 유지된다. `keep_proportion=False`로 설정하면 가로/세로 독립 스케일이 정확히 적용됨. 저장은 `doc.save(path, deflate=True, garbage=4, clean=True)` — 이 옵션들은 구조 최적화만 수행하고 색상 변환 없음. 이 방식이 grader 프로젝트의 그레이딩 엔진 핵심 기법이며, 4단계 MVP 그레이딩(단순 비례 스케일링)과 향후 고급 클리핑 마스킹의 기반.
+- **내용**: [대체됨] show_pdf_page 방식은 Form XObject 래핑(`q /fzFrm0 Do Q`)으로 인해 일부 뷰어에서 사각형 중복 렌더링 문제 발생. 아래 v2로 대체.
+- **참조횟수**: 1
+
+### [2026-04-08] CMYK 보존 PDF 스케일링 아키텍처 (v2: CTM 직접 삽입)
+- **분류**: architecture
+- **발견자**: planner-architect
+- **내용**: show_pdf_page 대신 CTM(Current Transformation Matrix) 직접 삽입 방식 채택. 원본 PDF의 콘텐츠 스트림 앞에 `q sx 0 0 sy tx ty cm` 연산자를 삽입하고 `Q`로 닫으면, 모든 벡터/텍스트/이미지 색상 공간(DeviceCMYK, ICCBased 포함)이 변환 없이 보존됨. Form XObject 래핑이 없으므로 사각형 중복 문제도 해결. 아트보드 밖 요소는 set_cropbox()로 제거. API 시퀀스: clean_contents() -> get_contents() -> read_contents() -> update_stream(xref, new_bytes) -> set_mediabox(). PyMuPDF 1.27.2에서 프로토타입 검증 완료.
 - **참조횟수**: 0

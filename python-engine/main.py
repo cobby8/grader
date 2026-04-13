@@ -28,6 +28,7 @@ from pdf_handler import (
     verify_cmyk,
     generate_preview,
     analyze_color_space_detailed,
+    detect_artboard,
 )
 from pattern_scaler import calculate_scale_factor
 from pdf_grader import generate_graded_pdf
@@ -56,7 +57,8 @@ def show_help() -> None:
             "analyze_color <pdf_path>": "PDF의 색상 공간을 페이지별/객체별로 상세 분석합니다 (벡터+이미지+ICC)",
             "generate_preview <pdf_path> <output_path> [dpi]": "PDF 첫 페이지를 PNG 미리보기로 변환합니다 (기본 150dpi)",
             "calc_scale <preset_json_path> <base_size> <target_size>": "프리셋 JSON 파일에서 기준/타겟 사이즈 비율을 계산합니다",
-            "generate_graded <src_pdf> <out_pdf> <scale_x> <scale_y>": "원본 PDF를 주어진 비율로 스케일링해 새 PDF를 생성합니다 (CMYK 보존)",
+            "detect_artboard <pdf_path>": "PDF의 아트보드(TrimBox/CropBox) 크기를 감지합니다 (Illustrator 등)",
+            "generate_graded <src_pdf> <out_pdf> <scale_x> <scale_y> [crop_w_pt] [crop_h_pt]": "원본 PDF를 주어진 비율로 스케일링해 새 PDF를 생성합니다 (CMYK 보존, CTM 직접 삽입)",
             "parse_order <excel_path>": "엑셀 주문서에서 사이즈 목록과 수량을 자동 추출합니다 (xlsx)",
             "svg_bbox <svg_path>": "SVG 파일 내 실제 도형의 bounding box를 계산합니다 (viewBox가 아닌 실제 크기)",
             "normalize_artboard <svg_path> <target_w_mm> <target_h_mm>": "SVG 아트보드(viewBox)를 목표 크기(mm)로 보정합니다 (패턴 좌표 유지, 중앙 배치)",
@@ -67,7 +69,9 @@ def show_help() -> None:
             'python main.py analyze_color "C:/designs/front.pdf"',
             'python main.py generate_preview "C:/designs/front.pdf" "C:/temp/preview.png" 150',
             'python main.py calc_scale "C:/temp/preset.json" "L" "XL"',
+            'python main.py detect_artboard "C:/designs/front.pdf"',
             'python main.py generate_graded "C:/src.pdf" "C:/out.pdf" 1.05 1.08',
+            'python main.py generate_graded "C:/src.pdf" "C:/out.pdf" 1.05 1.08 595.28 841.89',
             'python main.py parse_order "C:/orders/order.xlsx"',
             'python main.py svg_bbox "C:/patterns/front_L.svg"',
             'python main.py normalize_artboard "C:/patterns/front_L.svg" 1580 2000',
@@ -202,9 +206,17 @@ def main() -> None:
             if not result.get("success"):
                 sys.exit(1)
 
+        elif command == "detect_artboard":
+            # PDF의 아트보드(TrimBox/CropBox) 크기를 감지
+            if len(args) < 2:
+                print_error("PDF 파일 경로가 필요합니다. 예: python main.py detect_artboard file.pdf")
+                sys.exit(1)
+            result = detect_artboard(args[1])
+            print_json(result)
+
         elif command == "generate_graded":
-            # 원본 PDF를 주어진 비율로 확대/축소하여 새 PDF 생성
-            # 사용: generate_graded <src_pdf> <out_pdf> <scale_x> <scale_y>
+            # 원본 PDF를 주어진 비율로 확대/축소하여 새 PDF 생성 (CTM 직접 삽입)
+            # 사용: generate_graded <src_pdf> <out_pdf> <scale_x> <scale_y> [crop_w_pt] [crop_h_pt]
             if len(args) < 5:
                 print_error(
                     "인자가 부족합니다. 예: python main.py generate_graded src.pdf out.pdf 1.05 1.08"
@@ -219,7 +231,21 @@ def main() -> None:
                 print_error("스케일 값은 실수(숫자)여야 합니다.")
                 sys.exit(1)
 
-            result = generate_graded_pdf(src_pdf, out_pdf, scale_x, scale_y)
+            # crop 파라미터는 선택적 (하위 호환: 없으면 크롭 없이 전체 스케일링)
+            crop_w_pt = None
+            crop_h_pt = None
+            if len(args) >= 7:
+                try:
+                    crop_w_pt = float(args[5])
+                    crop_h_pt = float(args[6])
+                except ValueError:
+                    print_error("크롭 크기는 실수(숫자, pt 단위)여야 합니다.")
+                    sys.exit(1)
+
+            result = generate_graded_pdf(
+                src_pdf, out_pdf, scale_x, scale_y,
+                crop_width_pt=crop_w_pt, crop_height_pt=crop_h_pt
+            )
             print_json(result)
             if not result.get("success"):
                 sys.exit(1)

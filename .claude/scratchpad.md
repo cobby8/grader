@@ -52,7 +52,60 @@ grader/
 - 페이지 간 상태: sessionStorage key=`grader.generation.request`
 
 ## 기획설계 (planner-architect)
-완료 — REPORT.md (10장) + decisions.md + architecture.md 참조
+
+### [2026-04-08] 최종 결정: CTM 직접 변환 + CropBox 조합 (4가지 문제 완전 해결)
+
+목표: 실제 파일 테스트에서 발견된 4가지 근본 문제를 한 번에 해결
+
+핵심 결정: show_pdf_page(Form XObject) 방식을 **CTM 직접 삽입 방식**으로 교체
+- 검증 완료: PyMuPDF 1.27.2에서 프로토타입 테스트 성공 (CMYK 100% 보존, 크기 정확)
+
+만들/수정할 위치와 구조:
+| 파일 경로 | 역할 | 신규/수정 |
+|----------|------|----------|
+| python-engine/pdf_handler.py | detect_artboard() 함수 추가 (TrimBox/수동 폴백) | 수정 |
+| python-engine/pdf_grader.py | show_pdf_page -> CTM 직접 삽입으로 전면 교체 | 수정 |
+| python-engine/main.py | detect_artboard CLI 커맨드 추가 | 수정 |
+| src/pages/DesignUpload.tsx | 아트보드 크기 표시 + 수동입력 폴백 UI | 수정 |
+
+실행 계획:
+| 순서 | 작업 | 담당 | 선행 조건 |
+|------|------|------|----------|
+| 1 | pdf_handler에 detect_artboard 함수 추가 | developer | 없음 |
+| 2 | pdf_grader를 CTM 직접 방식으로 전면 교체 | developer | 1 |
+| 3 | main.py에 detect_artboard CLI + DesignUpload UI 연동 | developer | 2 |
+| 4 | 테스트 + 리뷰 | tester+reviewer (병렬) | 3 |
+
+developer 주의사항:
+- **원본 PDF 직접 수정** 방식임 (show_pdf_page처럼 새 문서에 복사 X)
+- 반드시 원본을 fitz.open()으로 열고, 복사본 경로에 save() (원본 파일 보호)
+- CTM 삽입 순서: clean_contents -> get_contents -> read_contents -> update_stream
+- CropBox 있을 때: CTM에 translate 포함 필요 (tx=-crop_x*sx, ty=-crop_y*sy)
+- set_mediabox()를 set_cropbox()보다 먼저 호출 (순서 중요, 아니면 ValueError)
+- Form XObject 내부 CMYK 감지 로직(pdf_handler._scan_form_xobjects)은 CTM 방식에서 불필요할 수 있으나, 기존 디자인 파일 호환을 위해 유지
+
+검증된 PyMuPDF API 시퀀스:
+```python
+# 1. 아트보드 감지 (CropBox 적용)
+artboard = page.trimbox  # or 수동입력 폴백
+page.set_cropbox(artboard)
+
+# 2. CTM 삽입
+page.clean_contents()
+xrefs = page.get_contents()
+old = page.read_contents()
+ctm = f'q {sx} 0 0 {sy} {tx} {ty} cm\n'.encode('latin-1')
+new = ctm + old + b'\nQ'
+doc.update_stream(xrefs[0], new)
+
+# 3. 페이지 크기 변경
+page.set_mediabox(fitz.Rect(0, 0, new_w, new_h))
+
+# 4. 저장 (원본과 다른 경로)
+doc.save(output_path, deflate=True, garbage=4, clean=True)
+```
+
+이전 기획: REPORT.md (10장) + decisions.md + architecture.md 참조
 
 ## 구현 기록 (developer)
 1~4단계 모두 완료. 각 단계 상세는 git 로그 참조 (커밋 메시지에 요약).
@@ -438,6 +491,50 @@ grader/
 - 보정은 SVG 업로드 시점에 1회만 수행, 이후 bounding box 추출은 보정된 SVG 기준
 - normalizeSvgArtboard()는 Python 실패 시 원본 반환 (무중단 폴백)
 - STANDARD_ARTBOARD는 현재 상수, 향후 설정 UI에서 변경 가능하도록 구조화
+
+### [2026-04-08] CTM 직접 삽입 방식으로 PDF 그레이딩 전면 교체
+
+📝 구현 요약:
+- `pdf_handler.py`에 `detect_artboard()` 함수 추가 — TrimBox > CropBox > MediaBox 순서로 아트보드 감지
+- `pdf_grader.py` 전면 교체: 기존 show_pdf_page 방식을 CTM 직접 삽입 방식으로 변경
+  - 기존 함수는 `generate_graded_pdf_legacy()`로 이름 변경하여 폴백용 보존
+  - 새 함수: CropBox 설정 → clean_contents → CTM(cm 연산자) 삽입 → MediaBox 조정
+- `main.py`에 `detect_artboard` CLI 커맨드 추가 + `generate_graded`에 `[crop_w_pt] [crop_h_pt]` 선택적 파라미터 추가 (하위 호환)
+- `FileGenerate.tsx`에서 생성 전 `detect_artboard` 호출 → has_bleed=true이면 crop 파라미터 전달
+- `generation.ts`에 `method` 필드 추가 ("ctm" | "legacy_show_pdf_page")
+
+| 파일 | 변경 | 신규/수정 |
+|------|------|----------|
+| python-engine/pdf_handler.py | detect_artboard() 함수 추가 | 수정 |
+| python-engine/pdf_grader.py | CTM 방식 전면 교체 + legacy 보존 | 수정 |
+| python-engine/main.py | detect_artboard 커맨드 + generate_graded crop 파라미터 | 수정 |
+| src/pages/FileGenerate.tsx | detect_artboard 호출 + crop 파라미터 전달 | 수정 |
+| src/types/generation.ts | method 필드 추가 | 수정 |
+
+💡 tester 참고:
+- 검증 완료: `npx tsc --noEmit` 통과, `npx vite build` 통과 (304KB JS), Python import 통과
+- Python 단위 테스트 결과:
+  - detect_artboard: MediaBox PDF → source="mediabox", has_bleed=false
+  - CTM 방식 (crop 없이): 출력 크기 정확 (625.04x909.24pt), CTM 연산자 존재, CMYK 보존, Form XObject 없음
+  - CTM 방식 (crop 400x600pt): 크롭 후 정확히 400x600pt
+  - 파일 크기: 1343 → 1101 bytes (82%) — 기존 show_pdf_page 대비 효율적
+- 테스트 방법:
+  1. dev.bat 실행 → 기존 워크플로우(디자인 업로드 → 사이즈 선택 → 파일 생성) 정상 동작 확인
+  2. 결과 PDF를 Illustrator/Acrobat에서 열어 사각형 중복 없는지 확인
+  3. Illustrator PDF(TrimBox 있는) 업로드 시 아트보드 밖 요소 제거되는지 확인
+- 정상 동작:
+  - 결과 PDF에 Form XObject 래핑 없음 (사각형 중복 해결)
+  - CMYK 색상 공간 보존
+  - crop 파라미터 없으면 기존과 동일하게 전체 스케일링 (하위 호환)
+- 주의할 입력:
+  - TrimBox가 MediaBox와 동일한 일반 PDF → crop 없이 처리 (정상)
+  - clean=False로 저장하므로 스트림이 재정규화되지 않음 (의도된 동작)
+
+⚠️ reviewer 참고:
+- clean=False가 핵심: True로 하면 우리가 삽입한 CTM이 제거될 수 있음
+- CropBox 설정 시 PyMuPDF가 내부적으로 좌표를 조정하므로 tx=ty=0
+- set_mediabox → set_cropbox 순서 (CropBox가 MediaBox보다 크면 ValueError)
+- legacy 함수는 삭제하지 않고 보존 (import는 main.py에서 안 함, 직접 호출만 가능)
 
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)

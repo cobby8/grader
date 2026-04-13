@@ -500,6 +500,81 @@ def analyze_color_space_detailed(pdf_path: str) -> dict[str, Any]:
     }
 
 
+def detect_artboard(pdf_path: str) -> dict[str, Any]:
+    """
+    PDF의 아트보드(실제 의도된 페이지 크기)를 감지한다.
+
+    왜 필요한가:
+      Illustrator 등에서 만든 PDF는 아트보드 밖에 여분 요소(백넘버 등)가 있을 수 있다.
+      이런 요소를 제거하려면 실제 아트보드 크기를 알아야 한다.
+      Illustrator는 TrimBox에 아트보드 크기를 저장한다.
+      TrimBox가 없으면 CropBox → MediaBox 순서로 폴백.
+
+    반환:
+      {
+        "success": True,
+        "artboard_x": float,        # 아트보드 왼쪽 하단 x (pt 단위)
+        "artboard_y": float,        # 아트보드 왼쪽 하단 y (pt 단위)
+        "artboard_width_pt": float, # 아트보드 가로 크기 (pt)
+        "artboard_height_pt": float,# 아트보드 세로 크기 (pt)
+        "artboard_width_mm": float, # 아트보드 가로 크기 (mm)
+        "artboard_height_mm": float,# 아트보드 세로 크기 (mm)
+        "source": "trimbox" | "cropbox" | "mediabox",
+        "mediabox_width_mm": float, # 참고: 전체 페이지(MediaBox) 가로 mm
+        "mediabox_height_mm": float,# 참고: 전체 페이지(MediaBox) 세로 mm
+        "has_bleed": bool           # 아트보드가 MediaBox보다 작으면 True
+      }
+    """
+    if not os.path.exists(pdf_path):
+        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {pdf_path}")
+
+    doc = fitz.open(pdf_path)
+    page = doc[0]
+
+    # 각 Box 추출 (PyMuPDF의 Rect 객체)
+    trimbox = page.trimbox
+    cropbox = page.cropbox
+    mediabox = page.mediabox
+
+    # 포인트 → mm 변환 상수
+    pt_to_mm = 25.4 / 72.0
+
+    # TrimBox가 MediaBox와 다르면 아트보드 정보가 있다는 뜻
+    # (Illustrator가 TrimBox에 아트보드 크기를 저장함)
+    if trimbox != mediabox:
+        artboard = trimbox
+        source = "trimbox"
+    elif cropbox != mediabox:
+        artboard = cropbox
+        source = "cropbox"
+    else:
+        # 아트보드 정보가 없음 → MediaBox 전체가 아트보드
+        artboard = mediabox
+        source = "mediabox"
+
+    # 아트보드가 MediaBox보다 작으면 "재단 여백(bleed)"이 있는 것
+    has_bleed = (
+        artboard.width < mediabox.width - 0.5
+        or artboard.height < mediabox.height - 0.5
+    )
+
+    doc.close()
+
+    return {
+        "success": True,
+        "artboard_x": round(artboard.x0, 2),
+        "artboard_y": round(artboard.y0, 2),
+        "artboard_width_pt": round(artboard.width, 2),
+        "artboard_height_pt": round(artboard.height, 2),
+        "artboard_width_mm": round(artboard.width * pt_to_mm, 1),
+        "artboard_height_mm": round(artboard.height * pt_to_mm, 1),
+        "source": source,
+        "mediabox_width_mm": round(mediabox.width * pt_to_mm, 1),
+        "mediabox_height_mm": round(mediabox.height * pt_to_mm, 1),
+        "has_bleed": has_bleed,
+    }
+
+
 def generate_preview(pdf_path: str, output_path: str, dpi: int = 150) -> dict[str, Any]:
     """
     PDF의 첫 페이지를 PNG 이미지로 변환하여 미리보기를 생성한다.

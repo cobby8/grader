@@ -139,7 +139,9 @@
       "Bash(./venv/Scripts/python.exe main.py svg_bbox test_bbox.svg)",
       "Bash(taskkill //f //pid 12464)",
       "Bash(python-engine/venv/Scripts/python python-engine/main.py get_pdf_info \"C:/Users/user/AppData/Roaming/com.grader.app/designs/design-mnx0qjh4-isb4og.pdf\")",
-      "Bash(python-engine/venv/Scripts/python python-engine/main.py get_pdf_info \"C:/Users/user/AppData/Roaming/com.grader.app/outputs/2026-04-13_18-57-27/$\\(ls 'C:/Users/user/AppData/Roaming/com.grader.app/outputs/2026-04-13_18-57-27/')"
+      "Bash(python-engine/venv/Scripts/python python-engine/main.py get_pdf_info \"C:/Users/user/AppData/Roaming/com.grader.app/outputs/2026-04-13_18-57-27/$\\(ls 'C:/Users/user/AppData/Roaming/com.grader.app/outputs/2026-04-13_18-57-27/')",
+      "Bash(./venv/Scripts/python.exe -c \"from pdf_handler import detect_artboard; from pdf_grader import generate_graded_pdf, generate_graded_pdf_legacy; print\\('import OK'\\)\")",
+      "Bash(./venv/Scripts/python.exe main.py detect_artboard --help)"
     ]
   }
 }

@@ -68,5 +68,7 @@ export interface GenerateGradedResult {
   file_size_bytes?: number;
   original_size_bytes?: number;
   compression_ratio?: number;
+  // CTM 방식 전환 후 추가: 사용된 스케일링 방식 표시
+  method?: "ctm" | "legacy_show_pdf_page";
   error?: string;
 }
