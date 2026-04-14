@@ -529,27 +529,217 @@ function calcTotalArea(doc) {
     return { totalArea: totalArea, pieceCount: count };
 }
 
+// ===== 신규 헬퍼: RGB 문서 판정 =====
+// 왜 이 함수가 필요한가:
+//   - 사용자가 실수로 디자인 AI를 RGB 모드로 작업/저장했을 수 있다.
+//   - RGB 모드에서 시작한 색은 Illustrator가 나중에 자동으로 CMYK로 변환할 때
+//     원본 의도와 다른 색상값으로 양자화(손실)된다.
+//   - 따라서 열자마자 색 공간을 체크해서, 엄격 모드면 즉시 중단하는 것이 안전하다.
+function isRgbDocument(doc) {
+    try {
+        // DocumentColorSpace.RGB 이면 true 반환
+        return doc.documentColorSpace === DocumentColorSpace.RGB;
+    } catch (e) {
+        // 호환성 문제로 enum 비교 실패 시 false (안전 쪽: 통과)
+        return false;
+    }
+}
+
+// ===== 신규 헬퍼: 빈 CMYK 베이스 문서 생성 =====
+/**
+ * 왜 새 CMYK 문서를 처음부터 만들어야 하나:
+ *   - 기존 방식은 SVG를 app.open()으로 열 때 CMYK 플래그를 줬지만,
+ *     SVG의 원본 hex 색이 RGB로 해석된 뒤 CMYK로 양자화되는 경로를 탔다.
+ *   - 새 방식은 처음부터 CMYK 전용 문서를 만들어 두고,
+ *     path만 복제(duplicate)해서 옮긴 뒤 fillColor를 CMYKColor로 재할당한다.
+ *   - 이렇게 하면 색은 우리가 수식으로 직접 계산한 CMYK 값만 사용하게 된다.
+ *
+ * @param {number} widthPt - 아트보드 가로 (pt 단위)
+ * @param {number} heightPt - 아트보드 세로 (pt 단위)
+ * @returns {Document} 새로 만든 CMYK 문서
+ */
+function createCmykBaseDoc(widthPt, heightPt) {
+    // DocumentPreset을 쓰면 버전 호환성이 가장 좋다
+    var preset = new DocumentPreset();
+    preset.colorMode = DocumentColorSpace.CMYK;
+    preset.width = widthPt;
+    preset.height = heightPt;
+    preset.units = RulerUnits.Points;
+    preset.title = "grading-base-cmyk";
+    // Illustrator CS6+ 에서 지원하는 시그니처
+    var newDoc = app.documents.addDocument("Print", preset);
+    // 혹시 아트보드가 기대 크기와 다르면 재설정
+    // artboardRect = [left, top, right, bottom] (Y축: 위가 큰 값)
+    newDoc.artboards[0].artboardRect = [0, heightPt, widthPt, 0];
+    $.writeln("[grading.jsx] CMYK 베이스 문서 생성: " + widthPt.toFixed(1) + " x " + heightPt.toFixed(1) + " pt");
+    return newDoc;
+}
+
+// ===== 신규 헬퍼: SVG path를 CMYK 베이스 문서로 임포트 =====
+/**
+ * 왜 duplicate(targetDoc)인가:
+ *   - SVG 원본 문서(svgDoc)는 RGB 기반으로 열릴 수 있다.
+ *   - 하지만 path의 기하 정보(좌표/모양)는 색 공간과 무관하므로,
+ *     targetDoc(이미 CMYK)으로 복제 후 fillColor를 CMYKColor로 재할당하면
+ *     색은 우리가 통제하는 CMYK 값만 사용된다.
+ *
+ * 처리 규칙:
+ *   - 50pt 이상 패턴 조각: path를 layerFill로 복제(fill=mainColor) + 원본 stroke는 layerPattern
+ *   - 50pt 미만 (너치/가이드): layerPattern으로 이동
+ *   - 그룹/기타: layerPattern으로 이동
+ *
+ * @param {Document} svgDoc - 원본 SVG 문서 (색 공간 무관)
+ * @param {Document} targetDoc - CMYK 베이스 문서 (활성 상태여야 함)
+ * @param {Color} mainColor - 몸판 색상 (CMYK)
+ * @param {Layer} layerFill - 배경 fill 레이어 (targetDoc 소속)
+ * @param {Layer} layerPattern - 패턴 선 레이어 (targetDoc 소속)
+ * @returns {{ filledCount: number, targetArea: number }}
+ */
+function importSvgPathsToDoc(svgDoc, targetDoc, mainColor, layerFill, layerPattern) {
+    var filledCount = 0;
+    var targetArea = 0;
+
+    // 원본 SVG의 모든 레이어를 순회
+    for (var li = 0; li < svgDoc.layers.length; li++) {
+        var srcLayer = svgDoc.layers[li];
+
+        // 뒤에서부터 처리 (duplicate/move 시 인덱스가 밀릴 수 있어 역순이 안전)
+        var pathCount = srcLayer.pathItems.length;
+        for (var pi = pathCount - 1; pi >= 0; pi--) {
+            var path = srcLayer.pathItems[pi];
+
+            // 가로/세로 모두 50pt 이상 = 패턴 조각으로 간주
+            if (Math.abs(path.width) > 50 && Math.abs(path.height) > 50) {
+                // 열린 경로는 닫기 (fill 적용 가능하게)
+                if (!path.closed) {
+                    path.closed = true;
+                }
+                // 타겟 면적 합산 (STEP 6의 스케일링 기준)
+                targetArea += Math.abs(path.area);
+
+                // 1) fill용 사본을 targetDoc의 배경 레이어로 복제
+                //    duplicate(targetContainer, ElementPlacement) 로 문서 간 복제 가능
+                var fillCopy = path.duplicate(layerFill, ElementPlacement.PLACEATEND);
+                fillCopy.filled = true;
+                // 우리가 직접 만든 CMYKColor를 할당 (RGB 원본과 무관해짐)
+                fillCopy.fillColor = cloneCMYKColor(mainColor);
+                fillCopy.stroked = false;
+
+                // 2) 원본 stroke는 패턴선 레이어로 복제 (fill 제거)
+                var lineCopy = path.duplicate(layerPattern, ElementPlacement.PLACEATEND);
+                lineCopy.filled = false;
+                // stroke 색이 RGB면 CMYK로 변환
+                if (lineCopy.stroked && lineCopy.strokeColor) {
+                    if (lineCopy.strokeColor.typename === "RGBColor") {
+                        lineCopy.strokeColor = cloneColor(lineCopy.strokeColor);
+                    }
+                }
+
+                filledCount++;
+            } else {
+                // 작은 조각 (너치/가이드) → 패턴선 레이어로 복제
+                var smallCopy = path.duplicate(layerPattern, ElementPlacement.PLACEATEND);
+                // 색 정리 (RGB → CMYK)
+                if (smallCopy.filled && smallCopy.fillColor && smallCopy.fillColor.typename === "RGBColor") {
+                    smallCopy.fillColor = cloneColor(smallCopy.fillColor);
+                }
+                if (smallCopy.stroked && smallCopy.strokeColor && smallCopy.strokeColor.typename === "RGBColor") {
+                    smallCopy.strokeColor = cloneColor(smallCopy.strokeColor);
+                }
+            }
+        }
+
+        // 그룹 아이템도 패턴선 레이어로 그대로 복제
+        var groupCount = srcLayer.groupItems.length;
+        for (var gi = groupCount - 1; gi >= 0; gi--) {
+            srcLayer.groupItems[gi].duplicate(layerPattern, ElementPlacement.PLACEATEND);
+        }
+    }
+
+    return { filledCount: filledCount, targetArea: targetArea };
+}
+
+// ===== 신규 헬퍼: 요소 그룹을 몸판 중앙으로 정렬 =====
+/**
+ * 왜 별도 함수로 뽑았나:
+ *   - 기존 코드에서 동일한 중앙 정렬 로직이 두 번 중복돼 있었다.
+ *   - 한 곳으로 모아 유지보수성을 높인다.
+ *
+ * @param {GroupItem} group - 중앙으로 이동할 요소 그룹
+ * @param {Layer} layerFill - 몸판(배경 fill) 레이어 (전체 BBox 기준)
+ */
+function alignToBodyCenter(group, layerFill) {
+    if (!group || !layerFill) return;
+    var fillItems = layerFill.pageItems;
+    if (fillItems.length === 0) return;
+
+    // 몸판 전체 BBox 계산 (Illustrator Y축: 위=큰 값, 아래=작은 값)
+    var minX = Infinity;
+    var minY = Infinity;
+    var maxX = -Infinity;
+    var maxY = -Infinity;
+    for (var fi = 0; fi < fillItems.length; fi++) {
+        var fb = fillItems[fi].geometricBounds; // [left, top, right, bottom]
+        if (fb[0] < minX) minX = fb[0];
+        if (fb[1] > maxY) maxY = fb[1];
+        if (fb[2] > maxX) maxX = fb[2];
+        if (fb[3] < minY) minY = fb[3];
+    }
+    var bodyCenterX = (minX + maxX) / 2;
+    var bodyCenterY = (minY + maxY) / 2;
+
+    // 요소 그룹 중앙
+    var gb = group.geometricBounds;
+    var groupCenterX = (gb[0] + gb[2]) / 2;
+    var groupCenterY = (gb[1] + gb[3]) / 2;
+
+    // 오프셋 이동
+    var offsetX = bodyCenterX - groupCenterX;
+    var offsetY = bodyCenterY - groupCenterY;
+    group.translate(offsetX, offsetY);
+
+    $.writeln("[grading.jsx] 몸판 중앙 정렬: 중심(" + bodyCenterX.toFixed(1) + ", " + bodyCenterY.toFixed(1)
+        + ") 이동량(" + offsetX.toFixed(1) + ", " + offsetY.toFixed(1) + ")");
+}
+
 // ===== 메인 로직 =====
 
 /**
- * 그레이딩 메인 함수.
+ * 그레이딩 메인 함수 (재설계판).
  *
- * AI 파일일 때:
- *   - "몸판" 레이어에서 메인 색상 추출
- *   - "요소" 레이어만 선택 복사 (배경 제외!)
- *   - 패턴 문서에 붙여넣기
+ * 핵심 원칙:
+ *   - 처음부터 CMYK 전용 베이스 문서를 새로 만들어 작업 공간으로 사용한다.
+ *   - 몸판(패턴 SVG)을 먼저 배치해서 크기/위치를 확정한 뒤,
+ *     요소(디자인 AI의 "요소" 레이어)를 clipboard로 가져와 맞춘다.
+ *   - RGB 디자인 AI는 config.allowRgbDesign=false(기본)면 즉시 중단.
  *
- * PDF 폴백일 때:
- *   - 가장 큰 면적 pathItem에서 색상 추출
- *   - 전체 요소 복사 → 붙여넣기 (기존 방식)
+ * 흐름 (STEP 0~11):
+ *   0. config.json 읽기
+ *   1. 디자인 AI를 잠시 열어 메타 정보 추출 (mainColor, baseArea, 요소 copy)
+ *   2. 패턴 SVG를 열어 아트보드 크기 측정
+ *   3. CMYK 베이스 문서 생성 (아트보드 = SVG 크기)
+ *   4. SVG path를 베이스 문서로 임포트 (fill + 패턴선 레이어 분리)
+ *   5. SVG 원본 문서 닫기
+ *   6. "디자인 요소" 레이어 생성 → paste (클립보드)
+ *   7. 면적 비율 스케일링
+ *   8. 몸판 중앙 정렬
+ *   9. (안전망) 요소 내 잔존 RGB 순회 보정
+ *  10. 레이어 z-order 통합 + 저장
+ *  11. 정리 + result.json 기록
  */
 function main() {
-    $.writeln("[grading.jsx] 스크립트 시작 (AI 레이어 기반 그레이딩)");
+    $.writeln("[grading.jsx] 스크립트 시작 (CMYK 베이스 + 몸판 우선 재작성판)");
 
+    // ===== STEP 0: config.json 읽기 =====
     var config = readConfig();
     var resultPath = config.resultJsonPath;
-    var patternDoc = null;
-    var designDoc = null;
+    // allowRgbDesign: true가 아니면 false로 취급 (엄격 모드 기본)
+    var allowRgbDesign = (config.allowRgbDesign === true);
+
+    // 작업 중 참조할 문서 핸들들 (에러 시 정리를 위해 상위 스코프에 선언)
+    var designDoc = null;  // 디자인 AI/PDF (메타 추출 후 바로 close)
+    var svgDoc = null;     // 패턴 SVG 원본 (path duplicate 소스, 이후 close)
+    var baseDoc = null;    // 새로 만든 CMYK 베이스 문서 (최종 저장 대상)
 
     try {
         // ===== STEP 1: 디자인 파일 경로 결정 (AI 우선, PDF 폴백) =====
@@ -557,26 +747,28 @@ function main() {
         var designFilePath = designInfo.path;
         var isAiFile = designInfo.isAi;
 
-        // ===== STEP 2: 디자인 파일 열기 (CMYK) + 아트보드 크기 저장 =====
+        // ===== STEP 2: 디자인 파일 열기 + RGB 엄격 모드 체크 =====
+        // 왜 CMYK 플래그 없이 그냥 여나:
+        //   - 디자인 AI가 이미 CMYK면 그대로 열린다 (의도한 색 그대로)
+        //   - 디자인 AI가 RGB면 isRgbDocument로 감지하고 즉시 중단 가능
+        //   - CMYK 플래그를 주면 RGB 원본이 강제로 양자화되어 원본 수치가 소실된다
         var designFile = new File(designFilePath);
-        designDoc = app.open(designFile, DocumentColorSpace.CMYK);
+        designDoc = app.open(designFile);
         $.writeln("[grading.jsx] 디자인 파일 열림: " + designDoc.name + " (AI: " + isAiFile + ")");
 
-        // 디자인 아트보드 크기를 저장한다 (나중에 요소 스케일링에 사용)
-        // 왜 여기서 저장하나: 디자인 문서를 닫으면 아트보드 정보에 접근할 수 없으므로
-        var designAb = designDoc.artboards[0].artboardRect;
-        var designAbLeft = designAb[0];    // 좌상단 X
-        var designAbTop = designAb[1];     // 좌상단 Y (Illustrator Y축은 아래로 감소)
-        var designAbWidth = designAb[2] - designAb[0];   // 아트보드 가로 (pt)
-        var designAbHeight = designAb[1] - designAb[3];  // 아트보드 세로 (pt)
-        $.writeln("[grading.jsx] 디자인 아트보드: " + designAbWidth.toFixed(1) + " x " + designAbHeight.toFixed(1) + " pt"
-            + " (left=" + designAbLeft.toFixed(1) + ", top=" + designAbTop.toFixed(1) + ")");
+        // RGB 디자인 엄격 차단 (옵션 A)
+        if (isRgbDocument(designDoc)) {
+            if (!allowRgbDesign) {
+                throw new Error("디자인 AI가 RGB 모드입니다. Illustrator에서 '파일 > 문서 색상 모드 > CMYK 색상'으로 변경 후 재저장해주세요. (강제 진행하려면 config.allowRgbDesign=true)");
+            }
+            $.writeln("[grading.jsx] 경고: 디자인이 RGB 모드이지만 allowRgbDesign=true로 진행합니다 (색상 정확도 낮음)");
+        }
 
         // ===== STEP 2A: "패턴선" 레이어에서 기준 패턴 면적 추출 =====
-        // 왜 기준 면적이 필요한가:
-        //   - AI 디자인 파일의 "패턴선" 레이어는 디자이너가 작업한 원본 패턴 크기를 나타낸다.
-        //   - 타겟 SVG 패턴과 면적 비율을 계산해서 요소를 적절히 축소/확대한다.
-        //   - 예: 기준 면적 10000, 타겟 면적 8100 → 비율 0.81 → 선형 스케일 0.9 (90%)
+        // 왜 기준 면적을 여기서 구하나:
+        //   - 디자인 AI의 "패턴선" 레이어는 디자이너가 작업한 원본 패턴 크기를 나타낸다.
+        //   - 타겟 SVG 면적과 비율을 계산해 요소를 자연스럽게 축소/확대한다.
+        //   - designDoc을 닫기 전에 미리 뽑아둬야 한다.
         var baseArea = 0;
         var basePieceCount = 0;
         if (isAiFile) {
@@ -591,41 +783,41 @@ function main() {
             }
         }
 
-        // ===== STEP 3: 메인 색상 추출 =====
+        // ===== STEP 3: 메인 색상 추출 ("몸판" 레이어) =====
+        // 왜 designDoc에서 뽑나: 디자인 파일이 몸판 색상의 원천이기 때문.
+        // 단, 아래 STEP 4에서 이 색을 cloneCMYKColor로 CMYK 문서에 다시 할당한다.
         var mainColor = null;
-
         if (isAiFile) {
-            // AI 파일: "몸판" 레이어에서 색상 추출 — 변환 불필요 (이미 CMYK)
             mainColor = extractColorFromBodyLayer(designDoc);
-
-            // "몸판" 레이어에서 못 찾으면 전체 문서 폴백
             if (!mainColor) {
                 $.writeln("[grading.jsx] '몸판' 레이어 색상 추출 실패 — 전체 문서 폴백");
                 mainColor = cloneColor(extractMainColorFromDoc(designDoc));
             }
         } else {
-            // PDF 폴백: 기존 방식 (면적 기준)
-            var rawColor = extractMainColorFromDoc(designDoc);
-            mainColor = cloneColor(rawColor);
+            // PDF 폴백: 면적 기준
+            mainColor = cloneColor(extractMainColorFromDoc(designDoc));
+        }
+        // mainColor는 반드시 CMYK여야 하므로 한 번 더 정규화
+        if (mainColor && mainColor.typename !== "CMYKColor") {
+            mainColor = cloneColor(mainColor);
         }
 
-        // 추출한 색상 정보 로그
-        if (mainColor.typename === "CMYKColor") {
-            $.writeln("[grading.jsx] 메인 색상: C=" + mainColor.cyan.toFixed(1)
+        if (mainColor && mainColor.typename === "CMYKColor") {
+            $.writeln("[grading.jsx] 메인 색상 (CMYK): C=" + mainColor.cyan.toFixed(1)
                 + " M=" + mainColor.magenta.toFixed(1)
                 + " Y=" + mainColor.yellow.toFixed(1)
                 + " K=" + mainColor.black.toFixed(1));
         } else {
-            $.writeln("[grading.jsx] 메인 색상 타입: " + mainColor.typename);
+            $.writeln("[grading.jsx] 메인 색상 타입: " + (mainColor ? mainColor.typename : "(null)"));
         }
 
-        // ===== STEP 4: "요소" 레이어 복사 (AI) 또는 전체 복사 (PDF) =====
+        // ===== STEP 4: "요소" 레이어 아이템을 클립보드에 적재 =====
+        // 왜 clipboard를 쓰나:
+        //   - 아직 베이스 문서가 존재하지 않아서 duplicate(targetDoc) 대상이 없다.
+        //   - 그래서 designDoc에서 먼저 clipboard로 담아두고,
+        //     나중에 CMYK 베이스 문서에 paste한다.
+        //   - paste 시점에 붙여넣어진 아이템의 잔존 RGB는 STEP 9 안전망에서 순회 변환.
         if (isAiFile) {
-            // AI 파일: "요소" 레이어의 아이템만 선택하여 복사
-            // 왜 "요소"만 복사하나:
-            //   - "몸판" 레이어는 배경색이므로 패턴에 직접 fill로 적용함
-            //   - "패턴선" 레이어는 참조용이므로 복사하지 않음
-            //   - "요소" 레이어의 스트라이프/로고/텍스트/번호만 필요함
             var elemLayer;
             try {
                 elemLayer = designDoc.layers.getByName("요소");
@@ -634,361 +826,245 @@ function main() {
             }
 
             $.writeln("[grading.jsx] '요소' 레이어 아이템 수: " + elemLayer.pageItems.length);
-
-            // 기존 선택 해제
             designDoc.selection = null;
-
-            // "요소" 레이어의 모든 아이템을 선택
             for (var ei = 0; ei < elemLayer.pageItems.length; ei++) {
                 elemLayer.pageItems[ei].selected = true;
             }
-
-            // 선택된 아이템이 있을 때만 복사
             if (designDoc.selection && designDoc.selection.length > 0) {
                 app.executeMenuCommand("copy");
-                $.writeln("[grading.jsx] '요소' 레이어 " + designDoc.selection.length + "개 아이템 복사 완료");
+                $.writeln("[grading.jsx] '요소' 레이어 " + designDoc.selection.length + "개 아이템 clipboard 적재");
             } else {
                 $.writeln("[grading.jsx] 경고: '요소' 레이어에 선택 가능한 아이템이 없음");
             }
         } else {
-            // PDF 폴백: 전체 요소 복사 (기존 방식)
+            // PDF 폴백: 전체 아트보드 요소
             designDoc.selectObjectsOnActiveArtboard();
             app.executeMenuCommand("copy");
-            $.writeln("[grading.jsx] 디자인 전체 요소 복사 완료 (PDF 폴백)");
+            $.writeln("[grading.jsx] 디자인 전체 요소 clipboard 적재 (PDF 폴백)");
         }
+        // 주의: designDoc은 STEP 6까지 살려둔다. clipboard가 유효하려면 원본 문서 존재가 안전하다.
 
-        // 디자인은 아직 닫지 않음! 클립보드 유지를 위해 패턴에 붙여넣기 후 닫음.
-        $.writeln("[grading.jsx] 디자인 문서 유지 (클립보드 보존)");
-
-        // ===== STEP 5: 타겟 패턴 SVG 열기 =====
+        // ===== STEP 5: 패턴 SVG 열기 → 아트보드 크기 측정 → CMYK 베이스 문서 생성 =====
+        // 왜 순서가 이러한가:
+        //   1) SVG를 열어야 아트보드 크기(pt)를 정확히 알 수 있다.
+        //   2) 그 크기로 같은 사이즈의 CMYK 문서를 새로 만든다.
+        //   3) SVG의 path를 CMYK 문서로 복제(duplicate)하며 색을 재할당한다.
         var patternFile = new File(config.patternSvgPath);
         if (!patternFile.exists) {
             throw new Error("패턴 SVG를 찾을 수 없습니다: " + config.patternSvgPath);
         }
-        // CMYK 색상 공간으로 열기 — 인쇄용 색상 보존
-        patternDoc = app.open(patternFile, DocumentColorSpace.CMYK);
-        $.writeln("[grading.jsx] 패턴 SVG 열림 (CMYK): " + patternDoc.name);
+        // SVG는 원래 색 공간으로 연다 (CMYK 강제 금지 → 양자화 회피)
+        svgDoc = app.open(patternFile);
+        $.writeln("[grading.jsx] 패턴 SVG 열림: " + svgDoc.name
+            + " (colorSpace=" + (svgDoc.documentColorSpace === DocumentColorSpace.CMYK ? "CMYK" : "RGB") + ")");
 
-        // 아트보드 크기 확인
-        var ab = patternDoc.artboards[0];
-        var abRect = ab.artboardRect;
-        var docWidth = abRect[2] - abRect[0];
-        var docHeight = abRect[1] - abRect[3];
-        $.writeln("[grading.jsx] 아트보드: " + docWidth.toFixed(1) + " x " + docHeight.toFixed(1) + " pt");
+        var svgAb = svgDoc.artboards[0].artboardRect;
+        var svgWidth = svgAb[2] - svgAb[0];
+        var svgHeight = svgAb[1] - svgAb[3];
+        $.writeln("[grading.jsx] SVG 아트보드: " + svgWidth.toFixed(1) + " x " + svgHeight.toFixed(1) + " pt");
 
-        // ===== STEP 6: 레이어 생성 (z-order 관리) =====
-        // layers.add()는 최상위에 추가되므로 역순으로 생성
-        var defaultLayer = patternDoc.layers[0];
+        // CMYK 베이스 문서 생성 (이것이 최종 출력 문서가 된다)
+        baseDoc = createCmykBaseDoc(svgWidth, svgHeight);
+        app.activeDocument = baseDoc;
 
-        // 배경 fill 레이어 — 가장 아래
-        var layerFill = patternDoc.layers.add();
+        // ===== STEP 6: 베이스 문서에 레이어 3개 생성 =====
+        // layers.add()는 최상위에 추가되므로 맨 아래부터 만든다:
+        //   아래(배경 fill) → 중간(디자인 요소) → 위(패턴 선)
+        var defaultLayer = baseDoc.layers[0];
+
+        var layerFill = baseDoc.layers.add();
         layerFill.name = "배경 fill";
 
-        // 디자인 요소 레이어 — 중간
-        var layerDesign = patternDoc.layers.add();
+        var layerDesign = baseDoc.layers.add();
         layerDesign.name = "디자인 요소";
 
-        // 패턴 선 레이어 — 가장 위 (재단선/너치가 항상 보여야 함)
-        var layerPattern = patternDoc.layers.add();
+        var layerPattern = baseDoc.layers.add();
         layerPattern.name = "패턴 선";
 
-        $.writeln("[grading.jsx] 레이어 생성 완료: 패턴선/디자인/배경 (위->아래)");
+        $.writeln("[grading.jsx] 레이어 생성: 패턴선(위) / 디자인요소(중간) / 배경fill(아래)");
 
-        // ===== STEP 7: 패턴 조각에 색상 채우기 + 레이어 이동 =====
-        // SVG를 열면 polyline이 pathItem으로 변환됨
-        // 큰 경로 = 패턴 조각, 작은 경로 = 너치/가이드
-        var filledCount = 0;
-        var pathCount = defaultLayer.pathItems.length;
-        // 타겟 패턴 면적 합산용 — STEP 8에서 면적 비율 스케일링에 사용
-        var targetArea = 0;
-
-        // 뒤에서부터 처리 (이동하면 인덱스 변함)
-        for (var pi = pathCount - 1; pi >= 0; pi--) {
-            var path = defaultLayer.pathItems[pi];
-
-            // 가로/세로 모두 50pt 이상인 경로만 패턴 조각으로 인정
-            if (Math.abs(path.width) > 50 && Math.abs(path.height) > 50) {
-                // 열린 경로면 닫기 (fill이 제대로 적용되려면 닫힌 경로여야 함)
-                if (!path.closed) {
-                    path.closed = true;
-                }
-
-                // 타겟 패턴 면적 합산 (기준 면적 대비 비율 계산에 사용)
-                targetArea += Math.abs(path.area);
-
-                // 복제 → fill 적용 → 배경 레이어로 이동
-                var fillCopy = path.duplicate();
-                fillCopy.filled = true;
-                fillCopy.fillColor = mainColor;
-                fillCopy.stroked = false;
-                fillCopy.move(layerFill, ElementPlacement.PLACEATBEGINNING);
-
-                // 원본은 stroke만 유지 → 패턴선 레이어로 이동
-                path.filled = false;
-                path.move(layerPattern, ElementPlacement.PLACEATBEGINNING);
-
-                filledCount++;
-            } else {
-                // 작은 요소(너치, 가이드 등)도 패턴선 레이어로 이동
-                path.move(layerPattern, ElementPlacement.PLACEATBEGINNING);
-            }
-        }
-
-        // 기본 레이어에 남은 다른 아이템(그룹 등)도 패턴선 레이어로 이동
-        while (defaultLayer.pageItems.length > 0) {
-            defaultLayer.pageItems[0].move(layerPattern, ElementPlacement.PLACEATBEGINNING);
-        }
-
-        $.writeln("[grading.jsx] 패턴 " + filledCount + "개 조각에 색상 채움");
+        // ===== STEP 7: SVG path를 CMYK 베이스 문서로 임포트 =====
+        // importSvgPathsToDoc 내부에서:
+        //   - 50pt 이상: layerFill로 복제 + fill=mainColor + layerPattern로 stroke 복제
+        //   - 50pt 미만: layerPattern으로 복제
+        //   - RGB 색은 cloneColor로 CMYK 수식 변환
+        var importResult = importSvgPathsToDoc(svgDoc, baseDoc, mainColor, layerFill, layerPattern);
+        var filledCount = importResult.filledCount;
+        var targetArea = importResult.targetArea;
+        $.writeln("[grading.jsx] 패턴 " + filledCount + "개 조각 임포트 완료");
         $.writeln("[grading.jsx] 타겟 패턴 면적: " + targetArea.toFixed(0) + " pt² (" + filledCount + "개 조각)");
 
         if (filledCount === 0) {
             $.writeln("[grading.jsx] 경고: 50pt 이상 조각이 없음 — 패턴 SVG를 확인하세요");
         }
 
-        // 빈 기본 레이어 제거
-        defaultLayer.remove();
+        // SVG 원본 문서 닫기 (path는 이미 베이스 문서로 복제됨)
+        try {
+            svgDoc.close(SaveOptions.DONOTSAVECHANGES);
+            svgDoc = null;
+            $.writeln("[grading.jsx] SVG 원본 문서 닫음");
+        } catch (eSvg) {
+            $.writeln("[grading.jsx] 경고: SVG 문서 닫기 실패 (" + eSvg.message + ")");
+        }
 
-        // ===== STEP 8: 디자인 요소를 패턴 문서에 붙여넣기 + 스케일/위치 보정 =====
-        // 패턴 문서를 활성화하고 디자인 레이어에 붙여넣기
-        app.activeDocument = patternDoc;
-        patternDoc.activeLayer = layerDesign;
+        // 베이스 문서의 빈 기본 레이어 제거 (베이스 생성 시 기본 레이어가 자동으로 하나 만들어짐)
+        try {
+            if (defaultLayer.pageItems.length === 0) {
+                defaultLayer.remove();
+            }
+        } catch (eDef) { /* 무시 */ }
+
+        // 활성 문서를 베이스로 재확인
+        app.activeDocument = baseDoc;
+
+        // ===== STEP 8: clipboard → "디자인 요소" 레이어에 paste =====
+        // 왜 지금 paste하나:
+        //   - STEP 7에서 몸판(패턴 SVG)이 이미 베이스 문서에 배치돼 있다.
+        //   - 그 위에 요소를 paste하면 몸판 좌표계를 기준으로 정렬하기 쉽다.
+        baseDoc.activeLayer = layerDesign;
         app.executeMenuCommand("paste");
         $.writeln("[grading.jsx] 디자인 요소를 '디자인 요소' 레이어에 붙여넣기 완료");
 
-        // 이제 디자인 문서 닫기 (클립보드 사용 완료)
+        // 이제 designDoc 닫아도 안전 (clipboard 사용 완료)
         if (designDoc) {
-            designDoc.close(SaveOptions.DONOTSAVECHANGES);
-            designDoc = null;
-            $.writeln("[grading.jsx] 디자인 문서 닫음");
+            try {
+                designDoc.close(SaveOptions.DONOTSAVECHANGES);
+                designDoc = null;
+                $.writeln("[grading.jsx] 디자인 문서 닫음");
+            } catch (eDesign) {
+                $.writeln("[grading.jsx] 경고: 디자인 문서 닫기 실패 (" + eDesign.message + ")");
+            }
         }
 
-        // 붙여넣은 요소 정보 로그
-        var pastedItems = patternDoc.selection;
+        // 붙여넣은 요소 수 확인
+        var pastedItems = baseDoc.selection;
+        var pastedGroup = null;
         if (pastedItems && pastedItems.length > 0) {
             $.writeln("[grading.jsx] 붙여넣은 요소 수: " + pastedItems.length);
 
-            // ===== 면적 비율 기반 요소 스케일링 =====
-            // 왜 면적 비율인가:
-            //   - 패턴 사이즈가 달라지면 디자인 요소(로고, 스트라이프 등)도 비례 축소/확대해야 자연스럽다.
-            //   - 면적 비율의 제곱근이 선형 스케일 (면적은 길이²에 비례하므로)
-            //   - 예: 면적 비율 0.81 → sqrt(0.81) = 0.9 → 가로세로 각각 90%로 축소
-            if (baseArea > 0 && targetArea > 0) {
-                var areaRatio = targetArea / baseArea;
-                // 면적 비율의 제곱근 = 선형 스케일 (가로/세로 동일 비율)
-                var linearScale = Math.sqrt(areaRatio);
+            // 스케일/정렬을 위해 그룹화 (1개든 여러 개든 통일되게 처리)
+            app.executeMenuCommand("group");
+            pastedGroup = baseDoc.selection[0];
 
+            // ===== STEP 9: 면적 비율 스케일링 =====
+            // 왜 면적 제곱근인가:
+            //   - 면적 비율은 길이의 제곱에 비례하므로, 선형 스케일은 √(면적비).
+            //   - 예: 면적비 0.81 → 길이비 0.9 → 가로/세로 각각 90%.
+            if (baseArea > 0 && targetArea > 0 && pastedGroup) {
+                var areaRatio = targetArea / baseArea;
+                var linearScale = Math.sqrt(areaRatio);
                 $.writeln("[grading.jsx] 면적 비율: " + areaRatio.toFixed(4)
                     + " (기준:" + baseArea.toFixed(0) + " → 타겟:" + targetArea.toFixed(0) + ")");
                 $.writeln("[grading.jsx] 선형 스케일: " + linearScale.toFixed(4)
                     + " (" + (linearScale * 100).toFixed(1) + "%)");
 
-                // 스케일 차이가 0.5% 이상일 때만 적용 (거의 같으면 스킵)
                 if (Math.abs(linearScale - 1.0) > 0.005) {
-                    // 붙여넣은 요소를 그룹화하여 한 번에 스케일링
-                    app.executeMenuCommand("group");
-                    var pastedGroup = patternDoc.selection[0];
-
-                    if (pastedGroup) {
-                        // resize()는 퍼센트 단위 (0.9 → 90 전달)
-                        var scalePct = linearScale * 100;
-                        // 인자: scaleX%, scaleY%, 변환점선/패턴/획폭/효과도 스케일
-                        pastedGroup.resize(scalePct, scalePct, true, true, true, true);
-                        $.writeln("[grading.jsx] 요소 스케일 적용: " + scalePct.toFixed(1) + "%");
-                    }
+                    var scalePct = linearScale * 100;
+                    pastedGroup.resize(scalePct, scalePct, true, true, true, true);
+                    $.writeln("[grading.jsx] 요소 스케일 적용: " + scalePct.toFixed(1) + "%");
                 } else {
-                    // 스케일 불필요해도 중앙 정렬을 위해 그룹화는 필요
-                    app.executeMenuCommand("group");
-                    var pastedGroup = patternDoc.selection[0];
                     $.writeln("[grading.jsx] 스케일 차이 0.5% 미만 — 원본 크기 유지");
                 }
-
-                // ===== 요소 그룹을 패턴 몸판 중앙으로 이동 =====
-                // 왜 중앙 정렬이 필요한가:
-                //   - AI에서 복사한 요소는 원본 좌표 그대로 붙여넣기됨
-                //   - 타겟 패턴 몸판의 위치/크기가 다르므로 중앙에 맞춰야 자연스럽다
-                var pastedGroup = patternDoc.selection[0];
-                if (pastedGroup) {
-                    // fill 레이어의 전체 bounding box를 계산하여 몸판 중앙을 구한다
-                    var fillItems = layerFill.pageItems;
-                    var minX = Infinity;
-                    var minY = Infinity;  // Illustrator Y축: 위가 큰 값, 아래가 작은 값
-                    var maxX = -Infinity;
-                    var maxY = -Infinity;
-                    for (var fi = 0; fi < fillItems.length; fi++) {
-                        var fb = fillItems[fi].geometricBounds; // [left, top, right, bottom]
-                        if (fb[0] < minX) minX = fb[0];        // 가장 왼쪽
-                        if (fb[1] > maxY) maxY = fb[1];         // 가장 위 (큰 값)
-                        if (fb[2] > maxX) maxX = fb[2];         // 가장 오른쪽
-                        if (fb[3] < minY) minY = fb[3];         // 가장 아래 (작은 값)
-                    }
-                    var patternCenterX = (minX + maxX) / 2;
-                    var patternCenterY = (minY + maxY) / 2;
-
-                    // 요소 그룹의 현재 중앙 좌표
-                    var gb = pastedGroup.geometricBounds; // [left, top, right, bottom]
-                    var groupCenterX = (gb[0] + gb[2]) / 2;
-                    var groupCenterY = (gb[1] + gb[3]) / 2;
-
-                    // 오프셋만큼 이동하여 몸판 중앙에 맞춘다
-                    var offsetX = patternCenterX - groupCenterX;
-                    var offsetY = patternCenterY - groupCenterY;
-                    pastedGroup.translate(offsetX, offsetY);
-
-                    $.writeln("[grading.jsx] 요소 중앙 정렬: 몸판중앙(" + patternCenterX.toFixed(1) + ", " + patternCenterY.toFixed(1)
-                        + ") 이동량(" + offsetX.toFixed(1) + ", " + offsetY.toFixed(1) + ")");
-                }
             } else {
-                // 면적 계산이 불가능한 경우 (PDF 폴백이거나 패턴선 레이어 없음)
-                // 그래도 중앙 정렬은 시도한다
-                app.executeMenuCommand("group");
-                var pastedGroup = patternDoc.selection[0];
-                if (pastedGroup) {
-                    var fillItems = layerFill.pageItems;
-                    var minX = Infinity;
-                    var minY = Infinity;
-                    var maxX = -Infinity;
-                    var maxY = -Infinity;
-                    for (var fi = 0; fi < fillItems.length; fi++) {
-                        var fb = fillItems[fi].geometricBounds;
-                        if (fb[0] < minX) minX = fb[0];
-                        if (fb[1] > maxY) maxY = fb[1];
-                        if (fb[2] > maxX) maxX = fb[2];
-                        if (fb[3] < minY) minY = fb[3];
-                    }
-                    var patternCenterX = (minX + maxX) / 2;
-                    var patternCenterY = (minY + maxY) / 2;
-                    var gb = pastedGroup.geometricBounds;
-                    var groupCenterX = (gb[0] + gb[2]) / 2;
-                    var groupCenterY = (gb[1] + gb[3]) / 2;
-                    var offsetX = patternCenterX - groupCenterX;
-                    var offsetY = patternCenterY - groupCenterY;
-                    pastedGroup.translate(offsetX, offsetY);
-                    $.writeln("[grading.jsx] 요소 중앙 정렬 (면적계산 불가): 이동량(" + offsetX.toFixed(1) + ", " + offsetY.toFixed(1) + ")");
-                }
-                $.writeln("[grading.jsx] 면적 계산 불가 — 요소 원본 크기 유지, 중앙 정렬만 적용");
+                $.writeln("[grading.jsx] 면적 계산 불가(기준/타겟 중 하나 0) — 원본 크기 유지");
             }
+
+            // ===== STEP 10 (8번 작업): 몸판 중앙 정렬 =====
+            alignToBodyCenter(pastedGroup, layerFill);
         } else {
             $.writeln("[grading.jsx] 경고: 붙여넣은 요소가 없음 — 디자인 파일 확인 필요");
         }
 
         // 선택 해제
-        patternDoc.selection = null;
+        baseDoc.selection = null;
 
-        // ===== STEP 9A: CMYK 색상 강제 변환 =====
-        // doc-color-cmyk 메뉴가 일부 버전에서 안 먹히므로,
-        // 모든 pathItem의 fillColor/strokeColor를 직접 CMYK로 변환
-        var convertedCount = 0;
-        function convertItemToCMYK(item) {
-            // fill 색상 변환
-            if (item.filled && item.fillColor && item.fillColor.typename === "RGBColor") {
-                var rgb = item.fillColor;
-                var r = rgb.red / 255;
-                var g = rgb.green / 255;
-                var b = rgb.blue / 255;
-                var k = 1 - Math.max(r, g, b);
-                var cmyk = new CMYKColor();
-                if (k >= 1) {
-                    cmyk.cyan = 0; cmyk.magenta = 0; cmyk.yellow = 0; cmyk.black = 100;
-                } else {
-                    cmyk.cyan = ((1 - r - k) / (1 - k)) * 100;
-                    cmyk.magenta = ((1 - g - k) / (1 - k)) * 100;
-                    cmyk.yellow = ((1 - b - k) / (1 - k)) * 100;
-                    cmyk.black = k * 100;
-                }
-                item.fillColor = cmyk;
-                convertedCount++;
+        // ===== STEP 11-A (9번 작업): RGB 잔존 안전망 (축소판) =====
+        // 왜 축소판만 두나:
+        //   - STEP 7의 importSvgPathsToDoc에서 path 단위로 이미 CMYK 변환 완료.
+        //   - 몸판 쪽 RGB 경로는 없으므로, 안전망은 붙여넣은 요소(디자인)만 순회한다.
+        //   - 몸판을 재순회하지 않음 → 원본 CMYK 수치 유지.
+        var safetyConverted = 0;
+        var designItems = layerDesign.pathItems;
+        for (var ci = 0; ci < designItems.length; ci++) {
+            var it = designItems[ci];
+            // fill이 RGB면 CMYK로 변환
+            if (it.filled && it.fillColor && it.fillColor.typename === "RGBColor") {
+                it.fillColor = cloneColor(it.fillColor);
+                safetyConverted++;
             }
-            // stroke 색상 변환
-            if (item.stroked && item.strokeColor && item.strokeColor.typename === "RGBColor") {
-                var srgb = item.strokeColor;
-                var sr = srgb.red / 255;
-                var sg = srgb.green / 255;
-                var sb = srgb.blue / 255;
-                var sk = 1 - Math.max(sr, sg, sb);
-                var scmyk = new CMYKColor();
-                if (sk >= 1) {
-                    scmyk.cyan = 0; scmyk.magenta = 0; scmyk.yellow = 0; scmyk.black = 100;
-                } else {
-                    scmyk.cyan = ((1 - sr - sk) / (1 - sk)) * 100;
-                    scmyk.magenta = ((1 - sg - sk) / (1 - sk)) * 100;
-                    scmyk.yellow = ((1 - sb - sk) / (1 - sk)) * 100;
-                    scmyk.black = sk * 100;
-                }
-                item.strokeColor = scmyk;
-                convertedCount++;
+            // stroke가 RGB면 CMYK로 변환
+            if (it.stroked && it.strokeColor && it.strokeColor.typename === "RGBColor") {
+                it.strokeColor = cloneColor(it.strokeColor);
+                safetyConverted++;
             }
         }
-        // 모든 레이어의 모든 pathItem 순회
-        for (var ci = 0; ci < patternDoc.pathItems.length; ci++) {
-            convertItemToCMYK(patternDoc.pathItems[ci]);
+        if (safetyConverted > 0) {
+            $.writeln("[grading.jsx] 안전망 RGB→CMYK: " + safetyConverted + "개 색 변환");
+        } else {
+            $.writeln("[grading.jsx] 안전망 RGB→CMYK: 변환 대상 없음 (이미 CMYK)");
         }
-        // 문서 색상 모드도 CMYK로 시도
-        try { app.executeMenuCommand("doc-color-cmyk"); } catch(e) {}
-        $.writeln("[grading.jsx] CMYK 변환: " + convertedCount + "개 색상 변환됨");
 
-        // ===== STEP 9B: 레이어 통합 (올바른 z-order: 배경→디자인→패턴선) =====
-        // 새 레이어를 만들고, 순서대로 아이템을 이동
-        var finalLayer = patternDoc.layers.add();
+        // ===== STEP 11-B (10번 작업): 레이어 z-order 통합 =====
+        // Illustrator stacking 규칙: 컨테이너 배열 앞(index 0) = 위, 끝(PLACEATEND) = 아래.
+        // 의도한 z-order: 디자인 요소(위) > 배경 fill(중간) > 패턴선(아래).
+        // 따라서 "위에 놓일 것부터" PLACEATEND로 먼저 이동해야 뒤에 옮긴 것이 아래로 쌓인다.
+        var finalLayer = baseDoc.layers.add();
         finalLayer.name = "그레이딩 출력";
 
-        // 1) 배경 fill 아이템 먼저 (가장 뒤)
-        while (layerFill.pageItems.length > 0) {
-            layerFill.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
-        }
-        // 2) 디자인 요소 (중간)
+        // 1) 디자인 요소를 먼저 이동 → finalLayer 최상단에 자리잡음
         while (layerDesign.pageItems.length > 0) {
             layerDesign.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
         }
-        // 3) 패턴 선 + 너치 (가장 위)
+        // 2) 배경 fill은 그 아래로 쌓임
+        while (layerFill.pageItems.length > 0) {
+            layerFill.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
+        }
+        // 3) 패턴선은 최하단
         while (layerPattern.pageItems.length > 0) {
             layerPattern.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
         }
+        try { layerFill.remove(); } catch (e1) {}
+        try { layerDesign.remove(); } catch (e2) {}
+        try { layerPattern.remove(); } catch (e3) {}
 
-        // 빈 레이어 제거
-        try { layerFill.remove(); } catch(e) {}
-        try { layerDesign.remove(); } catch(e) {}
-        try { layerPattern.remove(); } catch(e) {}
+        $.writeln("[grading.jsx] 레이어 통합 완료: 디자인(위) > 배경fill > 패턴선(아래)");
 
-        $.writeln("[grading.jsx] 레이어 통합 완료: 배경→디자인→패턴선 순서");
-
-        // ===== STEP 9C: 파일 저장 (EPS 또는 PDF, config.outputFormat으로 판별) =====
+        // ===== STEP 11-C: 파일 저장 (EPS 또는 PDF) =====
         var outputFile = new File(config.outputPath);
         if (config.outputFormat === "eps") {
-            // EPS 저장 — 승화전사 업체에서 EPS를 요구하는 경우
             var epsOpts = createEpsSaveOptions();
-            patternDoc.saveAs(outputFile, epsOpts);
+            baseDoc.saveAs(outputFile, epsOpts);
             $.writeln("[grading.jsx] EPS 저장 완료: " + config.outputPath);
         } else {
-            // PDF 저장 — 기본 출력 형식
             var pdfOpts = createPdfSaveOptions();
-            patternDoc.saveAs(outputFile, pdfOpts);
+            baseDoc.saveAs(outputFile, pdfOpts);
             $.writeln("[grading.jsx] PDF 저장 완료: " + config.outputPath);
         }
 
-        // ===== STEP 10: 정리 =====
-        patternDoc.close(SaveOptions.DONOTSAVECHANGES);
-        patternDoc = null;
+        // ===== STEP 11-D: 정리 + result.json =====
+        baseDoc.close(SaveOptions.DONOTSAVECHANGES);
+        baseDoc = null;
 
-        // 성공 결과 기록
-        var modeMsg = isAiFile ? "AI 레이어 방식" : "PDF 폴백 방식";
+        var modeMsg = isAiFile ? "AI 레이어(재설계)" : "PDF 폴백";
         var formatMsg = config.outputFormat === "eps" ? "EPS" : "PDF";
         writeSuccessResult(resultPath, config.outputPath,
-            "그레이딩 완료 (" + modeMsg + ", " + formatMsg + ") - " + filledCount + "개 조각 색상 채움 + 디자인 요소 배치");
+            "그레이딩 완료 (" + modeMsg + ", " + formatMsg + ") - " + filledCount + "개 조각 + 요소 배치");
         $.writeln("[grading.jsx] 완료! (" + modeMsg + ")");
 
     } catch (err) {
         $.writeln("[grading.jsx] 오류: " + err.message);
 
-        // 열린 문서 정리
+        // 열린 문서 정리 (역순 close)
         try {
             if (designDoc) designDoc.close(SaveOptions.DONOTSAVECHANGES);
-        } catch (e) { /* 무시 */ }
+        } catch (eD) { /* 무시 */ }
         try {
-            if (patternDoc) patternDoc.close(SaveOptions.DONOTSAVECHANGES);
-        } catch (e) { /* 무시 */ }
+            if (svgDoc) svgDoc.close(SaveOptions.DONOTSAVECHANGES);
+        } catch (eS) { /* 무시 */ }
+        try {
+            if (baseDoc) baseDoc.close(SaveOptions.DONOTSAVECHANGES);
+        } catch (eB) { /* 무시 */ }
 
-        // result.json에 에러 기록
         writeErrorResult(resultPath, err.message);
     }
 }

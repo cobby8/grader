@@ -86,6 +86,12 @@
 - **내용**: PyMuPDF로 PDF를 프로그래밍 조작하는 5가지 방식(show_pdf_page, CTM 직접 삽입, clip+show_pdf_page, PDF W 연산자, 조각별 채워넣기)이 모두 근본적 한계(좌표 변환 오차, 사각형만 클리핑, 조각 겹침 등)에 도달. Illustrator ExtendScript로 그레이딩 엔진을 완전 전환하기로 결정. 이유: (1) 클리핑 마스크가 네이티브 기능(곡선/복합 경로 지원), (2) item.resize() API로 정밀 스케일링, (3) CMYK 100% 보존(Illustrator 자체 처리), (4) SVG/PDF 좌표 자동 변환. 실행 방법: 커맨드라인 Illustrator.exe /run script.jsx (방법 A) 우선 채택, 필요 시 COM 자동화(방법 B)로 업그레이드. Python 엔진은 PDF 분석 전용으로 유지. 전제조건: Illustrator CC 2020+ 설치 필수. 예상 소요: 2~3주 (Phase 1 MVP 1주, Phase 2 UI 통합 1주, Phase 3 안정화 1주). 상세: REPORT-EXTENDSCRIPT.md 참조.
 - **참조횟수**: 0
 
+### [2026-04-14] grading.jsx: 새 CMYK 문서 시작 + 몸판→요소 순서 재설계
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: 기존 grading.jsx는 패턴 SVG를 직접 작업 베이스로 사용(app.open + CMYK 플래그)하고 RGB→CMYK를 사후 수식 변환하는 구조라, SVG의 RGB hex가 이미 양자화된 상태에서 색 복원이 되지 않음. 신규 설계: (1) app.documents.add(DocumentColorSpace.CMYK, w, h)로 빈 CMYK 문서를 처음부터 생성하여 작업 베이스로 삼음, (2) SVG는 원본 색 공간으로 열되 path만 CMYK 베이스 문서로 duplicate + path 단위로 fillColor를 CMYK로 명시 할당, (3) 디자인 AI가 RGB 모드면 옵션 A(엄격 중단, 사용자에게 AI 원본 CMYK 재저장 요구)를 기본값, config.allowRgbDesign=true면 수식 변환 폴백. STEP 9A 사후 대량 변환 블록은 안전망 수준으로 축소. 작업 순서는 "몸판(패턴) 베이스 확정 → 요소 paste → 면적 비율 스케일 → 몸판 중앙 정렬"로 기존 흐름 대체로 유지(최종 문서가 SVG였던 구조를 "신규 CMYK 문서"로 교체하는 것이 핵심 차이).
+- **참조횟수**: 0
+
 ### [2026-04-08] 요소 재구성 방식: Level 1(배경색 채우기)부터 단계적 접근
 - **분류**: decision
 - **발견자**: planner-architect
