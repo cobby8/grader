@@ -12,7 +12,7 @@
  * - (2026-04-08) 폴더 트리형 카테고리 분류 시스템 추가
  */
 
-import { useState, useEffect, useCallback, useRef, Fragment } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
@@ -34,138 +34,6 @@ import CategoryTree, { type SelectedCategory } from "../components/CategoryTree"
 type EditMode = "list" | "create" | "edit";
 
 // === 유틸리티 함수 ===
-
-/** SVG에서 추출한 치수 (mm 단위) */
-interface SvgDimensions {
-  width: number;
-  height: number;
-}
-
-/**
- * SVG의 길이 값(예: "520mm", "710px", "100")을 mm 단위 숫자로 변환한다.
- * 패턴 SVG는 보통 mm 단위이므로 mm를 기본으로 취급한다.
- * 단위가 없으면 px(96dpi)로 간주하여 변환한다.
- */
-function parseLength(value: string): number {
-  const match = value.trim().match(/^([\d.]+)\s*(mm|cm|in|pt|px)?$/i);
-  if (!match) return 0;
-
-  const num = parseFloat(match[1]);
-  if (isNaN(num) || num <= 0) return 0;
-
-  const unit = (match[2] || "px").toLowerCase();
-  switch (unit) {
-    case "mm": return num;
-    case "cm": return num * 10;
-    case "in": return num * 25.4;
-    case "pt": return num * 0.3528;
-    case "px": return num * 0.2646; // 96dpi 기준: 1px = 25.4/96 mm
-    default:   return num * 0.2646;
-  }
-}
-
-/**
- * SVG 문자열에서 너비/높이를 mm 단위로 추출한다.
- *
- * 추출 우선순위:
- * 1) <svg> 태그의 width/height 속성 (단위 포함 시 변환)
- * 2) viewBox 속성의 3번째/4번째 값 (단위 없으므로 mm로 간주)
- *
- * 패턴 SVG는 대부분 mm 단위로 작업되므로,
- * viewBox만 있을 때는 해당 값을 mm로 간주한다.
- * 파싱 실패 시 {width: 0, height: 0}을 반환하여 사용자가 수동 입력할 수 있게 한다.
- */
-function parseSvgDimensions(svgData: string): SvgDimensions {
-  // DOMParser로 SVG를 파싱한다
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(svgData, "image/svg+xml");
-  const svg = doc.querySelector("svg");
-
-  if (!svg) return { width: 0, height: 0 };
-
-  // 1단계: width/height 속성에서 추출 (단위 변환 포함)
-  const widthAttr = svg.getAttribute("width");
-  const heightAttr = svg.getAttribute("height");
-
-  if (widthAttr && heightAttr) {
-    const w = parseLength(widthAttr);
-    const h = parseLength(heightAttr);
-    if (w > 0 && h > 0) {
-      return {
-        width: Math.round(w * 100) / 100,  // 소수점 2자리로 반올림
-        height: Math.round(h * 100) / 100,
-      };
-    }
-  }
-
-  // 2단계: viewBox에서 추출 (width/height 없거나 파싱 실패 시)
-  const viewBox = svg.getAttribute("viewBox");
-  if (viewBox) {
-    // viewBox="minX minY width height" — 공백 또는 쉼표로 구분
-    const parts = viewBox.trim().split(/[\s,]+/);
-    if (parts.length >= 4) {
-      const vbWidth = parseFloat(parts[2]);
-      const vbHeight = parseFloat(parts[3]);
-      // 패턴 SVG의 viewBox는 보통 mm 기준이므로 그대로 사용
-      if (vbWidth > 0 && vbHeight > 0) {
-        return {
-          width: Math.round(vbWidth * 100) / 100,
-          height: Math.round(vbHeight * 100) / 100,
-        };
-      }
-    }
-  }
-
-  // 파싱 실패: 0으로 반환하여 사용자가 수동 입력
-  return { width: 0, height: 0 };
-}
-
-/**
- * Python svg_bbox 커맨드를 호출하여 SVG 내 실제 도형의 bounding box 크기를 가져온다.
- *
- * Illustrator SVG는 viewBox가 아트보드 크기(모든 사이즈 동일)이므로,
- * viewBox 대신 polyline 등 실제 도형 좌표에서 크기를 추출해야 정확한 스케일 비율이 나온다.
- *
- * 파일 경로가 필요하므로 svgData(문자열)로는 호출 불가 — 반드시 파일 경로 사용.
- * Python 호출 실패 시 null을 반환하여 호출자가 폴백 처리할 수 있게 한다.
- */
-async function getSvgBboxDimensions(svgFilePath: string): Promise<SvgDimensions | null> {
-  try {
-    const result = await invoke<string>("run_python", {
-      command: "svg_bbox",
-      args: [svgFilePath],
-    });
-    const parsed = JSON.parse(result);
-    if (parsed.success && parsed.width > 0 && parsed.height > 0) {
-      return {
-        width: Math.round(parsed.width * 100) / 100,
-        height: Math.round(parsed.height * 100) / 100,
-      };
-    }
-  } catch (err) {
-    // Python 호출 실패 시 폴백으로 넘긴다
-    console.warn("svg_bbox Python 호출 실패, viewBox 폴백 사용:", err);
-  }
-  return null;
-}
-
-/**
- * SVG 파일의 실제 치수를 가져온다.
- * 1순위: Python svg_bbox (도형 bounding box 기반 — 정확)
- * 2순위: viewBox/width/height 파싱 (폴백 — Illustrator SVG에서 부정확할 수 있음)
- */
-async function getSvgActualDimensions(
-  svgFilePath: string,
-  svgData: string
-): Promise<SvgDimensions> {
-  // 1순위: Python bounding box
-  const bboxDims = await getSvgBboxDimensions(svgFilePath);
-  if (bboxDims && bboxDims.width > 0 && bboxDims.height > 0) {
-    return bboxDims;
-  }
-  // 2순위: 기존 viewBox 기반 폴백
-  return parseSvgDimensions(svgData);
-}
 
 /**
  * 파일명에서 사이즈를 추출한다.
@@ -501,10 +369,9 @@ function PatternManage() {
     }
 
     const newPieces: PatternPiece[] = [];
-    // piece별 사이즈→파일경로 매핑 (Python bbox 호출용)
-    const piecePathBySize = new Map<string, Map<string, string>>();
 
     for (const [pieceName, sizeMap] of grouped) {
+      // 대표 사이즈: M > L > 첫 번째 사이즈 순으로 선택
       const representativeSize = sizeMap.has("M")
         ? "M"
         : sizeMap.has("L")
@@ -515,6 +382,7 @@ function PatternManage() {
       // 원본 SVG를 그대로 저장 (Illustrator가 직접 처리하므로 보정 불필요)
       const representativeSvg = await readTextFile(representativePath);
 
+      // 사이즈별 SVG 데이터를 읽어서 저장
       const svgBySize: Record<string, string> = {};
       for (const [size, path] of sizeMap) {
         try {
@@ -524,17 +392,14 @@ function PatternManage() {
         }
       }
 
-      const pieceId = generateId();
       const newPiece: PatternPiece = {
-        id: pieceId,
+        id: generateId(),
         name: pieceName,
         svgPath: representativePath,
         svgData: representativeSvg,
         svgBySize,
       };
       newPieces.push(newPiece);
-      // 이 piece의 사이즈별 파일 경로 저장
-      piecePathBySize.set(pieceId, sizeMap);
     }
 
     for (const fp of ungrouped) {
@@ -544,18 +409,13 @@ function PatternManage() {
         const filename = getFilenameFromPath(fp);
         const defaultName = filename.replace(/\.svg$/i, "");
 
-        const pieceId = generateId();
         const newPiece: PatternPiece = {
-          id: pieceId,
+          id: generateId(),
           name: defaultName,
           svgPath: fp,
           svgData,
         };
         newPieces.push(newPiece);
-        // 사이즈 없는 SVG도 경로 저장 (모든 사이즈에 동일 경로 사용)
-        const singleMap = new Map<string, string>();
-        singleMap.set("__default__", fp);
-        piecePathBySize.set(pieceId, singleMap);
       } catch (err) {
         console.warn(`SVG 읽기 실패: ${fp}`, err);
       }
@@ -566,47 +426,17 @@ function PatternManage() {
     const updatedPieces = [...formPieces, ...newPieces];
     setFormPieces(updatedPieces);
 
-    // 사이즈별 치수를 Python bbox로 미리 계산한다 (비동기).
-    // 키: "pieceId::size" → SvgDimensions
-    const dimsCache = new Map<string, SvgDimensions>();
-
-    // 모든 piece × size 조합에 대해 치수 추출 프로미스 생성
-    const dimsPromises: Promise<void>[] = [];
-    for (const np of newPieces) {
-      const pathMap = piecePathBySize.get(np.id);
-      // formSizes의 각 사이즈에 대해 치수를 추출
-      for (const sizeSpec of formSizes) {
-        const cacheKey = `${np.id}::${sizeSpec.size}`;
-        // 이 사이즈 전용 SVG 파일 경로가 있으면 사용, 없으면 대표 경로 사용
-        const svgPath = pathMap?.get(sizeSpec.size)
-          || pathMap?.get("__default__")
-          || np.svgPath;
-        const svgData = np.svgBySize?.[sizeSpec.size] || np.svgData || "";
-
-        dimsPromises.push(
-          getSvgActualDimensions(svgPath, svgData).then((dims) => {
-            dimsCache.set(cacheKey, dims);
-          })
-        );
-      }
-    }
-    await Promise.all(dimsPromises);
-
-    // 캐싱된 치수를 사이즈 테이블에 적용
+    // 치수 테이블 제거됨 — 빈 치수(0,0)로 초기화 (기존 데이터 구조 호환)
     setFormSizes((prev) =>
       prev.map((sizeSpec) => ({
         ...sizeSpec,
         pieces: [
           ...sizeSpec.pieces,
-          ...newPieces.map((np) => {
-            const cacheKey = `${np.id}::${sizeSpec.size}`;
-            const dims = dimsCache.get(cacheKey) || { width: 0, height: 0 };
-            return {
-              pieceId: np.id,
-              width: dims.width,
-              height: dims.height,
-            };
-          }),
+          ...newPieces.map((np) => ({
+            pieceId: np.id,
+            width: 0,
+            height: 0,
+          })),
         ],
       }))
     );
@@ -650,36 +480,17 @@ function PatternManage() {
     const updatedPieces = [...formPieces, ...newPieces];
     setFormPieces(updatedPieces);
 
-    // 개별 SVG에서도 Python bbox로 치수를 추출한다.
-    // 사이즈별 SVG가 없으므로, 하나의 SVG 파일에서 크기를 읽어 모든 사이즈에 동일하게 적용.
-    const dimsPromises: Promise<{ pieceId: string; dims: SvgDimensions }>[] = [];
-    for (const np of newPieces) {
-      dimsPromises.push(
-        getSvgActualDimensions(np.svgPath, np.svgData || "").then((dims) => ({
-          pieceId: np.id,
-          dims,
-        }))
-      );
-    }
-    const dimsResults = await Promise.all(dimsPromises);
-    const dimsMap = new Map<string, SvgDimensions>();
-    for (const { pieceId, dims } of dimsResults) {
-      dimsMap.set(pieceId, dims);
-    }
-
+    // 치수 테이블 제거됨 — 빈 치수(0,0)로 초기화 (기존 데이터 구조 호환)
     setFormSizes((prev) =>
       prev.map((sizeSpec) => ({
         ...sizeSpec,
         pieces: [
           ...sizeSpec.pieces,
-          ...newPieces.map((np) => {
-            const dims = dimsMap.get(np.id) || { width: 0, height: 0 };
-            return {
-              pieceId: np.id,
-              width: dims.width,
-              height: dims.height,
-            };
-          }),
+          ...newPieces.map((np) => ({
+            pieceId: np.id,
+            width: 0,
+            height: 0,
+          })),
         ],
       }))
     );
@@ -701,25 +512,6 @@ function PatternManage() {
     setFormPieces((prev) =>
       prev.map((p) => (p.id === pieceId ? { ...p, name: newName } : p))
     );
-  };
-
-  // === 사이즈별 치수 입력 ===
-  const handleDimensionChange = (
-    sizeIndex: number,
-    pieceId: string,
-    field: "width" | "height",
-    value: string
-  ) => {
-    const numValue = parseFloat(value) || 0;
-    setFormSizes((prev) => {
-      const updated = [...prev];
-      const sizeSpec = { ...updated[sizeIndex] };
-      sizeSpec.pieces = sizeSpec.pieces.map((p) =>
-        p.pieceId === pieceId ? { ...p, [field]: numValue } : p
-      );
-      updated[sizeIndex] = sizeSpec;
-      return updated;
-    });
   };
 
   // === 프리셋 저장 (생성 또는 수정) ===
@@ -1153,98 +945,32 @@ function PatternManage() {
         )}
       </div>
 
-      {/* === 사이즈별 치수 입력 테이블 === */}
+      {/* === 사이즈별 SVG 파일 현황 === */}
       {formPieces.length > 0 && (
-        <div className="form-section">
-          <h2 className="form-section__title">사이즈별 치수 (mm)</h2>
-          <p className="form-section__hint">
-            각 사이즈별로 패턴 조각의 가로(W)와 세로(H)를 밀리미터 단위로
-            입력하세요. 필요한 사이즈만 입력하면 됩니다.
-          </p>
-
-          <div className="size-table-wrapper">
-            <table className="size-table">
-              <thead>
-                <tr>
-                  <th className="size-table__th size-table__th--size">
-                    사이즈
-                  </th>
-                  {formPieces.map((piece) => (
-                    <th
-                      key={piece.id}
-                      className="size-table__th"
-                      colSpan={2}
+        <div className="pattern-edit__svg-status">
+          <h3>등록된 SVG 파일</h3>
+          {formPieces.map((piece) => (
+            <div key={piece.id} className="svg-status__piece">
+              <strong>{piece.name}</strong>
+              {piece.svgBySize ? (
+                <div className="svg-status__sizes">
+                  {SIZE_LIST.map((size) => (
+                    <span
+                      key={size}
+                      className={`svg-status__size ${piece.svgBySize?.[size] ? "svg-status__size--ok" : "svg-status__size--missing"}`}
                     >
-                      {piece.name}
-                    </th>
+                      {size} {piece.svgBySize?.[size] ? "\u2713" : ""}
+                    </span>
                   ))}
-                </tr>
-                <tr>
-                  <th className="size-table__th size-table__th--sub"></th>
-                  {formPieces.map((piece) => (
-                    <Fragment key={piece.id}>
-                      <th className="size-table__th size-table__th--sub">W</th>
-                      <th className="size-table__th size-table__th--sub">H</th>
-                    </Fragment>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {formSizes.map((sizeSpec, sizeIdx) => (
-                  <tr key={sizeSpec.size}>
-                    <td className="size-table__td size-table__td--size">
-                      {sizeSpec.size}
-                    </td>
-                    {formPieces.map((piece) => {
-                      const dim = sizeSpec.pieces.find(
-                        (p) => p.pieceId === piece.id
-                      );
-                      return (
-                        <Fragment key={piece.id}>
-                          <td className="size-table__td">
-                            <input
-                              className="size-table__input"
-                              type="number"
-                              min="0"
-                              step="0.1"
-                              value={dim?.width || ""}
-                              onChange={(e) =>
-                                handleDimensionChange(
-                                  sizeIdx,
-                                  piece.id,
-                                  "width",
-                                  e.target.value
-                                )
-                              }
-                              placeholder="0"
-                            />
-                          </td>
-                          <td className="size-table__td">
-                            <input
-                              className="size-table__input"
-                              type="number"
-                              min="0"
-                              step="0.1"
-                              value={dim?.height || ""}
-                              onChange={(e) =>
-                                handleDimensionChange(
-                                  sizeIdx,
-                                  piece.id,
-                                  "height",
-                                  e.target.value
-                                )
-                              }
-                              placeholder="0"
-                            />
-                          </td>
-                        </Fragment>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                  <div className="svg-status__count">
+                    {Object.keys(piece.svgBySize || {}).length} / {SIZE_LIST.length} 사이즈 등록
+                  </div>
+                </div>
+              ) : (
+                <div>단일 SVG (사이즈별 파일 없음)</div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 

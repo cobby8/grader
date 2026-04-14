@@ -763,6 +763,27 @@ tester 참고:
 - 한 사이즈 실패해도 다음 사이즈 계속 진행
 - npx tsc --noEmit 통과, npx vite build 통과 (305.78 KB JS / 23.80 KB CSS)
 
+### [2026-04-08] PatternManage 치수 테이블 제거 + SVG 파일 목록 표시로 교체
+
+구현한 기능: 편집 모드에서 사이즈별 치수 입력 테이블을 제거하고, 대신 사이즈별 SVG 파일 등록 현황을 표시
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| src/pages/PatternManage.tsx | parseLength/parseSvgDimensions/getSvgBboxDimensions/getSvgActualDimensions/handleDimensionChange 함수 제거, addSvgFiles 내 bbox 추출 코드를 빈 치수(0,0)로 교체, 치수 테이블 JSX를 SVG 파일 목록으로 교체, Fragment import 제거 | 수정 |
+| src/App.css | .size-table-* 스타일을 .svg-status-* 스타일로 교체 | 수정 |
+
+tester 참고:
+- 검증 완료: `npx tsc --noEmit` 통과, `npx vite build` 통과 (302.75 KB JS / 23.72 KB CSS)
+- 테스트 방법:
+  1. dev.bat 실행 -> 패턴 관리 -> 새 프리셋 추가 -> 폴더로 등록 (사이즈별 SVG) -> 치수 테이블 대신 SVG 파일 현황 표시 확인
+  2. 사이즈별 SVG가 등록된 piece: 각 사이즈에 체크 표시 + "N / 13 사이즈 등록" 카운트
+  3. 단일 SVG만 있는 piece: "단일 SVG (사이즈별 파일 없음)" 텍스트
+  4. 저장 후 다시 편집 -> 기존 데이터 정상 로드 확인
+- 정상 동작:
+  - 편집 모드에서 치수 입력 테이블 없음, SVG 파일 현황만 표시
+  - formSizes는 기존 구조 유지 (width/height 0으로 초기화) — 다른 페이지와의 호환성 보존
+  - 목록 모드 카드, 조각 목록 등 기존 UI 변경 없음
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 

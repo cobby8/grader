@@ -643,79 +643,49 @@ html, body, #root {
   color: var(--color-text-muted);
 }
 
-/* --- 사이즈 치수 테이블 --- */
-.size-table-wrapper {
-  overflow-x: auto; /* 조각이 많으면 가로 스크롤 */
+/* --- 사이즈별 SVG 파일 현황 --- */
+.pattern-edit__svg-status {
+  margin-top: 16px;
 }
 
-.size-table {
+.svg-status__piece {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-dashed, #e0e0e0);
+  border-radius: var(--radius-sm, 4px);
+}
+
+.svg-status__sizes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.svg-status__size {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  background: var(--color-bg-tertiary, #f0f0f0);
+  color: var(--color-text-secondary, #666);
+}
+
+.svg-status__size--ok {
+  background: var(--color-success-bg, #dcfce7);
+  color: var(--color-success, #16a34a);
+}
+
+.svg-status__size--missing {
+  background: var(--color-bg-tertiary, #f0f0f0);
+  color: var(--color-text-tertiary, #999);
+  opacity: 0.5;
+}
+
+.svg-status__count {
   width: 100%;
-  border-collapse: collapse;
-  font-size: var(--font-size-sm);
-}
-
-.size-table__th {
-  padding: 8px 6px;
-  text-align: center;
-  font-weight: 600;
-  color: var(--color-text-dark);
-  background-color: var(--color-bg-content);
-  border-bottom: 2px solid var(--color-border-dashed);
-  white-space: nowrap;
-}
-
-.size-table__th--size {
-  text-align: left;
-  width: 70px;
-  min-width: 70px;
-}
-
-.size-table__th--sub {
-  font-weight: 500;
-  font-size: 11px;
-  color: var(--color-text-muted);
-  border-bottom: 1px solid var(--color-border-dashed);
-  padding: 4px 6px;
-}
-
-.size-table__td {
-  padding: 4px;
-  border-bottom: 1px solid var(--color-bg-content);
-}
-
-.size-table__td--size {
-  font-weight: 600;
-  color: var(--color-text-dark);
-  padding-left: 8px;
-}
-
-.size-table__input {
-  width: 100%;
-  min-width: 50px;
-  max-width: 80px;
-  padding: 4px 6px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-  font-family: var(--font-family);
-  text-align: center;
-  color: var(--color-text-dark);
-  background: transparent;
-  transition: border-color var(--transition-fast);
-}
-
-.size-table__input:hover,
-.size-table__input:focus {
-  border-color: var(--color-border-dashed);
-  outline: none;
-  background-color: var(--color-bg-surface);
-}
-
-/* number input의 스피너(화살표) 숨김 — 깔끔한 테이블 유지 */
-.size-table__input::-webkit-outer-spin-button,
-.size-table__input::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
 }
 
 /* --- 폼 하단 버튼 영역 --- */
