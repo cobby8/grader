@@ -2,8 +2,20 @@
 
 ## 현재 작업
 - **요청**: Illustrator ExtendScript 연동으로 그레이딩 엔진 재설계
-- **상태**: 7단계 Phase 1 완료 + **tester 검증 통과** (13/13, 기획지시문 오류 제외)
-- **현재 담당**: PM → 사용자 판단 대기 (Phase 2 진입 여부)
+- **상태**: ⏸ **작업 중단 (2026-04-14) — 내일 이어서 진행**
+- **현재 담당**: PM → 사용자 확정 대기
+
+### ✅ 오늘 완료 (커밋 2개 미푸시)
+1. `dd51cc5` — grading.jsx CMYK 시작점 + 몸판 우선 플로우 + Phase 1 z-order 수정
+2. `1985909` — 조각별 요소 분리 정렬 + z-order 재조정 (패턴선 위 > 디자인 > 배경fill)
+
+### 🔜 내일 이어서 할 일 (우선순위 순)
+1. **패턴선 자동 색상 전환 구현** (가능성 조사 완료, 사용자 승인 대기 중)
+   - 조사 보고서: "기획설계 (planner-architect)" → `[2026-04-14] 패턴선 색상 자동 전환 가능성 조사`
+   - 권장안: WCAG 대비비 기반 흰/검 자동 선택, `config.patternLineColor="auto"` 기본값, stroke만 먼저, 실패시 keep 폴백
+   - **내일 재개 시**: 4가지 의사결정 답 받고 → developer에게 구현 위임 (약 +80줄 예상)
+2. (선택) Phase 3 — 조각별 개별 스케일링 (planner-architect 보고서 원래 계획)
+3. 미푸시 커밋 2개 푸시 (사용자 확인 후)
 
 ## 진행 현황표
 
@@ -16,7 +28,7 @@
 | 4 | 사이즈 선택 + 그레이딩 파일 생성 (CMYK 보존 스케일링) | ✅ 완료 |
 | 5 | CMYK 보존 + 출력 고도화 (벡터 CMYK 감지 + 파일 크기 리포트) | ✅ 완료 |
 | 6 | 통합 테스트 (E2E 워크플로우 검증) | ✅ 완료 |
-| 7 | Illustrator ExtendScript 그레이딩 엔진 전환 | 🔄 Phase 1 완료 (tester 검증 중) |
+| 7 | Illustrator ExtendScript 그레이딩 엔진 전환 | 🔄 Phase 1+2 완료 (패턴선 색상 자동 전환 대기) |
 
 ## 프로젝트 핵심 정보
 
@@ -463,6 +475,122 @@ E1. finalLayer.add() 후 이동 순서를 **역순으로 변경**:
 - bbox 포함 판정: `cx >= bbox[0] && cx <= bbox[2] && cy <= bbox[1] && cy >= bbox[3]` (left/top/right/bottom 순서)
 - 조각 수 불일치는 엄격 모드 에러 (writeErrorResult)
 
+### [2026-04-14] 패턴선 색상 자동 전환 가능성 조사
+
+목표 한 줄: **배경색이 어두우면 패턴선을 흰색으로, 밝으면 검정으로 자동 전환이 가능한가? → 결론: 가능하다. 단순 구현은 1~2시간, 고품질 구현은 반나절.**
+
+현재 상태 요약(코드 인용):
+- `grading.jsx` 598~664줄 `importSvgPathsToDoc`: 큰 path는 `layerFill`에 fill=mainColor로 복제, 동시에 같은 path를 `layerPattern`에 stroke 유지 + fill 제거로 복제. **stroke 색은 RGB면 `cloneColor`로 CMYK 변환만 하고 원색 유지**.
+- 1326~1328줄: `layerPattern`의 모든 아이템이 `finalLayer` 최상단에 얹힘(패턴선 > 디자인 > 배경fill).
+- 1292~1316줄 STEP 11-A: 요소(디자인) 쪽만 RGB 잔존 안전망 변환, 패턴선은 건드리지 않음.
+- 따라서 **패턴선 색상 일괄 재할당을 끼워 넣을 지점은 이미 존재**: STEP 11-A 직후 ~ 11-B 직전 사이 (또는 `importSvgPathsToDoc` 안에서 stroke 할당 시점).
+
+## 1. 밝기 판정 방법론 비교
+
+비유: "페인트 캔을 섞어 만든 색이 얼마나 밝은지 재는 방법". 재료 배합표(CMYK)로 대충 재느냐, 진짜 빛(RGB)으로 재느냐, 눈의 민감도까지 고려(L*)하느냐의 차이.
+
+| 후보 | 정확도 | 구현 복잡도 | ExtendScript 실현성 | 비고 |
+|------|--------|-------------|---------------------|------|
+| A. CMYK 단순식 `brightness = (1-K/100) * (1 - (C+M+Y)/300)` | 중 | 최저 (3줄) | 100% (사칙연산) | 순수 C 100%(밝은 청록) 같은 모서리 케이스 과대평가 경향 |
+| B. CMYK→RGB 근사 후 상대휘도 `L = 0.2126R + 0.7152G + 0.0722B` | 중상 | 낮음 (10줄) | 100% (단순 공식) | 공식: `R=(1-C/100)*(1-K/100)`, G/B 동형. 프로파일 없는 근사지만 **시각 밝기와 잘 일치** |
+| C. Lab L* 사용 | 상 | 높음 | 불확실 — `app.convertSampleColor`는 CMYK↔RGB만 공식 지원, Lab 변환은 문서화 약함 | 과잉 품질. 본 용도에 오버킬 |
+| D. K 값 단일 휴리스틱 `K>50이면 어둡다` | 저 | 최저 | 100% | 청록(C100,K0)·진빨강(M100,Y100,K0)에서 **명백히 오판** — 탈락 |
+
+**ExtendScript API 메모**: `app.convertSampleColor(srcSpace, srcArray, dstSpace, intent)`는 존재하지만 Illustrator 버전/환경 편차가 있고, 인쇄용 디자이너 PC에서 신뢰도가 일정하지 않아 **의존하지 않는 쪽이 안전**. 후보 B의 근사식은 API 없이도 완결되므로 **후보 B 채택 권장**.
+
+## 2. 임계값 + 에지 케이스
+
+- **단일 임계값 2분류**가 가장 단순. 후보 B 상대휘도 기준 **0.5**(0~1 스케일)로 시작.
+- **WCAG 대비비 기반 최적 선택**(고품질 옵션): `contrast(bg, white)` vs `contrast(bg, black)` 둘을 모두 계산해 큰 쪽을 채택. 공식: `(L_brighter + 0.05) / (L_darker + 0.05)`. 임계값 튜닝 불필요, 항상 대비가 큰 쪽 선택 → **에지 케이스 자동 해결**. 추가 비용은 덧셈 몇 번뿐.
+- 임계값 근처(예: 회색 배경 L=0.48~0.52)에서 튕기는 걸 막으려면 **WCAG 대비비 방식**이 월등하다. 권장.
+
+## 3. 적용 범위 (전역 vs 조각별)
+
+| 옵션 | 동작 | 적합성 |
+|------|------|--------|
+| 가-1 전역 | 모든 `layerPattern` 아이템 stroke를 동일 색으로 | **추천**. 현재 구조상 `mainColor`는 전 몸판 단일 색이므로 구분할 필요 자체가 없음 |
+| 가-2 조각별 | 각 조각(basePieces)의 fill 색을 다시 읽어 그 조각을 덮는 stroke만 다르게 | 현재 몸판 fill이 전부 `mainColor`라 의미 없음. 향후 "조각마다 다른 색 몸판"이 도입되면 재검토 |
+
+**결론: 가-1(전역) 채택**. `importSvgPathsToDoc` 함수에 이미 `mainColor` 한 값만 들어오므로 설계적으로도 일관.
+
+## 4. 색상 변경 방식 (API)
+
+- 대상: `layerPattern` 안의 `PathItem` 전부의 **stroke 색**(레이어 통합 이후에는 `finalLayer` 내 상위 아이템들).
+- stroke가 없는 조각(filled 패턴 기호)은 `fillColor`도 같은 규칙으로 덮어씌워야 일관성 확보. 단 "선 아닌 기호"를 원색 유지하고 싶다는 디자이너 요구가 있을 수 있으므로 **stroke만 먼저 다루는 보수안**이 안전.
+- 흰색 CMYK: `new CMYKColor()` 후 `c=m=y=k=0`. 검정 CMYK: `c=m=y=0, k=100`.
+- 중첩 처리: `CompoundPathItem`, `GroupItem`이 있을 수 있으므로 재귀 순회. `pageItems[i]`를 돌며 typename 분기:
+  - `PathItem`: stroked면 `strokeColor` 덮어쓰기
+  - `CompoundPathItem`: `pathItems[j]` 순회
+  - `GroupItem`: `pageItems[j]` 재귀
+- 성능: 패턴선 수는 수백 개 규모라 무시 가능.
+
+## 5. 사용자 옵션 설계 권장
+
+비개발자 바이브 코더 + 승화전사 디자이너 특성상 **"자동이 기본, 필요할 때만 고정"** 이 정답.
+
+권장 config 키:
+```
+"patternLineColor": "auto"   // 기본 — 배경 밝기로 흰/검 자동 선택 (WCAG 대비비)
+                  | "white"  // 항상 흰색 고정
+                  | "black"  // 항상 검정 고정
+                  | "keep"   // 원본 그대로 (현재 동작 — 안전 폴백)
+```
+
+- 자동 실패(색 추출 실패 등) 시 내부적으로 `keep`로 폴백.
+- UI 노출은 **옵션 공개 안 해도 됨** — config.json에만 두고 기본 `auto`. 문제 생기면 그때 UI 토글 추가.
+
+## 6. 위험 및 폴백
+
+| 위험 | 대응 |
+|------|------|
+| `mainColor` 추출 실패 | 현재 폴백 회색(85%K)이 세팅됨 → 자동 판정에서도 그대로 써서 어두움 판정 → 흰색 선택. 안전. |
+| stroke가 그라데이션/패턴(GradientColor/PatternColor)인 경우 | typename 체크해서 단색(CMYK/RGB/Gray)만 덮어쓰고 나머지는 스킵 + 로그 |
+| 패턴선이 "선이 아닌 기호 fill"로 되어 있는 경우(별표 마크 등) | Phase 1에서는 stroke만 변경, fill은 원본 유지. 필요하면 Phase 2에서 fill도 포함하도록 옵션 추가 |
+| 패턴 PDF 폴백 경로(AI 없음) | 이 경로는 `mainColor`가 없을 수 있음. `auto` 모드에서 `mainColor` null이면 `keep`로 폴백 |
+| 흰색 선이 흰 종이에 출력되면 보이지 않음 | 이 프로그램 출력은 어떤 배경 위에 덮는 패턴선이므로 해당 케이스 없음. 다만 몸판 fill 적용 **전** 프리뷰에서는 안 보일 수 있음 — 사용자에게 "최종 PDF 기준" 안내만 있으면 충분 |
+
+## 7. 권장 방향
+
+**1순위 안: 후보 B(근사 RGB 휘도) + WCAG 대비비 최적 선택 + 전역 적용 + config 기본 auto**
+
+이유:
+- ExtendScript API 의존 없음 → 환경 편차 0
+- WCAG 대비비는 임계값 튜닝 불필요하고 "흰/검 중 더 보이는 쪽"이라는 직관적 목표와 수학적으로 일치
+- 전역 적용은 현재 단일 mainColor 구조에 부합
+- config 기본 `auto` + UI 숨김 → 바이브 코더 관점에서 "알아서 잘 됨"
+- `keep` 폴백으로 안전망 확보
+
+구현 단계(요지):
+1. `cmykToLinearLuminance(cmyk)` 헬퍼: CMYK → 근사 RGB(0~1) → 선형화 → 상대휘도 반환
+2. `pickPatternStrokeColor(bgColor)`: 흰/검 각각의 WCAG 대비비 계산 → 큰 쪽의 CMYKColor 반환. bgColor null이면 null 반환(= keep)
+3. `applyPatternColorRecursive(container, newColor)`: layerPattern 아래를 재귀 순회해 stroke 덮어쓰기 (typename 분기 포함)
+4. 호출 시점: STEP 11-A(안전망) 이후 & STEP 11-B(레이어 통합) 직전 한 번. 이유: `layerPattern` 컨테이너가 아직 살아있고 중첩 구조 그대로라 재귀가 명확.
+5. config 읽기: `config.patternLineColor` (없으면 `"auto"`). `keep`이면 호출 생략.
+
+예상 변경 파일/함수 (수정 양 참고용):
+- `illustrator-scripts/grading.jsx`: 헬퍼 3개 신규 + main()에서 config 읽기 1줄 + STEP 11-A 다음 호출 블록 10줄 내외. **총 +80줄 수준**
+- `src/pages/FileGenerate.tsx` 또는 config 생성 지점: `patternLineColor: "auto"` 기본값 추가 1줄
+- Rust 변경 없음
+
+예상 리스크: **낮음**. 기존 z-order/CMYK 흐름에 영향 없음 — STEP 11-A와 11-B 사이에 "색만 덮어쓰는" 독립 블록 추가. 롤백은 한 블록 삭제로 끝남.
+
+## 사용자 의사결정이 필요한 포인트
+
+1. **`patternLineColor` 기본값**: `auto`로 시작하고 UI 숨김 (권장) vs 처음부터 UI 토글 제공. → 권장은 auto 기본, UI 숨김.
+2. **판정 기준**: WCAG 대비비(권장) vs 단순 임계값 0.5. → 권장은 WCAG.
+3. **적용 범위**: stroke만(보수안, 권장) vs stroke+fill 둘 다(적극안). → 권장은 stroke만 시작, 샘플 확인 후 확장.
+4. **폴백 색**: 자동 실패 시 `keep`(원본 유지, 권장) vs `black` 기본. → 권장은 keep.
+
+## 실행 계획 (승인 후)
+
+| 순서 | 작업 | 담당 | 선행 조건 |
+|------|------|------|----------|
+| 1 | 헬퍼 3종(`cmykToLinearLuminance`, `pickPatternStrokeColor`, `applyPatternColorRecursive`) 추가 | developer | 없음 |
+| 2 | main() 내 config.patternLineColor 읽기 + STEP 11-A 직후 호출 블록 삽입 | developer | 1단계 |
+| 3 | config 기본값 `"auto"` 주입 위치 1줄 추가 (FileGenerate 또는 Rust config 생성부) | developer | 2단계 |
+| 4 | ES3 + tsc + cargo 정적 검증 | tester | 3단계 |
+| 5 | Illustrator 실제 실행으로 어두운 배경/밝은 배경 각 1개 확인 | 사용자 | 4단계 |
+
 ## 구현 기록 (developer)
 
 ### [2026-04-08] 7단계 Phase 1: FileGenerate 롤백 + Illustrator ExtendScript 프로토타입
@@ -651,7 +779,6 @@ tester 참고:
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-04-08 | developer | SVG 패턴 클리핑 마스크+bleed 적용 + 좌표계 버그 수정 + 조각별 채워넣기 | 완료 |
 | 2026-04-08 | developer | SVG 아트보드 자동 보정 (normalize_artboard viewBox 1580x2000mm) | 완료 |
 | 2026-04-08 | developer | 데이터 보호 안전장치 (3 store 로드/저장 빈배열 차단 + 백업) | 완료 |
 | 2026-04-08 | developer | grading.jsx 3가지 수정 (요소 몸판 중앙 정렬 + 레이어 통합 + CMYK 강제 변환) | 완료 |
@@ -662,3 +789,4 @@ tester 참고:
 | 2026-04-14 | developer | Phase 1 z-order 수정 (grading.jsx 1007~1030줄 while 블록 순서 교체, 디자인>배경fill>패턴선, tsc/cargo/ES3 통과) | 완료 |
 | 2026-04-14 | developer | grading.jsx z-order 재조정 (1318~1341줄 while 순서 layerPattern→layerDesign→layerFill, 패턴선>디자인>배경fill, tsc/cargo/ES3 통과) | 완료 |
 | 2026-04-14 | developer | Phase 2 조각별 요소 분리 정렬 구현 (grading.jsx 신규 함수 4종 + importSvgPathsToDoc basePieces 반환 + STEP 4 사전 매핑 + STEP 10 그룹해제/개별translate, +311줄, 안전장치 3단계 폴백, tsc/cargo/ES3 통과) | 완료 |
+| 2026-04-14 | planner-architect | 패턴선 색상 자동 전환 가능성 조사 보고서 (후보 B 근사 RGB 휘도 + WCAG 대비비 + config.patternLineColor auto 기본, 전역 적용, STEP 11-A/B 사이 삽입 권장, 예상 +80줄) | 완료 |
