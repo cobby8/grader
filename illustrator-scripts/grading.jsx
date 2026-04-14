@@ -876,37 +876,81 @@ function main() {
         patternDoc.selection = null;
 
         // ===== STEP 9A: CMYK 색상 강제 변환 =====
-        // 왜 필요한가:
-        //   - SVG 파일 자체가 RGB 색상 공간으로 정의되어 있으면
-        //   - DocumentColorSpace.CMYK로 열어도 내부 색상이 RGB로 남을 수 있다
-        //   - 저장 전에 문서 전체를 CMYK로 강제 변환하여 인쇄 색상을 보장한다
-        if (patternDoc.documentColorSpace !== DocumentColorSpace.CMYK) {
-            // 문서 색상 모드가 CMYK가 아니면 메뉴 커맨드로 변환
-            app.executeMenuCommand("doc-color-cmyk");
-            $.writeln("[grading.jsx] 문서 색상 모드를 CMYK로 변환함");
-        } else {
-            $.writeln("[grading.jsx] 문서 색상 모드 이미 CMYK");
-        }
-        // 추가 안전장치: Edit > Edit Colors > Convert to CMYK
-        // SVG에서 온 RGB 개별 오브젝트들도 CMYK로 변환
-        app.executeMenuCommand("doc-color-cmyk");
-        $.writeln("[grading.jsx] CMYK 강제 변환 완료");
-
-        // ===== STEP 9B: 레이어 통합 (저장 전 모든 아이템을 하나의 레이어로) =====
-        // 왜 통합하나:
-        //   - 출력 파일에 불필요한 레이어 구분이 남으면 인쇄 업체에서 혼란 발생
-        //   - 하나의 레이어로 합치면 깔끔한 출력물이 된다
-        var finalLayer = patternDoc.layers[0]; // 최상위 레이어를 기준으로 사용
-        finalLayer.name = "그레이딩 출력";
-        // 나머지 레이어의 모든 아이템을 최상위 레이어로 이동
-        for (var li = patternDoc.layers.length - 1; li >= 1; li--) {
-            var mergeLayer = patternDoc.layers[li];
-            while (mergeLayer.pageItems.length > 0) {
-                mergeLayer.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
+        // doc-color-cmyk 메뉴가 일부 버전에서 안 먹히므로,
+        // 모든 pathItem의 fillColor/strokeColor를 직접 CMYK로 변환
+        var convertedCount = 0;
+        function convertItemToCMYK(item) {
+            // fill 색상 변환
+            if (item.filled && item.fillColor && item.fillColor.typename === "RGBColor") {
+                var rgb = item.fillColor;
+                var r = rgb.red / 255;
+                var g = rgb.green / 255;
+                var b = rgb.blue / 255;
+                var k = 1 - Math.max(r, g, b);
+                var cmyk = new CMYKColor();
+                if (k >= 1) {
+                    cmyk.cyan = 0; cmyk.magenta = 0; cmyk.yellow = 0; cmyk.black = 100;
+                } else {
+                    cmyk.cyan = ((1 - r - k) / (1 - k)) * 100;
+                    cmyk.magenta = ((1 - g - k) / (1 - k)) * 100;
+                    cmyk.yellow = ((1 - b - k) / (1 - k)) * 100;
+                    cmyk.black = k * 100;
+                }
+                item.fillColor = cmyk;
+                convertedCount++;
             }
-            mergeLayer.remove();
+            // stroke 색상 변환
+            if (item.stroked && item.strokeColor && item.strokeColor.typename === "RGBColor") {
+                var srgb = item.strokeColor;
+                var sr = srgb.red / 255;
+                var sg = srgb.green / 255;
+                var sb = srgb.blue / 255;
+                var sk = 1 - Math.max(sr, sg, sb);
+                var scmyk = new CMYKColor();
+                if (sk >= 1) {
+                    scmyk.cyan = 0; scmyk.magenta = 0; scmyk.yellow = 0; scmyk.black = 100;
+                } else {
+                    scmyk.cyan = ((1 - sr - sk) / (1 - sk)) * 100;
+                    scmyk.magenta = ((1 - sg - sk) / (1 - sk)) * 100;
+                    scmyk.yellow = ((1 - sb - sk) / (1 - sk)) * 100;
+                    scmyk.black = sk * 100;
+                }
+                item.strokeColor = scmyk;
+                convertedCount++;
+            }
         }
-        $.writeln("[grading.jsx] 레이어 통합 완료: '" + finalLayer.name + "' 단일 레이어");
+        // 모든 레이어의 모든 pathItem 순회
+        for (var ci = 0; ci < patternDoc.pathItems.length; ci++) {
+            convertItemToCMYK(patternDoc.pathItems[ci]);
+        }
+        // 문서 색상 모드도 CMYK로 시도
+        try { app.executeMenuCommand("doc-color-cmyk"); } catch(e) {}
+        $.writeln("[grading.jsx] CMYK 변환: " + convertedCount + "개 색상 변환됨");
+
+        // ===== STEP 9B: 레이어 통합 (올바른 z-order: 배경→디자인→패턴선) =====
+        // 새 레이어를 만들고, 순서대로 아이템을 이동
+        var finalLayer = patternDoc.layers.add();
+        finalLayer.name = "그레이딩 출력";
+
+        // 1) 배경 fill 아이템 먼저 (가장 뒤)
+        while (layerFill.pageItems.length > 0) {
+            layerFill.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
+        }
+        // 2) 디자인 요소 (중간)
+        while (layerDesign.pageItems.length > 0) {
+            layerDesign.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
+        }
+        // 3) 패턴 선 + 너치 (가장 위)
+        while (layerPattern.pageItems.length > 0) {
+            layerPattern.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
+        }
+
+        // 빈 레이어 제거
+        try { layerFill.remove(); } catch(e) {}
+        try { layerDesign.remove(); } catch(e) {}
+        try { layerPattern.remove(); } catch(e) {}
+
+        $.writeln("[grading.jsx] 레이어 통합 완료: 배경→디자인→패턴선 순서");
 
         // ===== STEP 9C: 파일 저장 (EPS 또는 PDF, config.outputFormat으로 판별) =====
         var outputFile = new File(config.outputPath);
