@@ -311,13 +311,22 @@ function FileGenerate() {
         const outputPdfPath = await join(absOutputDir, outputFileName);
 
         // 2-d) config.json 작성 (grading.jsx가 읽는 형식)
-        // designPdfPath는 이미 절대 경로 (designStore.copyPdfToAppData가 절대 경로 반환)
-        const config = {
-          designPdfPath: dsg.storedPath,         // 기준 디자인 PDF (색상 추출용)
+        // AI 파일 경로가 있으면 designAiPath로 전달 (레이어 기반 정밀 처리)
+        // 없으면 designPdfPath만 전달 (기존 PDF 폴백 방식)
+        // storedPath 확장자가 .ai면 AI 파일로 판정
+        const isAiFile = dsg.storedPath.toLowerCase().endsWith(".ai");
+        const config: Record<string, string> = {
           patternSvgPath: tempSvgPath,           // 타겟 사이즈 SVG (틀)
           outputPdfPath: outputPdfPath,           // 출력 PDF 경로
           resultJsonPath: resultJsonPath,         // 결과 마커 파일 경로
         };
+        if (isAiFile) {
+          // AI 파일: 레이어 기반 처리 (요소 레이어만 복사, 몸판에서 색상 추출)
+          config.designAiPath = dsg.storedPath;
+        } else {
+          // PDF: 기존 폴백 방식 (전체 복사, 면적 기준 색상 추출)
+          config.designPdfPath = dsg.storedPath;
+        }
         // Rust 커맨드로 절대 경로에 config.json 쓰기
         await invoke('write_file_absolute', { path: configJsonPath, content: JSON.stringify(config) });
 

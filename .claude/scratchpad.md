@@ -784,6 +784,31 @@ tester 참고:
   - formSizes는 기존 구조 유지 (width/height 0으로 초기화) — 다른 페이지와의 호환성 보존
   - 목록 모드 카드, 조각 목록 등 기존 UI 변경 없음
 
+### [2026-04-08] grading.jsx AI 파일 레이어 기반 전면 재작성
+
+구현한 기능: grading.jsx를 AI 파일의 레이어 구조 기반으로 전면 재작성 (PDF 폴백 유지)
+
+핵심 변경점 (기존 대비):
+1. PDF -> AI 파일: config.designAiPath 우선, 없으면 designPdfPath 폴백
+2. 통째 복사 -> 레이어별 복사: "요소" 레이어만 복사 (배경 제외)
+3. RGB->CMYK 변환 불필요: AI가 이미 CMYK이므로 색상 그대로 사용
+4. "몸판" 레이어에서 정확한 색상 추출 (면적 추측 불필요)
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| illustrator-scripts/grading.jsx | AI 레이어 기반 전면 재작성 (extractColorFromBodyLayer + 요소 레이어만 선택 복사 + resolveDesignFile AI/PDF 분기) | 수정 |
+| illustrator-scripts/test/config.json | designAiPath 필드 추가 + designPdfPath 폴백 유지 | 수정 |
+| src/pages/FileGenerate.tsx | config에 designAiPath/designPdfPath 분기 (storedPath 확장자 .ai 판정) | 수정 |
+
+tester 참고:
+- ES3 호환성: let/const 0건, arrow function 0건, template literal 0건
+- config.json에 designAiPath가 있고 파일이 존재하면 AI 레이어 방식
+- config.json에 designAiPath가 없거나 파일 없으면 기존 PDF 폴백 방식 (하위 호환)
+- 테스트 방법: Illustrator에서 File > Scripts > Other Script... > grading.jsx 실행 (test/config.json 참조)
+- 정상 동작: AI "몸판" 레이어에서 색상 추출, "요소" 레이어만 복사+붙여넣기, 패턴 조각에 색상 채움
+- AI 파일에 "요소"/"몸판" 레이어가 없으면 에러 메시지 (요소) 또는 전체 문서 폴백 (몸판)
+- npx tsc --noEmit 통과
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -807,3 +832,4 @@ tester 참고:
 | 2026-04-08 | developer | FileGenerate Illustrator grading.jsx 자동 호출 연동 (AI 있으면 AI방식, 없으면 Python 폴백) | 완료 |
 | 2026-04-08 | developer | (A) SVG 파일 쓰기 Rust 커맨드 전환 + (B) 패턴 카드에 조각별 SVG 사이즈 현황 표시 | 완료 |
 | 2026-04-08 | developer | (A) CMYK 보존 코드 검증 통과 + (B) grading.jsx 디자인 요소 자동 배치 (레이어 3개 z-order + 복사/붙여넣기) | 완료 |
+| 2026-04-08 | developer | grading.jsx AI 레이어 기반 전면 재작성 (몸판 색상 추출 + 요소 레이어만 복사 + PDF 폴백) | 완료 |

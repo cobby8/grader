@@ -1,20 +1,29 @@
 /**
- * grading.jsx -- Illustrator ExtendScript 그레이딩 스크립트 (배경 채우기 + 디자인 요소 배치)
+ * grading.jsx -- Illustrator ExtendScript 그레이딩 스크립트 (AI 레이어 기반)
  *
  * 동작 흐름:
  *   1. config.json 읽기 (스크립트와 같은 폴더)
- *   2. 기준 디자인 PDF 열기 → 배경 메인 색상 추출 → 닫기
- *   3. 타겟 사이즈 패턴 SVG 열기 (이것이 "틀"이 됨)
- *   4. 레이어 3개 생성 (배경 fill / 디자인 요소 / 패턴 선) — z-order 보장
- *   5. 패턴 각 조각에 추출한 색상으로 fill 적용 → 배경 레이어
- *   6. 원본 패턴 선 → 패턴선 레이어로 이동
- *   7. 디자인 PDF 다시 열기 → 전체 복사 → 패턴 문서에 붙여넣기 → 디자인 레이어
- *   8. PDF로 저장
- *   9. result.json 작성 + 문서 닫기
+ *   2. 기준 디자인 AI 파일 열기 (CMYK) — PDF 폴백 지원
+ *   3. "몸판" 레이어에서 메인 색상 추출 (AI 파일일 때)
+ *      또는 가장 큰 pathItem에서 추출 (PDF 폴백일 때)
+ *   4. "요소" 레이어의 아이템을 선택 → 복사 (배경 제외!)
+ *   5. 디자인 문서 닫기
+ *   6. 타겟 패턴 SVG 열기 (CMYK)
+ *   7. 레이어 3개 생성 (배경fill / 디자인요소 / 패턴선) — z-order 보장
+ *   8. 패턴 조각에 추출한 색상으로 fill → 배경 레이어
+ *   9. 원본 패턴 선 → 패턴선 레이어
+ *   10. 클립보드의 "요소" → 디자인요소 레이어에 붙여넣기
+ *   11. PDF 저장
+ *   12. 정리 (문서 닫기, result.json)
  *
- * z-order 구조:
+ * AI 파일 레이어 구조 (기대값):
+ *   레이어 1: "패턴선" — 패턴 윤곽선 (참조용, 복사하지 않음)
+ *   레이어 2: "요소"   — 스트라이프/로고/텍스트/번호 (이것만 복사)
+ *   레이어 3: "몸판"   — 배경색 패턴 조각 (색상만 추출)
+ *
+ * z-order 출력 구조:
  *   최상위: 패턴 선 + 너치 (stroke만, 재단선이 보여야 함)
- *   중간:   디자인 요소 (PDF에서 복사한 스트라이프/로고/텍스트/번호)
+ *   중간:   디자인 요소 (AI의 "요소" 레이어에서 복사)
  *   최하위: 배경 fill (단색으로 채운 패턴 조각)
  *
  * 주의: ExtendScript는 ES3 기반!
@@ -160,7 +169,8 @@ function createPdfSaveOptions() {
 
 /**
  * 스크립트와 같은 폴더의 config.json을 읽어서 파싱한다.
- * config 구조: { designPdfPath, patternSvgPath, outputPdfPath, resultJsonPath }
+ * config 구조: { designAiPath?, designPdfPath?, patternSvgPath, outputPdfPath, resultJsonPath }
+ * designAiPath가 있으면 AI 레이어 방식, 없으면 designPdfPath로 PDF 폴백.
  */
 function readConfig() {
     var scriptFile = new File($.fileName);
@@ -172,7 +182,14 @@ function readConfig() {
     var configText = readTextFile(configPath);
     var config = jsonParse(configText);
 
-    $.writeln("[grading.jsx] 디자인 PDF: " + config.designPdfPath);
+    // AI 파일 경로가 있으면 우선 사용, 없으면 PDF 폴백
+    if (config.designAiPath) {
+        $.writeln("[grading.jsx] 디자인 AI: " + config.designAiPath);
+    } else if (config.designPdfPath) {
+        $.writeln("[grading.jsx] 디자인 PDF (폴백): " + config.designPdfPath);
+    } else {
+        throw new Error("config에 designAiPath 또는 designPdfPath가 필요합니다.");
+    }
     $.writeln("[grading.jsx] 패턴 SVG: " + config.patternSvgPath);
     $.writeln("[grading.jsx] 출력 경로: " + config.outputPdfPath);
 
@@ -200,7 +217,6 @@ function cloneCMYKColor(color) {
 /**
  * 다양한 색상 타입을 안전하게 복제한다.
  * CMYKColor, RGBColor, GrayColor 등 타입에 따라 분기 처리한다.
- * 알 수 없는 타입은 그대로 반환 (참조 복사 — 같은 문서 내에서만 안전).
  */
 function cloneColor(color) {
     // CMYKColor — 인쇄용 표준, 가장 흔한 경우
@@ -209,7 +225,6 @@ function cloneColor(color) {
     }
     // RGBColor — CMYK로 변환 (인쇄용)
     if (color.typename === "RGBColor") {
-        // RGB → CMYK 근사 변환
         var r = color.red / 255;
         var g = color.green / 255;
         var b = color.blue / 255;
@@ -226,8 +241,8 @@ function cloneColor(color) {
             cmyk.yellow = ((1 - b - k) / (1 - k)) * 100;
             cmyk.black = k * 100;
         }
-        $.writeln("[grading.jsx] RGB→CMYK 변환: R" + color.red + " G" + color.green + " B" + color.blue
-            + " → C" + cmyk.cyan.toFixed(1) + " M" + cmyk.magenta.toFixed(1)
+        $.writeln("[grading.jsx] RGB->CMYK 변환: R" + color.red + " G" + color.green + " B" + color.blue
+            + " -> C" + cmyk.cyan.toFixed(1) + " M" + cmyk.magenta.toFixed(1)
             + " Y" + cmyk.yellow.toFixed(1) + " K" + cmyk.black.toFixed(1));
         return cmyk;
     }
@@ -240,21 +255,91 @@ function cloneColor(color) {
     // SpotColor — 별색 (판톤 등)
     if (color.typename === "SpotColor") {
         var spot = new SpotColor();
-        spot.spot = color.spot;       // 스팟 색상 참조
-        spot.tint = color.tint;       // 농도
+        spot.spot = color.spot;
+        spot.tint = color.tint;
         return spot;
     }
-    // GradientColor — 그라데이션은 추후 처리 예정
-    // 현재는 참조 그대로 반환 (단색 배경에서는 발생하지 않을 것)
+    // 알 수 없는 타입은 그대로 반환
     $.writeln("[grading.jsx] 경고: 미지원 색상 타입 — " + color.typename);
     return color;
 }
 
+// ===== AI 레이어 기반 색상 추출 =====
+
+/**
+ * AI 파일의 "몸판" 레이어에서 메인 색상을 추출한다.
+ * 왜 "몸판" 레이어인가:
+ *   - AI 파일은 레이어가 명확히 분리되어 있다.
+ *   - "몸판" 레이어에는 배경색 패턴 조각만 있으므로
+ *     첫 번째 채워진 pathItem의 색상이 곧 메인 배경색이다.
+ *   - PDF처럼 면적 기준으로 추측할 필요가 없어 정확도가 높다.
+ *
+ * @param {Document} doc - AI 디자인 문서
+ * @returns {Color} 메인 색상 (복제된 객체)
+ */
+function extractColorFromBodyLayer(doc) {
+    var bodyLayer;
+    try {
+        bodyLayer = doc.layers.getByName("몸판");
+    } catch (e) {
+        $.writeln("[grading.jsx] '몸판' 레이어를 찾을 수 없음 — 폴백으로 전체 문서 탐색");
+        return null;
+    }
+
+    $.writeln("[grading.jsx] '몸판' 레이어 발견, pathItems: " + bodyLayer.pathItems.length);
+
+    // "몸판" 레이어의 pathItems에서 첫 번째 채워진 아이템의 색상 사용
+    for (var i = 0; i < bodyLayer.pathItems.length; i++) {
+        var item = bodyLayer.pathItems[i];
+        if (item.filled) {
+            $.writeln("[grading.jsx] 몸판 색상 발견 (pathItem " + i + ")");
+            return cloneColor(item.fillColor);
+        }
+    }
+
+    // pathItems에 없으면 pageItems 전체를 순회 (그룹 내부 등)
+    for (var j = 0; j < bodyLayer.pageItems.length; j++) {
+        var pageItem = bodyLayer.pageItems[j];
+        // pathItem 타입인 경우
+        if (pageItem.typename === "PathItem" && pageItem.filled) {
+            $.writeln("[grading.jsx] 몸판 색상 발견 (pageItem " + j + ")");
+            return cloneColor(pageItem.fillColor);
+        }
+        // 그룹 내부 탐색
+        if (pageItem.typename === "GroupItem") {
+            var groupColor = findFirstFillInGroup(pageItem);
+            if (groupColor) {
+                $.writeln("[grading.jsx] 몸판 색상 발견 (그룹 내부)");
+                return cloneColor(groupColor);
+            }
+        }
+    }
+
+    $.writeln("[grading.jsx] '몸판' 레이어에서 채워진 아이템을 찾을 수 없음");
+    return null;
+}
+
+/**
+ * 그룹 아이템 내부를 재귀 탐색하여 첫 번째 fill 색상을 찾는다.
+ */
+function findFirstFillInGroup(group) {
+    for (var i = 0; i < group.pathItems.length; i++) {
+        if (group.pathItems[i].filled) {
+            return group.pathItems[i].fillColor;
+        }
+    }
+    // 중첩 그룹도 재귀 탐색
+    for (var j = 0; j < group.groupItems.length; j++) {
+        var nested = findFirstFillInGroup(group.groupItems[j]);
+        if (nested) return nested;
+    }
+    return null;
+}
+
+// ===== PDF 폴백용 색상 추출 (기존 로직) =====
+
 /**
  * 그룹 아이템 내부를 재귀 탐색하여 가장 큰 면적의 fill 색상을 찾는다.
- * 왜 재귀 탐색이 필요한가:
- *   - PDF를 Illustrator로 열면 요소들이 그룹으로 중첩될 수 있다.
- *   - doc.pathItems는 최상위 경로만 포함하므로 그룹 내부를 별도로 탐색해야 한다.
  */
 function findLargestFillInGroups(container) {
     var largestArea = 0;
@@ -262,8 +347,6 @@ function findLargestFillInGroups(container) {
 
     for (var i = 0; i < container.groupItems.length; i++) {
         var group = container.groupItems[i];
-
-        // 그룹 내 pathItems 순회
         for (var j = 0; j < group.pathItems.length; j++) {
             var item = group.pathItems[j];
             if (item.filled) {
@@ -274,30 +357,21 @@ function findLargestFillInGroups(container) {
                 }
             }
         }
-
-        // 중첩 그룹도 재귀 탐색
         var nested = findLargestFillInGroups(group);
         if (nested && !mainColor) {
-            // 최상위에서 못 찾았을 때만 중첩 결과 사용
             mainColor = nested;
         }
     }
-
     return mainColor;
 }
 
 /**
- * 디자인 문서에서 배경 메인 색상을 추출한다.
- * 방법: 가장 큰 면적(width * height)을 가진 pathItem의 fillColor를 반환한다.
- * 왜 면적 기준인가:
- *   - 배경은 보통 전체를 덮는 가장 큰 사각형이므로 면적이 가장 크다.
- *   - 로고/텍스트 등 작은 요소는 자연스럽게 제외된다.
+ * PDF 디자인 문서에서 배경 메인 색상을 추출한다. (면적 기준 — 폴백용)
  */
-function extractMainColor(doc) {
+function extractMainColorFromDoc(doc) {
     var largestArea = 0;
     var mainColor = null;
 
-    // 모든 최상위 pathItem을 순회하여 가장 큰 면적의 fillColor 찾기
     for (var i = 0; i < doc.pathItems.length; i++) {
         var item = doc.pathItems[i];
         if (item.filled) {
@@ -309,13 +383,12 @@ function extractMainColor(doc) {
         }
     }
 
-    // 최상위에서 못 찾으면 그룹 내부도 탐색 (PDF는 그룹 중첩이 흔함)
     if (!mainColor) {
         $.writeln("[grading.jsx] 최상위 pathItems에서 색상 못 찾음 — 그룹 내부 탐색");
         mainColor = findLargestFillInGroups(doc);
     }
 
-    // 그래도 못 찾으면 기본 CMYK 색상 사용 (안전 폴백)
+    // 기본 폴백 색상
     if (!mainColor) {
         var fallback = new CMYKColor();
         fallback.cyan = 80;
@@ -329,44 +402,87 @@ function extractMainColor(doc) {
     return mainColor;
 }
 
+// ===== 디자인 소스 판별 =====
+
+/**
+ * config에서 디자인 파일 경로를 결정한다.
+ * AI 파일이 존재하면 AI 우선, 없으면 PDF 폴백.
+ * @returns {{ path: string, isAi: boolean }}
+ */
+function resolveDesignFile(config) {
+    // AI 파일 경로가 config에 있고, 실제 파일이 존재하면 AI 사용
+    if (config.designAiPath) {
+        var aiFile = new File(config.designAiPath);
+        if (aiFile.exists) {
+            $.writeln("[grading.jsx] AI 파일 사용: " + config.designAiPath);
+            return { path: config.designAiPath, isAi: true };
+        }
+        $.writeln("[grading.jsx] AI 파일 없음, PDF 폴백 시도: " + config.designAiPath);
+    }
+
+    // PDF 폴백
+    if (config.designPdfPath) {
+        var pdfFile = new File(config.designPdfPath);
+        if (pdfFile.exists) {
+            $.writeln("[grading.jsx] PDF 폴백 사용: " + config.designPdfPath);
+            return { path: config.designPdfPath, isAi: false };
+        }
+        throw new Error("디자인 PDF를 찾을 수 없습니다: " + config.designPdfPath);
+    }
+
+    throw new Error("config에 유효한 디자인 파일 경로가 없습니다.");
+}
+
 // ===== 메인 로직 =====
 
 /**
  * 그레이딩 메인 함수.
- * 디자인에서 메인 색상을 추출하고, 패턴 조각에 채운 뒤,
- * 디자인 전체 요소(스트라이프/로고/텍스트/번호)를 패턴 위에 배치한다.
  *
- * 레이어 구조로 z-order를 관리:
- *   - 패턴선 레이어 (최상위): 재단선/너치가 항상 보임
- *   - 디자인 레이어 (중간): PDF에서 복사한 디자인 요소
- *   - 배경 레이어 (최하위): 단색으로 채운 패턴 조각
+ * AI 파일일 때:
+ *   - "몸판" 레이어에서 메인 색상 추출
+ *   - "요소" 레이어만 선택 복사 (배경 제외!)
+ *   - 패턴 문서에 붙여넣기
+ *
+ * PDF 폴백일 때:
+ *   - 가장 큰 면적 pathItem에서 색상 추출
+ *   - 전체 요소 복사 → 붙여넣기 (기존 방식)
  */
 function main() {
-    $.writeln("[grading.jsx] 스크립트 시작 (배경 채우기 + 디자인 요소 배치)");
+    $.writeln("[grading.jsx] 스크립트 시작 (AI 레이어 기반 그레이딩)");
 
     var config = readConfig();
     var resultPath = config.resultJsonPath;
     var patternDoc = null;
     var designDoc = null;
-    var designDoc2 = null;
 
     try {
-        // ===== STEP 1: 기준 디자인에서 메인 색상 추출 =====
-        // 디자인 PDF를 열어서 가장 큰 면적의 pathItem 색상을 가져온다.
-        var designFile = new File(config.designPdfPath);
-        if (!designFile.exists) {
-            throw new Error("디자인 PDF를 찾을 수 없습니다: " + config.designPdfPath);
-        }
+        // ===== STEP 1: 디자인 파일 경로 결정 (AI 우선, PDF 폴백) =====
+        var designInfo = resolveDesignFile(config);
+        var designFilePath = designInfo.path;
+        var isAiFile = designInfo.isAi;
 
-        // 디자인 PDF 열기 (CMYK 색상 공간)
+        // ===== STEP 2: 디자인 파일 열기 (CMYK) =====
+        var designFile = new File(designFilePath);
         designDoc = app.open(designFile, DocumentColorSpace.CMYK);
-        $.writeln("[grading.jsx] 디자인 PDF 열림: " + designDoc.name);
+        $.writeln("[grading.jsx] 디자인 파일 열림: " + designDoc.name + " (AI: " + isAiFile + ")");
 
-        // 배경 메인 색상 추출
-        var rawMainColor = extractMainColor(designDoc);
+        // ===== STEP 3: 메인 색상 추출 =====
+        var mainColor = null;
 
-        // 색상 값을 새 객체로 복제 — 문서 닫은 후에도 사용 가능하도록
-        var mainColor = cloneColor(rawMainColor);
+        if (isAiFile) {
+            // AI 파일: "몸판" 레이어에서 색상 추출 — 변환 불필요 (이미 CMYK)
+            mainColor = extractColorFromBodyLayer(designDoc);
+
+            // "몸판" 레이어에서 못 찾으면 전체 문서 폴백
+            if (!mainColor) {
+                $.writeln("[grading.jsx] '몸판' 레이어 색상 추출 실패 — 전체 문서 폴백");
+                mainColor = cloneColor(extractMainColorFromDoc(designDoc));
+            }
+        } else {
+            // PDF 폴백: 기존 방식 (면적 기준)
+            var rawColor = extractMainColorFromDoc(designDoc);
+            mainColor = cloneColor(rawColor);
+        }
 
         // 추출한 색상 정보 로그
         if (mainColor.typename === "CMYKColor") {
@@ -378,13 +494,50 @@ function main() {
             $.writeln("[grading.jsx] 메인 색상 타입: " + mainColor.typename);
         }
 
-        // 디자인 문서 닫기 (색상만 추출했으므로 더 이상 불필요)
+        // ===== STEP 4: "요소" 레이어 복사 (AI) 또는 전체 복사 (PDF) =====
+        if (isAiFile) {
+            // AI 파일: "요소" 레이어의 아이템만 선택하여 복사
+            // 왜 "요소"만 복사하나:
+            //   - "몸판" 레이어는 배경색이므로 패턴에 직접 fill로 적용함
+            //   - "패턴선" 레이어는 참조용이므로 복사하지 않음
+            //   - "요소" 레이어의 스트라이프/로고/텍스트/번호만 필요함
+            var elemLayer;
+            try {
+                elemLayer = designDoc.layers.getByName("요소");
+            } catch (e) {
+                throw new Error("AI 파일에 '요소' 레이어가 없습니다. 레이어 이름을 확인해주세요.");
+            }
+
+            $.writeln("[grading.jsx] '요소' 레이어 아이템 수: " + elemLayer.pageItems.length);
+
+            // 기존 선택 해제
+            designDoc.selection = null;
+
+            // "요소" 레이어의 모든 아이템을 선택
+            for (var ei = 0; ei < elemLayer.pageItems.length; ei++) {
+                elemLayer.pageItems[ei].selected = true;
+            }
+
+            // 선택된 아이템이 있을 때만 복사
+            if (designDoc.selection && designDoc.selection.length > 0) {
+                app.executeMenuCommand("copy");
+                $.writeln("[grading.jsx] '요소' 레이어 " + designDoc.selection.length + "개 아이템 복사 완료");
+            } else {
+                $.writeln("[grading.jsx] 경고: '요소' 레이어에 선택 가능한 아이템이 없음");
+            }
+        } else {
+            // PDF 폴백: 전체 요소 복사 (기존 방식)
+            designDoc.selectObjectsOnActiveArtboard();
+            app.executeMenuCommand("copy");
+            $.writeln("[grading.jsx] 디자인 전체 요소 복사 완료 (PDF 폴백)");
+        }
+
+        // 디자인 문서 닫기 (색상 추출 + 복사 완료)
         designDoc.close(SaveOptions.DONOTSAVECHANGES);
         designDoc = null;
-        $.writeln("[grading.jsx] 디자인 문서 닫음 (색상 추출 완료)");
+        $.writeln("[grading.jsx] 디자인 문서 닫음");
 
-        // ===== STEP 2: 타겟 패턴 SVG 열기 =====
-        // 패턴 SVG가 "틀"이 된다. polyline들이 이미 올바른 좌표에 있다.
+        // ===== STEP 5: 타겟 패턴 SVG 열기 =====
         var patternFile = new File(config.patternSvgPath);
         if (!patternFile.exists) {
             throw new Error("패턴 SVG를 찾을 수 없습니다: " + config.patternSvgPath);
@@ -395,17 +548,13 @@ function main() {
 
         // 아트보드 크기 확인
         var ab = patternDoc.artboards[0];
-        var abRect = ab.artboardRect;  // [left, top, right, bottom] (pt 단위)
+        var abRect = ab.artboardRect;
         var docWidth = abRect[2] - abRect[0];
         var docHeight = abRect[1] - abRect[3];
         $.writeln("[grading.jsx] 아트보드: " + docWidth.toFixed(1) + " x " + docHeight.toFixed(1) + " pt");
 
-        // ===== STEP 3: 레이어 생성 (z-order 관리) =====
-        // 레이어를 사용하면 요소들의 상하 관계가 명확하게 보장된다.
-        // Illustrator에서 layers.add()는 최상위에 추가되므로, 역순으로 생성해야 한다.
-        // 생성 순서: 배경(최하위) → 디자인(중간) → 패턴선(최상위)
-
-        // 기본 레이어 이름 변경 (SVG가 열리면 기본 레이어가 하나 존재)
+        // ===== STEP 6: 레이어 생성 (z-order 관리) =====
+        // layers.add()는 최상위에 추가되므로 역순으로 생성
         var defaultLayer = patternDoc.layers[0];
 
         // 배경 fill 레이어 — 가장 아래
@@ -420,19 +569,17 @@ function main() {
         var layerPattern = patternDoc.layers.add();
         layerPattern.name = "패턴 선";
 
-        $.writeln("[grading.jsx] 레이어 생성 완료: 패턴선/디자인/배경 (위→아래)");
+        $.writeln("[grading.jsx] 레이어 생성 완료: 패턴선/디자인/배경 (위->아래)");
 
-        // ===== STEP 4: 패턴 조각에 색상 채우기 + 레이어 이동 =====
+        // ===== STEP 7: 패턴 조각에 색상 채우기 + 레이어 이동 =====
         // SVG를 열면 polyline이 pathItem으로 변환됨
-        // 면적이 충분히 큰 경로만 패턴 조각으로 인정 (가이드선/마크 제외)
-        // 방법: 큰 경로를 복제 → 복제본에 fill → 배경 레이어로 이동
-        //        원본은 stroke만 유지 → 패턴선 레이어로 이동
+        // 큰 경로 = 패턴 조각, 작은 경로 = 너치/가이드
         var filledCount = 0;
-        // 기본 레이어(defaultLayer)의 pathItem을 순회
-        // 주의: 이동하면 인덱스가 변하므로 뒤에서부터 처리
         var pathCount = defaultLayer.pathItems.length;
-        for (var i = pathCount - 1; i >= 0; i--) {
-            var path = defaultLayer.pathItems[i];
+
+        // 뒤에서부터 처리 (이동하면 인덱스 변함)
+        for (var pi = pathCount - 1; pi >= 0; pi--) {
+            var path = defaultLayer.pathItems[pi];
 
             // 가로/세로 모두 50pt 이상인 경로만 패턴 조각으로 인정
             if (Math.abs(path.width) > 50 && Math.abs(path.height) > 50) {
@@ -441,15 +588,14 @@ function main() {
                     path.closed = true;
                 }
 
-                // 경로를 복제하여 배경용 fill 객체 생성
+                // 복제 → fill 적용 → 배경 레이어로 이동
                 var fillCopy = path.duplicate();
                 fillCopy.filled = true;
                 fillCopy.fillColor = mainColor;
-                fillCopy.stroked = false;  // 배경은 선 없음
-                // 배경 레이어로 이동
+                fillCopy.stroked = false;
                 fillCopy.move(layerFill, ElementPlacement.PLACEATBEGINNING);
 
-                // 원본은 fill 없이 stroke만 유지 → 패턴선 레이어로 이동
+                // 원본은 stroke만 유지 → 패턴선 레이어로 이동
                 path.filled = false;
                 path.move(layerPattern, ElementPlacement.PLACEATBEGINNING);
 
@@ -471,77 +617,55 @@ function main() {
             $.writeln("[grading.jsx] 경고: 50pt 이상 조각이 없음 — 패턴 SVG를 확인하세요");
         }
 
-        // 빈 기본 레이어 제거 (정리)
+        // 빈 기본 레이어 제거
         defaultLayer.remove();
 
-        // ===== STEP 5: 디자인 요소 배치 =====
-        // 디자인 PDF를 다시 열어서 전체 요소를 복사 → 패턴 문서에 붙여넣기
-        // 왜 다시 여는가: STEP 1에서 색상 추출 후 닫았으므로 다시 열어야 함
-        // 이렇게 하면 스트라이프, 로고, 텍스트, 번호 등 모든 디자인 요소가 배치됨
-
-        designDoc2 = app.open(new File(config.designPdfPath), DocumentColorSpace.CMYK);
-        $.writeln("[grading.jsx] 디자인 PDF 재오픈: " + designDoc2.name);
-
-        // 디자인의 모든 요소 선택 → 복사
-        // selectObjectsOnActiveArtboard()로 현재 아트보드 위 모든 객체 선택
-        designDoc2.selectObjectsOnActiveArtboard();
-        app.executeMenuCommand("copy");
-        $.writeln("[grading.jsx] 디자인 전체 요소 복사 완료");
-
-        // 디자인 문서 닫기 (복사 완료)
-        designDoc2.close(SaveOptions.DONOTSAVECHANGES);
-        designDoc2 = null;
-
+        // ===== STEP 8: 디자인 요소를 패턴 문서에 붙여넣기 =====
         // 패턴 문서를 활성화하고 디자인 레이어에 붙여넣기
         app.activeDocument = patternDoc;
-        // 디자인 레이어를 활성 레이어로 설정 — 붙여넣기가 이 레이어에 들어감
         patternDoc.activeLayer = layerDesign;
         app.executeMenuCommand("paste");
-        $.writeln("[grading.jsx] 디자인 요소를 패턴 문서의 디자인 레이어에 붙여넣기 완료");
+        $.writeln("[grading.jsx] 디자인 요소를 '디자인 요소' 레이어에 붙여넣기 완료");
 
-        // 붙여넣은 요소 위치 정보 로그
-        // 디자인 아트보드(1580x2000mm)와 패턴 아트보드(1530x1200mm)가 다르므로
-        // 위치가 맞지 않을 수 있지만, 현재는 그대로 두고 승화전사 재단 시 처리
+        // 붙여넣은 요소 정보 로그
         var pastedItems = patternDoc.selection;
         if (pastedItems && pastedItems.length > 0) {
             $.writeln("[grading.jsx] 붙여넣은 요소 수: " + pastedItems.length);
         } else {
-            $.writeln("[grading.jsx] 경고: 붙여넣은 요소가 없음 — 디자인 PDF 확인 필요");
+            $.writeln("[grading.jsx] 경고: 붙여넣은 요소가 없음 — 디자인 파일 확인 필요");
         }
 
         // 선택 해제
         patternDoc.selection = null;
 
-        // ===== STEP 6: PDF로 저장 =====
+        // ===== STEP 9: PDF로 저장 =====
         var outputFile = new File(config.outputPdfPath);
         var pdfOpts = createPdfSaveOptions();
         patternDoc.saveAs(outputFile, pdfOpts);
         $.writeln("[grading.jsx] PDF 저장 완료: " + config.outputPdfPath);
 
-        // ===== STEP 7: 정리 =====
+        // ===== STEP 10: 정리 =====
         patternDoc.close(SaveOptions.DONOTSAVECHANGES);
         patternDoc = null;
 
         // 성공 결과 기록
+        var modeMsg = isAiFile ? "AI 레이어 방식" : "PDF 폴백 방식";
         writeSuccessResult(resultPath, config.outputPdfPath,
-            "그레이딩 완료 - " + filledCount + "개 조각 색상 채움 + 디자인 요소 배치");
-        $.writeln("[grading.jsx] 완료!");
+            "그레이딩 완료 (" + modeMsg + ") - " + filledCount + "개 조각 색상 채움 + 디자인 요소 배치");
+        $.writeln("[grading.jsx] 완료! (" + modeMsg + ")");
 
     } catch (err) {
         $.writeln("[grading.jsx] 오류: " + err.message);
 
-        // 열린 문서 정리 (에러 시에도 문서를 닫아야 다음 실행에 문제 없음)
+        // 열린 문서 정리
         try {
             if (designDoc) designDoc.close(SaveOptions.DONOTSAVECHANGES);
-        } catch (e) { /* 무시 */ }
-        try {
-            if (designDoc2) designDoc2.close(SaveOptions.DONOTSAVECHANGES);
         } catch (e) { /* 무시 */ }
         try {
             if (patternDoc) patternDoc.close(SaveOptions.DONOTSAVECHANGES);
         } catch (e) { /* 무시 */ }
 
-        // result.json에 에러 기록 (Rust 측에서 이 파일을 폴링함)
+        // result.json에 에러 기록
         writeErrorResult(resultPath, err.message);
     }
 }
