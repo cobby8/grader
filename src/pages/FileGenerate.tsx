@@ -306,9 +306,10 @@ function FileGenerate() {
         // Rust 커맨드로 절대 경로에 파일 쓰기 (Tauri fs 플러그인은 앱 외부 경로 권한 없음)
         await invoke('write_file_absolute', { path: tempSvgPath, content: targetSvgData });
 
-        // 2-c) 출력 PDF 경로 결정
-        const outputFileName = `${baseFileName}_${targetSize}.pdf`;
-        const outputPdfPath = await join(absOutputDir, outputFileName);
+        // 2-c) 출력 EPS 경로 결정
+        // 왜 EPS인가: 승화전사 업체에서 EPS 파일을 요구하는 경우가 대부분이다.
+        const outputFileName = `${baseFileName}_${targetSize}.eps`;
+        const outputFilePath = await join(absOutputDir, outputFileName);
 
         // 2-d) config.json 작성 (grading.jsx가 읽는 형식)
         // AI 파일 경로가 있으면 designAiPath로 전달 (레이어 기반 정밀 처리)
@@ -317,7 +318,7 @@ function FileGenerate() {
         const isAiFile = dsg.storedPath.toLowerCase().endsWith(".ai");
         const config: Record<string, string> = {
           patternSvgPath: tempSvgPath,           // 타겟 사이즈 SVG (틀)
-          outputPdfPath: outputPdfPath,           // 출력 PDF 경로
+          outputPath: outputFilePath,            // 출력 파일 경로 (.eps — 확장자로 형식 자동 판별)
           resultJsonPath: resultJsonPath,         // 결과 마커 파일 경로
         };
         if (isAiFile) {

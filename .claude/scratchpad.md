@@ -809,6 +809,38 @@ tester 참고:
 - AI 파일에 "요소"/"몸판" 레이어가 없으면 에러 메시지 (요소) 또는 전체 문서 폴백 (몸판)
 - npx tsc --noEmit 통과
 
+### [2026-04-08] grading.jsx 요소 위치/크기 보정 + EPS 출력 지원
+
+구현한 기능: 디자인 AI와 패턴 SVG 간 아트보드 크기 차이를 자동 보정하고, EPS 출력 형식을 지원
+
+핵심 변경점:
+1. STEP 2에서 디자인 아트보드 크기를 저장 (designAbWidth, designAbHeight, designAbLeft, designAbTop)
+2. STEP 8에서 붙여넣기 후 uniformScale = Math.min(patternW/designW, patternH/designH) 계산
+3. 붙여넣은 요소를 그룹화 -> 균일 비율로 리사이즈 + 위치 보정 (찌그러짐 방지)
+4. createEpsSaveOptions() 함수 추가 (CS6 호환, CMYK PostScript, TIFF 미리보기)
+5. config.outputPath 확장자로 PDF/EPS 자동 판별 (하위 호환: outputPdfPath도 지원)
+6. FileGenerate.tsx: 출력 확장자 .pdf -> .eps 변경, config 키 outputPdfPath -> outputPath
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| illustrator-scripts/grading.jsx | 아트보드 크기 저장 + 요소 스케일/위치 보정 + EPS 저장 + outputPath 키 | 수정 |
+| illustrator-scripts/config.json | outputPdfPath -> outputPath, 확장자 .eps | 수정 |
+| src/pages/FileGenerate.tsx | 출력 확장자 .eps + config 키 outputPath | 수정 |
+
+tester 참고:
+- ES3 호환성: let/const 0건, arrow function 0건, template literal 0건
+- npx tsc --noEmit 통과
+- 테스트 방법: Illustrator에서 File > Scripts > Other Script... > grading.jsx 실행
+- 정상 동작: 요소가 패턴 아트보드에 맞게 균일 축소되고, EPS 파일로 저장됨
+- 스케일 차이 0.5% 미만이면 보정 생략 (원래 크기 유지)
+- outputPdfPath도 하위 호환 지원 (기존 config.json도 동작)
+- 출력 파일 확장자가 .eps면 EPS, 그 외(.pdf 등)면 PDF로 저장
+
+reviewer 참고:
+- uniformScale은 Math.min(scaleX, scaleY) — 요소가 아트보드 밖으로 나가지 않음
+- 위치 보정: 디자인 아트보드 원점 기준 오프셋을 패턴 아트보드 원점 기준으로 변환
+- EPS PostScript Level 2 사용 (Level 3보다 호환성 우선)
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -821,15 +853,13 @@ tester 참고:
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-04-08 | developer | 7단계 Phase 1: FileGenerate 롤백(단순 스케일링) + ExtendScript 프로토타입 + Rust AI 커맨드 3개 | 완료 |
-| 2026-04-13 | tester | 실사용 시나리오 E2E (A3 복잡 CMYK + Form XObject 재귀) | 통과 (21/21) |
-| 2026-04-08 | developer | 엑셀 주문서 자동 인식 (order_parser.py + SizeSelect 엑셀 업로드) | 완료 |
-| 2026-04-08 | developer | 패턴 다중 업로드+드래그앤드롭+폴더+사이즈 자동 추출 | 완료 |
-| 2026-04-08 | developer | 패턴 카테고리 트리 분류 시스템 (CategoryTree+categoryStore+2컬럼 레이아웃) | 완료 |
-| 2026-04-08 | developer | 데이터 보호 안전장치 (3 store 로드/저장 빈배열 차단 + 백업) | 완료 |
-| 2026-04-08 | developer | SVG 아트보드 자동 보정 (normalize_artboard: viewBox 확장 1580x2000mm) | 완료 |
-| 2026-04-08 | developer | SVG 패턴 클리핑 마스크+bleed 적용 + 좌표계 버그 수정 + 조각별 채워넣기 | 완료 |
-| 2026-04-08 | developer | FileGenerate Illustrator grading.jsx 자동 호출 연동 (AI 있으면 AI방식, 없으면 Python 폴백) | 완료 |
-| 2026-04-08 | developer | (A) SVG 파일 쓰기 Rust 커맨드 전환 + (B) 패턴 카드에 조각별 SVG 사이즈 현황 표시 | 완료 |
-| 2026-04-08 | developer | (A) CMYK 보존 코드 검증 통과 + (B) grading.jsx 디자인 요소 자동 배치 (레이어 3개 z-order + 복사/붙여넣기) | 완료 |
+| 2026-04-08 | developer | grading.jsx 요소 위치/크기 보정 + EPS 출력 지원 (uniformScale + createEpsSaveOptions) | 완료 |
 | 2026-04-08 | developer | grading.jsx AI 레이어 기반 전면 재작성 (몸판 색상 추출 + 요소 레이어만 복사 + PDF 폴백) | 완료 |
+| 2026-04-08 | developer | (A) CMYK 보존 코드 검증 통과 + (B) grading.jsx 디자인 요소 자동 배치 (레이어 3개 z-order + 복사/붙여넣기) | 완료 |
+| 2026-04-08 | developer | (A) SVG 파일 쓰기 Rust 커맨드 전환 + (B) 패턴 카드에 조각별 SVG 사이즈 현황 표시 | 완료 |
+| 2026-04-08 | developer | FileGenerate Illustrator grading.jsx 자동 호출 연동 (AI 있으면 AI방식, 없으면 Python 폴백) | 완료 |
+| 2026-04-08 | developer | SVG 패턴 클리핑 마스크+bleed 적용 + 좌표계 버그 수정 + 조각별 채워넣기 | 완료 |
+| 2026-04-08 | developer | SVG 아트보드 자동 보정 (normalize_artboard: viewBox 확장 1580x2000mm) | 완료 |
+| 2026-04-08 | developer | 데이터 보호 안전장치 (3 store 로드/저장 빈배열 차단 + 백업) | 완료 |
+| 2026-04-08 | developer | 패턴 카테고리 트리 분류 시스템 (CategoryTree+categoryStore+2컬럼 레이아웃) | 완료 |
+| 2026-04-08 | developer | 패턴 다중 업로드+드래그앤드롭+폴더+사이즈 자동 추출 | 완료 |

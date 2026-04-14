@@ -144,7 +144,7 @@ function writeErrorResult(resultPath, errorMessage) {
     writeTextFile(resultPath, jsonStringify(result));
 }
 
-// ===== PDF 저장 옵션 =====
+// ===== 저장 옵션 (PDF / EPS) =====
 
 /**
  * CMYK 보존 PDF 저장 옵션을 생성한다.
@@ -165,11 +165,34 @@ function createPdfSaveOptions() {
     return opts;
 }
 
+/**
+ * CMYK 보존 EPS 저장 옵션을 생성한다.
+ * 왜 EPS인가:
+ *   - 승화전사 업체에서 EPS 파일을 요구하는 경우가 많다.
+ *   - EPS는 PostScript 기반이라 CMYK 색상 공간을 그대로 유지한다.
+ */
+function createEpsSaveOptions() {
+    var opts = new EPSSaveOptions();
+    // CS6 호환 — 대부분의 인쇄 업체 RIP에서 지원
+    opts.compatibility = Compatibility.ILLUSTRATOR16;
+    // 미리보기 포함 (TIFF 형식, 가장 범용적)
+    opts.preview = EPSPreview.COLORTIFF;
+    // 링크된 파일을 EPS 안에 포함시킨다 (단독 파일로 전달 가능)
+    opts.embedLinkedFiles = true;
+    // CMYK PostScript 출력 활성화
+    opts.cmykPostScript = true;
+    // PostScript Level 2 — Level 3보다 호환성이 좋음
+    opts.postScript = EPSPostScriptLevelEnum.LEVEL2;
+    return opts;
+}
+
 // ===== config.json 읽기 =====
 
 /**
  * 스크립트와 같은 폴더의 config.json을 읽어서 파싱한다.
- * config 구조: { designAiPath?, designPdfPath?, patternSvgPath, outputPdfPath, resultJsonPath }
+ * config 구조: { designAiPath?, designPdfPath?, patternSvgPath, outputPath, resultJsonPath }
+ *   - outputPath: 출력 파일 경로 (.eps 또는 .pdf, 확장자로 형식 자동 판별)
+ *   - outputPdfPath도 하위 호환으로 지원 (outputPath 우선)
  * designAiPath가 있으면 AI 레이어 방식, 없으면 designPdfPath로 PDF 폴백.
  */
 function readConfig() {
@@ -182,6 +205,14 @@ function readConfig() {
     var configText = readTextFile(configPath);
     var config = jsonParse(configText);
 
+    // 출력 경로: outputPath 우선, 없으면 outputPdfPath 폴백 (하위 호환)
+    if (!config.outputPath && config.outputPdfPath) {
+        config.outputPath = config.outputPdfPath;
+    }
+    if (!config.outputPath) {
+        throw new Error("config에 outputPath가 필요합니다.");
+    }
+
     // AI 파일 경로가 있으면 우선 사용, 없으면 PDF 폴백
     if (config.designAiPath) {
         $.writeln("[grading.jsx] 디자인 AI: " + config.designAiPath);
@@ -191,7 +222,17 @@ function readConfig() {
         throw new Error("config에 designAiPath 또는 designPdfPath가 필요합니다.");
     }
     $.writeln("[grading.jsx] 패턴 SVG: " + config.patternSvgPath);
-    $.writeln("[grading.jsx] 출력 경로: " + config.outputPdfPath);
+    $.writeln("[grading.jsx] 출력 경로: " + config.outputPath);
+
+    // 출력 형식 판별 (확장자 기준)
+    var outLower = config.outputPath.toLowerCase();
+    if (outLower.indexOf(".eps") === outLower.length - 4) {
+        config.outputFormat = "eps";
+        $.writeln("[grading.jsx] 출력 형식: EPS");
+    } else {
+        config.outputFormat = "pdf";
+        $.writeln("[grading.jsx] 출력 형식: PDF");
+    }
 
     return config;
 }
@@ -461,10 +502,20 @@ function main() {
         var designFilePath = designInfo.path;
         var isAiFile = designInfo.isAi;
 
-        // ===== STEP 2: 디자인 파일 열기 (CMYK) =====
+        // ===== STEP 2: 디자인 파일 열기 (CMYK) + 아트보드 크기 저장 =====
         var designFile = new File(designFilePath);
         designDoc = app.open(designFile, DocumentColorSpace.CMYK);
         $.writeln("[grading.jsx] 디자인 파일 열림: " + designDoc.name + " (AI: " + isAiFile + ")");
+
+        // 디자인 아트보드 크기를 저장한다 (나중에 요소 스케일링에 사용)
+        // 왜 여기서 저장하나: 디자인 문서를 닫으면 아트보드 정보에 접근할 수 없으므로
+        var designAb = designDoc.artboards[0].artboardRect;
+        var designAbLeft = designAb[0];    // 좌상단 X
+        var designAbTop = designAb[1];     // 좌상단 Y (Illustrator Y축은 아래로 감소)
+        var designAbWidth = designAb[2] - designAb[0];   // 아트보드 가로 (pt)
+        var designAbHeight = designAb[1] - designAb[3];  // 아트보드 세로 (pt)
+        $.writeln("[grading.jsx] 디자인 아트보드: " + designAbWidth.toFixed(1) + " x " + designAbHeight.toFixed(1) + " pt"
+            + " (left=" + designAbLeft.toFixed(1) + ", top=" + designAbTop.toFixed(1) + ")");
 
         // ===== STEP 3: 메인 색상 추출 =====
         var mainColor = null;
@@ -620,7 +671,7 @@ function main() {
         // 빈 기본 레이어 제거
         defaultLayer.remove();
 
-        // ===== STEP 8: 디자인 요소를 패턴 문서에 붙여넣기 =====
+        // ===== STEP 8: 디자인 요소를 패턴 문서에 붙여넣기 + 스케일/위치 보정 =====
         // 패턴 문서를 활성화하고 디자인 레이어에 붙여넣기
         app.activeDocument = patternDoc;
         patternDoc.activeLayer = layerDesign;
@@ -631,6 +682,49 @@ function main() {
         var pastedItems = patternDoc.selection;
         if (pastedItems && pastedItems.length > 0) {
             $.writeln("[grading.jsx] 붙여넣은 요소 수: " + pastedItems.length);
+
+            // ===== 요소 스케일링 + 위치 보정 =====
+            // 왜 필요한가:
+            //   - 디자인 AI 아트보드 (예: 1580x2000mm)와 패턴 SVG 아트보드 (예: 1530x1200mm)의
+            //     크기가 다르므로 복사/붙여넣기한 요소의 좌표가 어긋난다.
+            //   - 균일 스케일(uniformScale)을 사용하여 요소가 찌그러지지 않게 축소한다.
+            //   - 가로/세로 중 작은 비율을 사용하면 요소가 아트보드 안에 들어간다.
+            var scaleX = docWidth / designAbWidth;     // 패턴 가로 / 디자인 가로
+            var scaleY = docHeight / designAbHeight;   // 패턴 세로 / 디자인 세로
+            // 균일 스케일: 가로세로 중 작은 비율 사용 (찌그러짐 방지)
+            var uniformScale = Math.min(scaleX, scaleY);
+
+            $.writeln("[grading.jsx] 스케일 비율 — X: " + scaleX.toFixed(4)
+                + ", Y: " + scaleY.toFixed(4)
+                + ", uniform: " + uniformScale.toFixed(4));
+
+            // 스케일이 1.0과 충분히 다를 때만 보정 (0.5% 이상 차이)
+            if (Math.abs(uniformScale - 1.0) > 0.005) {
+                // 방법: 붙여넣은 요소를 그룹화 → 그룹 단위로 리사이즈 + 위치 보정
+                // 왜 그룹화하나: 개별 아이템을 각각 변환하면 상대 위치가 틀어질 수 있다.
+                //               그룹으로 묶으면 내부 요소의 상대 관계가 유지된다.
+                app.executeMenuCommand("group");
+                var pastedGroup = patternDoc.selection[0];
+
+                if (pastedGroup) {
+                    // 리사이즈 (퍼센트 단위, 100 = 원본 크기)
+                    var scalePct = uniformScale * 100;
+                    // 6개 파라미터: scaleX%, scaleY%, 선/효과/패턴/글씨도 함께 변환
+                    pastedGroup.resize(scalePct, scalePct, true, true, true, true);
+
+                    // 위치 보정: 디자인 아트보드 원점 → 패턴 아트보드 원점 기준으로 재계산
+                    // Illustrator 좌표계: 좌상단이 원점, Y는 아래로 감소
+                    var curPos = pastedGroup.position;  // [x, y]
+                    var newX = abRect[0] + (curPos[0] - designAbLeft) * uniformScale;
+                    var newY = abRect[1] + (curPos[1] - designAbTop) * uniformScale;
+                    pastedGroup.position = [newX, newY];
+
+                    $.writeln("[grading.jsx] 요소 스케일 적용: " + scalePct.toFixed(1) + "%"
+                        + ", 위치: [" + newX.toFixed(1) + ", " + newY.toFixed(1) + "]");
+                }
+            } else {
+                $.writeln("[grading.jsx] 아트보드 크기 차이 미미 — 스케일 보정 생략");
+            }
         } else {
             $.writeln("[grading.jsx] 경고: 붙여넣은 요소가 없음 — 디자인 파일 확인 필요");
         }
@@ -638,11 +732,19 @@ function main() {
         // 선택 해제
         patternDoc.selection = null;
 
-        // ===== STEP 9: PDF로 저장 =====
-        var outputFile = new File(config.outputPdfPath);
-        var pdfOpts = createPdfSaveOptions();
-        patternDoc.saveAs(outputFile, pdfOpts);
-        $.writeln("[grading.jsx] PDF 저장 완료: " + config.outputPdfPath);
+        // ===== STEP 9: 파일 저장 (EPS 또는 PDF, config.outputFormat으로 판별) =====
+        var outputFile = new File(config.outputPath);
+        if (config.outputFormat === "eps") {
+            // EPS 저장 — 승화전사 업체에서 EPS를 요구하는 경우
+            var epsOpts = createEpsSaveOptions();
+            patternDoc.saveAs(outputFile, epsOpts);
+            $.writeln("[grading.jsx] EPS 저장 완료: " + config.outputPath);
+        } else {
+            // PDF 저장 — 기본 출력 형식
+            var pdfOpts = createPdfSaveOptions();
+            patternDoc.saveAs(outputFile, pdfOpts);
+            $.writeln("[grading.jsx] PDF 저장 완료: " + config.outputPath);
+        }
 
         // ===== STEP 10: 정리 =====
         patternDoc.close(SaveOptions.DONOTSAVECHANGES);
@@ -650,8 +752,9 @@ function main() {
 
         // 성공 결과 기록
         var modeMsg = isAiFile ? "AI 레이어 방식" : "PDF 폴백 방식";
-        writeSuccessResult(resultPath, config.outputPdfPath,
-            "그레이딩 완료 (" + modeMsg + ") - " + filledCount + "개 조각 색상 채움 + 디자인 요소 배치");
+        var formatMsg = config.outputFormat === "eps" ? "EPS" : "PDF";
+        writeSuccessResult(resultPath, config.outputPath,
+            "그레이딩 완료 (" + modeMsg + ", " + formatMsg + ") - " + filledCount + "개 조각 색상 채움 + 디자인 요소 배치");
         $.writeln("[grading.jsx] 완료! (" + modeMsg + ")");
 
     } catch (err) {
