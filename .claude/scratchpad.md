@@ -785,3 +785,4 @@ tester 참고:
 | 2026-04-08 | developer | SVG 패턴 클리핑 마스크+bleed 적용 + 좌표계 버그 수정 + 조각별 채워넣기 | 완료 |
 | 2026-04-08 | developer | FileGenerate Illustrator grading.jsx 자동 호출 연동 (AI 있으면 AI방식, 없으면 Python 폴백) | 완료 |
 | 2026-04-08 | developer | (A) SVG 파일 쓰기 Rust 커맨드 전환 + (B) 패턴 카드에 조각별 SVG 사이즈 현황 표시 | 완료 |
+| 2026-04-08 | developer | (A) CMYK 보존 코드 검증 통과 + (B) grading.jsx 디자인 요소 자동 배치 (레이어 3개 z-order + 복사/붙여넣기) | 완료 |

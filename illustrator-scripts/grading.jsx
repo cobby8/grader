@@ -1,19 +1,21 @@
 /**
- * grading.jsx -- Illustrator ExtendScript 그레이딩 스크립트 (패턴 선 복사 + 단색 배경 채우기)
+ * grading.jsx -- Illustrator ExtendScript 그레이딩 스크립트 (배경 채우기 + 디자인 요소 배치)
  *
  * 동작 흐름:
  *   1. config.json 읽기 (스크립트와 같은 폴더)
- *   2. 기준 디자인 PDF 열기 → 배경 메인 색상(가장 큰 면적 pathItem의 fillColor) 추출
- *   3. 디자인 닫기 (색상만 추출했으므로)
- *   4. 타겟 사이즈 패턴 SVG 열기 (이것이 "틀"이 됨)
- *   5. 패턴 각 조각(polyline→pathItem)에 추출한 색상으로 fill 적용
- *   6. PDF로 저장
- *   7. result.json 작성 + 문서 닫기
+ *   2. 기준 디자인 PDF 열기 → 배경 메인 색상 추출 → 닫기
+ *   3. 타겟 사이즈 패턴 SVG 열기 (이것이 "틀"이 됨)
+ *   4. 레이어 3개 생성 (배경 fill / 디자인 요소 / 패턴 선) — z-order 보장
+ *   5. 패턴 각 조각에 추출한 색상으로 fill 적용 → 배경 레이어
+ *   6. 원본 패턴 선 → 패턴선 레이어로 이동
+ *   7. 디자인 PDF 다시 열기 → 전체 복사 → 패턴 문서에 붙여넣기 → 디자인 레이어
+ *   8. PDF로 저장
+ *   9. result.json 작성 + 문서 닫기
  *
- * 왜 이 방식인가:
- *   - 디자인은 현재 단색 배경이므로, 배경색만 추출해서 패턴 조각에 채우면 충분하다.
- *   - 그라데이션/레이어 구분은 추후 진행한다.
- *   - 클리핑 마스크 방식보다 단순하고 확실하다.
+ * z-order 구조:
+ *   최상위: 패턴 선 + 너치 (stroke만, 재단선이 보여야 함)
+ *   중간:   디자인 요소 (PDF에서 복사한 스트라이프/로고/텍스트/번호)
+ *   최하위: 배경 fill (단색으로 채운 패턴 조각)
  *
  * 주의: ExtendScript는 ES3 기반!
  *   - var만 사용 (let/const 불가)
@@ -331,20 +333,22 @@ function extractMainColor(doc) {
 
 /**
  * 그레이딩 메인 함수.
- * 디자인에서 메인 색상을 추출한 뒤, 패턴 조각에 해당 색상을 채운다.
+ * 디자인에서 메인 색상을 추출하고, 패턴 조각에 채운 뒤,
+ * 디자인 전체 요소(스트라이프/로고/텍스트/번호)를 패턴 위에 배치한다.
  *
- * 왜 이 방식인가:
- *   - 현재 디자인은 단색 배경이므로 색상 추출 + 채우기만으로 충분하다.
- *   - 클리핑 마스크 방식보다 단순하고, 패턴 형태 그대로 출력된다.
- *   - 그라데이션/다중 레이어는 추후 확장한다.
+ * 레이어 구조로 z-order를 관리:
+ *   - 패턴선 레이어 (최상위): 재단선/너치가 항상 보임
+ *   - 디자인 레이어 (중간): PDF에서 복사한 디자인 요소
+ *   - 배경 레이어 (최하위): 단색으로 채운 패턴 조각
  */
 function main() {
-    $.writeln("[grading.jsx] 스크립트 시작 (패턴 선 복사 + 단색 배경 채우기)");
+    $.writeln("[grading.jsx] 스크립트 시작 (배경 채우기 + 디자인 요소 배치)");
 
     var config = readConfig();
     var resultPath = config.resultJsonPath;
     var patternDoc = null;
     var designDoc = null;
+    var designDoc2 = null;
 
     try {
         // ===== STEP 1: 기준 디자인에서 메인 색상 추출 =====
@@ -396,20 +400,43 @@ function main() {
         var docHeight = abRect[1] - abRect[3];
         $.writeln("[grading.jsx] 아트보드: " + docWidth.toFixed(1) + " x " + docHeight.toFixed(1) + " pt");
 
-        // ===== STEP 3: 패턴 조각에 색상 채우기 =====
+        // ===== STEP 3: 레이어 생성 (z-order 관리) =====
+        // 레이어를 사용하면 요소들의 상하 관계가 명확하게 보장된다.
+        // Illustrator에서 layers.add()는 최상위에 추가되므로, 역순으로 생성해야 한다.
+        // 생성 순서: 배경(최하위) → 디자인(중간) → 패턴선(최상위)
+
+        // 기본 레이어 이름 변경 (SVG가 열리면 기본 레이어가 하나 존재)
+        var defaultLayer = patternDoc.layers[0];
+
+        // 배경 fill 레이어 — 가장 아래
+        var layerFill = patternDoc.layers.add();
+        layerFill.name = "배경 fill";
+
+        // 디자인 요소 레이어 — 중간
+        var layerDesign = patternDoc.layers.add();
+        layerDesign.name = "디자인 요소";
+
+        // 패턴 선 레이어 — 가장 위 (재단선/너치가 항상 보여야 함)
+        var layerPattern = patternDoc.layers.add();
+        layerPattern.name = "패턴 선";
+
+        $.writeln("[grading.jsx] 레이어 생성 완료: 패턴선/디자인/배경 (위→아래)");
+
+        // ===== STEP 4: 패턴 조각에 색상 채우기 + 레이어 이동 =====
         // SVG를 열면 polyline이 pathItem으로 변환됨
         // 면적이 충분히 큰 경로만 패턴 조각으로 인정 (가이드선/마크 제외)
-        // 큰 패턴 조각에만 fill 적용, 원본 경로(선+너치)는 위에 유지
-        // 방법: 큰 경로를 복제 → 복제본에 fill → 복제본을 뒤로 보내기
-        // 원본은 stroke만 유지 (패턴 선 + 너치가 보임)
+        // 방법: 큰 경로를 복제 → 복제본에 fill → 배경 레이어로 이동
+        //        원본은 stroke만 유지 → 패턴선 레이어로 이동
         var filledCount = 0;
-        var pathCount = patternDoc.pathItems.length;
+        // 기본 레이어(defaultLayer)의 pathItem을 순회
+        // 주의: 이동하면 인덱스가 변하므로 뒤에서부터 처리
+        var pathCount = defaultLayer.pathItems.length;
         for (var i = pathCount - 1; i >= 0; i--) {
-            var path = patternDoc.pathItems[i];
+            var path = defaultLayer.pathItems[i];
 
             // 가로/세로 모두 50pt 이상인 경로만 패턴 조각으로 인정
             if (Math.abs(path.width) > 50 && Math.abs(path.height) > 50) {
-                // 열린 경로면 닫기
+                // 열린 경로면 닫기 (fill이 제대로 적용되려면 닫힌 경로여야 함)
                 if (!path.closed) {
                     path.closed = true;
                 }
@@ -419,33 +446,85 @@ function main() {
                 fillCopy.filled = true;
                 fillCopy.fillColor = mainColor;
                 fillCopy.stroked = false;  // 배경은 선 없음
-                fillCopy.zOrder(ZOrderMethod.SENDTOBACK);  // 뒤로 보내기
+                // 배경 레이어로 이동
+                fillCopy.move(layerFill, ElementPlacement.PLACEATBEGINNING);
 
-                // 원본은 fill 없이 stroke만 유지 (패턴 선 + 너치 표시)
+                // 원본은 fill 없이 stroke만 유지 → 패턴선 레이어로 이동
                 path.filled = false;
+                path.move(layerPattern, ElementPlacement.PLACEATBEGINNING);
 
                 filledCount++;
+            } else {
+                // 작은 요소(너치, 가이드 등)도 패턴선 레이어로 이동
+                path.move(layerPattern, ElementPlacement.PLACEATBEGINNING);
             }
         }
+
+        // 기본 레이어에 남은 다른 아이템(그룹 등)도 패턴선 레이어로 이동
+        while (defaultLayer.pageItems.length > 0) {
+            defaultLayer.pageItems[0].move(layerPattern, ElementPlacement.PLACEATBEGINNING);
+        }
+
         $.writeln("[grading.jsx] 패턴 " + filledCount + "개 조각에 색상 채움");
 
         if (filledCount === 0) {
             $.writeln("[grading.jsx] 경고: 50pt 이상 조각이 없음 — 패턴 SVG를 확인하세요");
         }
 
-        // ===== STEP 4: PDF로 저장 =====
+        // 빈 기본 레이어 제거 (정리)
+        defaultLayer.remove();
+
+        // ===== STEP 5: 디자인 요소 배치 =====
+        // 디자인 PDF를 다시 열어서 전체 요소를 복사 → 패턴 문서에 붙여넣기
+        // 왜 다시 여는가: STEP 1에서 색상 추출 후 닫았으므로 다시 열어야 함
+        // 이렇게 하면 스트라이프, 로고, 텍스트, 번호 등 모든 디자인 요소가 배치됨
+
+        designDoc2 = app.open(new File(config.designPdfPath), DocumentColorSpace.CMYK);
+        $.writeln("[grading.jsx] 디자인 PDF 재오픈: " + designDoc2.name);
+
+        // 디자인의 모든 요소 선택 → 복사
+        // selectObjectsOnActiveArtboard()로 현재 아트보드 위 모든 객체 선택
+        designDoc2.selectObjectsOnActiveArtboard();
+        app.executeMenuCommand("copy");
+        $.writeln("[grading.jsx] 디자인 전체 요소 복사 완료");
+
+        // 디자인 문서 닫기 (복사 완료)
+        designDoc2.close(SaveOptions.DONOTSAVECHANGES);
+        designDoc2 = null;
+
+        // 패턴 문서를 활성화하고 디자인 레이어에 붙여넣기
+        app.activeDocument = patternDoc;
+        // 디자인 레이어를 활성 레이어로 설정 — 붙여넣기가 이 레이어에 들어감
+        patternDoc.activeLayer = layerDesign;
+        app.executeMenuCommand("paste");
+        $.writeln("[grading.jsx] 디자인 요소를 패턴 문서의 디자인 레이어에 붙여넣기 완료");
+
+        // 붙여넣은 요소 위치 정보 로그
+        // 디자인 아트보드(1580x2000mm)와 패턴 아트보드(1530x1200mm)가 다르므로
+        // 위치가 맞지 않을 수 있지만, 현재는 그대로 두고 승화전사 재단 시 처리
+        var pastedItems = patternDoc.selection;
+        if (pastedItems && pastedItems.length > 0) {
+            $.writeln("[grading.jsx] 붙여넣은 요소 수: " + pastedItems.length);
+        } else {
+            $.writeln("[grading.jsx] 경고: 붙여넣은 요소가 없음 — 디자인 PDF 확인 필요");
+        }
+
+        // 선택 해제
+        patternDoc.selection = null;
+
+        // ===== STEP 6: PDF로 저장 =====
         var outputFile = new File(config.outputPdfPath);
         var pdfOpts = createPdfSaveOptions();
         patternDoc.saveAs(outputFile, pdfOpts);
         $.writeln("[grading.jsx] PDF 저장 완료: " + config.outputPdfPath);
 
-        // ===== STEP 5: 정리 =====
+        // ===== STEP 7: 정리 =====
         patternDoc.close(SaveOptions.DONOTSAVECHANGES);
         patternDoc = null;
 
         // 성공 결과 기록
         writeSuccessResult(resultPath, config.outputPdfPath,
-            "그레이딩 완료 - " + filledCount + "개 조각 색상 채움");
+            "그레이딩 완료 - " + filledCount + "개 조각 색상 채움 + 디자인 요소 배치");
         $.writeln("[grading.jsx] 완료!");
 
     } catch (err) {
@@ -454,6 +533,9 @@ function main() {
         // 열린 문서 정리 (에러 시에도 문서를 닫아야 다음 실행에 문제 없음)
         try {
             if (designDoc) designDoc.close(SaveOptions.DONOTSAVECHANGES);
+        } catch (e) { /* 무시 */ }
+        try {
+            if (designDoc2) designDoc2.close(SaveOptions.DONOTSAVECHANGES);
         } catch (e) { /* 무시 */ }
         try {
             if (patternDoc) patternDoc.close(SaveOptions.DONOTSAVECHANGES);
