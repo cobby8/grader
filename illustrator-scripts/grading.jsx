@@ -583,10 +583,8 @@ function main() {
             $.writeln("[grading.jsx] 디자인 전체 요소 복사 완료 (PDF 폴백)");
         }
 
-        // 디자인 문서 닫기 (색상 추출 + 복사 완료)
-        designDoc.close(SaveOptions.DONOTSAVECHANGES);
-        designDoc = null;
-        $.writeln("[grading.jsx] 디자인 문서 닫음");
+        // 디자인은 아직 닫지 않음! 클립보드 유지를 위해 패턴에 붙여넣기 후 닫음.
+        $.writeln("[grading.jsx] 디자인 문서 유지 (클립보드 보존)");
 
         // ===== STEP 5: 타겟 패턴 SVG 열기 =====
         var patternFile = new File(config.patternSvgPath);
@@ -677,6 +675,13 @@ function main() {
         patternDoc.activeLayer = layerDesign;
         app.executeMenuCommand("paste");
         $.writeln("[grading.jsx] 디자인 요소를 '디자인 요소' 레이어에 붙여넣기 완료");
+
+        // 이제 디자인 문서 닫기 (클립보드 사용 완료)
+        if (designDoc) {
+            designDoc.close(SaveOptions.DONOTSAVECHANGES);
+            designDoc = null;
+            $.writeln("[grading.jsx] 디자인 문서 닫음");
+        }
 
         // 붙여넣은 요소 정보 로그
         var pastedItems = patternDoc.selection;
