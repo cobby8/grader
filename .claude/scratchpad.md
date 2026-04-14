@@ -527,6 +527,43 @@ tester 참고:
 - run_illustrator_script는 result.json 폴링으로 완료 감지 (500ms 간격)
 - 최근 커밋: 53fd5dc → 4e8e96f → f8d489e → 4a61869 → 521e31f
 
+### [2026-04-14] Phase 2: 조각별 요소 분리 정렬 구현
+
+📝 구현한 기능: 요소 전체를 한 덩어리로 몸판 중앙에 이동하던 기존 방식을 **조각별 개별 정렬**로 교체. 디자인 AI의 "패턴선" 레이어 각 조각 bbox와 베이스 문서의 몸판 조각 bbox를 X 오름차순으로 매칭하고, 각 요소를 "원본 상대 오프셋 보존(방식 B)"으로 재배치. designPieces.cx 기준 오프셋을 linearScale로 보존하여 앞판/뒷판/소매에 각각 올라가도록 함.
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| illustrator-scripts/grading.jsx | 신규 함수 4종(`extractPatternPieces`/`bboxIntersectionArea`/`findBestMatchingPiece`/`alignElementToPiece`) 추가 + `importSvgPathsToDoc` 반환에 basePieces 포함 + STEP 4 후반 designPieces 사전 매핑 수집 + STEP 10 재작성(그룹 해제 + 개별 translate). Phase 1 z-order 블록(현 STEP 11-B, 1318~1341줄)은 **미변경**. 1073줄 → 1384줄 (+311줄) | 수정 |
+
+주요 변경점:
+- **신규 함수 1 `extractPatternPieces(layer, minSize)`**: 패턴선 레이어에서 pathItems + groupItems 모두 순회, 가로/세로 > minSize 필터링, X 중심 오름차순 정렬된 조각 배열 반환. 각 원소 = `{bbox, cx, cy, area}`
+- **신규 함수 2 `bboxIntersectionArea(a, b)`**: 두 bbox 교집합 면적. Illustrator Y축(top이 큰 값) 규칙 반영
+- **신규 함수 3 `findBestMatchingPiece(itemBbox, pieces)`**: 1차 교집합 면적 최대, 2차 중심 거리 최소 폴백
+- **신규 함수 4 `alignElementToPiece(item, origCenter, designPiece, basePiece, linearScale)`**: 방식 B 원본 상대 위치 보존 공식 `newCenter = basePiece.center + (origCenter - designPiece.center) × linearScale` 적용 후 translate
+- **importSvgPathsToDoc**: fillCopy의 geometricBounds를 basePieces에 수집, X 오름차순 정렬하여 반환
+- **STEP 4 후반 (AI 파일만)**: copy 직전에 designPieces 수집 + 각 요소의 원본 중심(elementOriginalCenters) + 매핑 인덱스(elementPieceIndex) 기록
+- **STEP 7**: importResult.basePieces 수신 + 로그 출력
+- **STEP 10 (1198~1289줄)**: 폴백 판정 3단계(S1 조각수 불일치/S2 paste수 불일치/S3 인덱스 범위) 후, 정상 경로에서 `pastedGroup.pageItems[0].move(layerDesign, PLACEATEND)` while 루프로 그룹 해제 → 빈 그룹 제거 → individualItems[i]별로 `alignElementToPiece` 호출
+
+안전장치 3종:
+- (S1) `!isAiFile` 또는 designPieces/basePieces 수 0 또는 수 불일치 → `alignToBodyCenter` 폴백 + 경고
+- (S2) paste된 자식 수 !== copy 시점 기록 수 → 폴백 + 경고
+- (S3) 각 요소의 pieceIndex가 -1 또는 basePieces 범위 밖 → 해당 요소만 스킵 + 카운트
+
+💡 tester 참고:
+- 테스트 방법: Illustrator에서 실제 그레이딩 실행 후 출력 PDF 열기 → 각 몸판 조각(앞판/뒷판/소매) 위에 해당 요소가 올라가있는지 시각 확인
+- 정상 동작: 앞판 조각 위에 앞판용 요소만, 뒷판 위에 뒷판용 요소만 (단일 중앙 덩어리 X)
+- 폴백 로그: `[grading.jsx] [Phase 2] 폴백 사용 — 전체 중심 이동 (이유)` 출력 시 조각수 불일치 원인 확인
+- 주의할 입력: ① 디자인 AI "패턴선" 레이어가 없거나 조각 수가 SVG와 다름 → 폴백 ② paste 이후 그룹 내부 수가 원본과 달라짐(Illustrator 자동 병합 등) → 폴백
+- 정적 검증: `npx tsc --noEmit` 통과, `cd src-tauri && cargo check` 통과 (0.44s, dev profile), ES3 위반 0건(`let`/`const`/`=>`/백틱/JSON 직접 호출 모두 0건, 주석 2건만 매치)
+
+⚠️ reviewer 참고:
+- **가정**: 디자인 AI의 "패턴선" 레이어 조각 순서(X 오름차순)와 SVG 몸판 조각 순서(X 오름차순)가 동일해야 매칭이 맞음. 사용자 승인 완료.
+- 요소 pageItems 순회 순서 == copy→paste 후 pastedGroup.pageItems 순서 == `individualItems[i]` 순서로 유지된다고 가정. Illustrator paste는 selection 순서를 유지하는 것으로 알려짐.
+- 그룹 해제 방식: `app.executeMenuCommand("ungroup")` 대신 수동 `move(layer, PLACEATEND)`로 자식을 빼내고 빈 그룹 제거 — ungroup 후 selection 관리가 불안정해 수동 방식 선택
+- 면적 기반 linearScale은 **전역 단일값** 유지(Phase 3가 조각별 개별 스케일). Phase 2는 비율 보존이 목적
+- Phase 1 z-order 로직(finalLayer 레이어 통합, 현재 파일 1318~1341줄) 완전 무변경 확인
+
 ### [2026-04-14] Phase 1: grading.jsx z-order 수정
 
 수정 내용:
@@ -551,6 +588,30 @@ tester 참고:
 ⚠️ reviewer 참고:
 - Z1-A 대안 대신 Z1-B(PLACEATBEGINNING)를 안 쓴 이유: PLACEATBEGINNING을 while로 반복하면 이전에 넣은 아이템이 뒤로 밀리면서 아이템 내부 순서가 뒤집힘 → 배경fill 조각들 간 상대 순서 보장 안 됨
 - Phase 2(조각별 분리 정렬)는 사용자 Phase 1 결과 확인 후 별도 진행
+
+### [2026-04-14] z-order 재조정: 패턴선(위) > 디자인 > 배경fill
+
+사용자 Phase 2 테스트 피드백 반영. finalLayer 통합 블록(grading.jsx 1318~1341줄) while 순서를 **layerPattern → layerDesign → layerFill** 로 재배치.
+
+수정 내용:
+- 주석 의도 z-order 문구: "디자인 요소(위) > 배경 fill(중간) > 패턴선(아래)" → **"패턴선(위) > 디자인 요소(중간) > 배경 fill(아래)"**
+- while 블록 순서: layerDesign → layerFill → layerPattern → **layerPattern → layerDesign → layerFill**
+- 각 단계 번호 주석 1)/2)/3) 설명도 신규 순서에 맞춰 갱신
+- `$.writeln` 로그: "디자인(위) > 배경fill > 패턴선(아래)" → **"패턴선(위) > 디자인(중간) > 배경fill(아래)"**
+
+수정 파일: illustrator-scripts/grading.jsx (1318~1341줄 블록 내부만)
+변경 규모: 핀포인트 3줄 수준 (주석 포함 약 6줄)
+
+검증:
+- `npx tsc --noEmit` → 통과
+- `cd src-tauri && cargo check` → 통과 (Finished dev profile)
+- ES3 호환성: let/const/=>/백틱/JSON 직접 호출 위반 0건
+- 다른 로직(조각별 정렬, 헬퍼 함수, remove 순서 등) 미변경
+
+💡 tester 참고:
+- Illustrator에서 재출력 후 레이어 패널 → "그레이딩 출력" 레이어 내부 아이템 순서 확인
+- 정상: **최상위 = 패턴선 / 중간 = 디자인 요소 / 최하위 = 배경 fill**
+- 시각적으로는 배경 몸판 색 위에 디자인이 얹히고, 그 위에 패턴선이 덮여야 함
 
 ## 테스트 결과 (tester)
 
@@ -590,8 +651,6 @@ tester 참고:
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-04-08 | developer | (A) SVG 파일 쓰기 Rust 커맨드 전환 + (B) 패턴 카드 조각별 SVG 사이즈 현황 표시 | 완료 |
-| 2026-04-08 | developer | FileGenerate Illustrator grading.jsx 자동 호출 연동 (AI → AI, 없으면 Python 폴백) | 완료 |
 | 2026-04-08 | developer | SVG 패턴 클리핑 마스크+bleed 적용 + 좌표계 버그 수정 + 조각별 채워넣기 | 완료 |
 | 2026-04-08 | developer | SVG 아트보드 자동 보정 (normalize_artboard viewBox 1580x2000mm) | 완료 |
 | 2026-04-08 | developer | 데이터 보호 안전장치 (3 store 로드/저장 빈배열 차단 + 백업) | 완료 |
@@ -601,3 +660,5 @@ tester 참고:
 | 2026-04-14 | developer | grading.jsx CMYK 시작점 + 몸판 우선 재작성 (헬퍼 4종 추가 + main STEP 0~11 교체, ES3/tsc/cargo 통과) | 완료 |
 | 2026-04-14 | planner-architect | 요소 z-order + 조각별 분리 정렬 분석 보고서 작성 (Z1-A 레이어 통합 역순 + P2-A 공간 매핑 권장, Phase 1~3 단계 분할) | 완료 |
 | 2026-04-14 | developer | Phase 1 z-order 수정 (grading.jsx 1007~1030줄 while 블록 순서 교체, 디자인>배경fill>패턴선, tsc/cargo/ES3 통과) | 완료 |
+| 2026-04-14 | developer | grading.jsx z-order 재조정 (1318~1341줄 while 순서 layerPattern→layerDesign→layerFill, 패턴선>디자인>배경fill, tsc/cargo/ES3 통과) | 완료 |
+| 2026-04-14 | developer | Phase 2 조각별 요소 분리 정렬 구현 (grading.jsx 신규 함수 4종 + importSvgPathsToDoc basePieces 반환 + STEP 4 사전 매핑 + STEP 10 그룹해제/개별translate, +311줄, 안전장치 3단계 폴백, tsc/cargo/ES3 통과) | 완료 |

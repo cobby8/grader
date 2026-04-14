@@ -598,6 +598,9 @@ function createCmykBaseDoc(widthPt, heightPt) {
 function importSvgPathsToDoc(svgDoc, targetDoc, mainColor, layerFill, layerPattern) {
     var filledCount = 0;
     var targetArea = 0;
+    // basePieces: 베이스 문서에 복제된 몸판 조각들의 bbox 목록
+    // Phase 2에서 요소를 각 조각별로 개별 정렬할 때 매핑 대상으로 사용한다.
+    var basePieces = [];
 
     // 원본 SVG의 모든 레이어를 순회
     for (var li = 0; li < svgDoc.layers.length; li++) {
@@ -635,6 +638,18 @@ function importSvgPathsToDoc(svgDoc, targetDoc, mainColor, layerFill, layerPatte
                     }
                 }
 
+                // basePieces에 fillCopy의 bbox 저장 (Phase 2 매핑 소스)
+                // geometricBounds = [left, top, right, bottom] (Illustrator Y축: 위=큰 값)
+                var fb = fillCopy.geometricBounds;
+                var cx = (fb[0] + fb[2]) / 2;
+                var cy = (fb[1] + fb[3]) / 2;
+                basePieces.push({
+                    bbox: [fb[0], fb[1], fb[2], fb[3]],
+                    cx: cx,
+                    cy: cy,
+                    area: Math.abs(fillCopy.area)
+                });
+
                 filledCount++;
             } else {
                 // 작은 조각 (너치/가이드) → 패턴선 레이어로 복제
@@ -656,7 +671,171 @@ function importSvgPathsToDoc(svgDoc, targetDoc, mainColor, layerFill, layerPatte
         }
     }
 
-    return { filledCount: filledCount, targetArea: targetArea };
+    // basePieces를 X 오름차순으로 정렬 → designPieces와 동일 순서 가정
+    // (사용자 승인: SVG 몸판 조각과 디자인 AI 조각 순서가 X 오름차순으로 일치한다는 가정)
+    basePieces.sort(function (a, b) { return a.cx - b.cx; });
+
+    return { filledCount: filledCount, targetArea: targetArea, basePieces: basePieces };
+}
+
+// ===== Phase 2 신규 함수 1: 레이어에서 몸판 조각 bbox 배열 추출 =====
+/**
+ * 왜 필요한가:
+ *   - 디자인 AI의 "패턴선" 레이어에는 앞판/뒷판/소매 등 몸판 조각 path들이 있다.
+ *   - 각 조각의 bbox를 뽑아내어, "요소"가 어느 조각 위에 놓여있는지 공간 매핑에 사용한다.
+ *
+ * @param {Layer} layer - 패턴선 레이어
+ * @param {number} minSize - 조각으로 간주할 최소 가로/세로 크기 (pt). 너치/가이드 제외용.
+ * @returns {Array<{bbox: number[], cx: number, cy: number, area: number}>}
+ *   X 중심 오름차순으로 정렬된 조각 배열
+ */
+function extractPatternPieces(layer, minSize) {
+    var pieces = [];
+    if (!layer) return pieces;
+
+    // pathItems 순회: 단독 path 조각
+    for (var pi = 0; pi < layer.pathItems.length; pi++) {
+        var path = layer.pathItems[pi];
+        // 너치/가이드 필터: 가로/세로 모두 minSize 이상
+        if (Math.abs(path.width) > minSize && Math.abs(path.height) > minSize) {
+            var pb = path.geometricBounds;
+            pieces.push({
+                bbox: [pb[0], pb[1], pb[2], pb[3]],
+                cx: (pb[0] + pb[2]) / 2,
+                cy: (pb[1] + pb[3]) / 2,
+                area: Math.abs(path.area)
+            });
+        }
+    }
+
+    // groupItems 순회: 그룹 단위 조각 (예: 칼라처럼 여러 path 묶음)
+    for (var gi = 0; gi < layer.groupItems.length; gi++) {
+        var grp = layer.groupItems[gi];
+        var gb = grp.geometricBounds;
+        var gw = Math.abs(gb[2] - gb[0]);
+        var gh = Math.abs(gb[1] - gb[3]);
+        if (gw > minSize && gh > minSize) {
+            pieces.push({
+                bbox: [gb[0], gb[1], gb[2], gb[3]],
+                cx: (gb[0] + gb[2]) / 2,
+                cy: (gb[1] + gb[3]) / 2,
+                area: gw * gh // 그룹은 정확한 area가 없으므로 bbox 면적으로 근사
+            });
+        }
+    }
+
+    // X 중심 오름차순 정렬 (사용자 승인 규칙: 몸판 SVG와 동일 정렬 가정)
+    pieces.sort(function (a, b) { return a.cx - b.cx; });
+    return pieces;
+}
+
+// ===== Phase 2 신규 함수 2: 두 bbox의 교집합 면적 =====
+/**
+ * 왜 필요한가:
+ *   - 요소 bbox가 여러 조각에 걸쳐있을 때, "가장 많이 겹치는 조각"에 매핑해야 한다.
+ *   - 교집합 면적이 클수록 해당 조각에 속할 가능성이 높다.
+ *
+ * @param {number[]} a - [left, top, right, bottom] (Illustrator Y: top>bottom)
+ * @param {number[]} b - [left, top, right, bottom]
+ * @returns {number} 교집합 면적. 겹치지 않으면 0.
+ */
+function bboxIntersectionArea(a, b) {
+    // X축: 양쪽 left의 max ~ 양쪽 right의 min
+    var ix1 = Math.max(a[0], b[0]);
+    var ix2 = Math.min(a[2], b[2]);
+    var iw = ix2 - ix1;
+    if (iw <= 0) return 0;
+
+    // Y축: Illustrator는 top이 큰 값, bottom이 작은 값 → 교집합은 min(top)~max(bottom)
+    var iy1 = Math.min(a[1], b[1]);   // top 쪽 (작은 top = 교집합의 top)
+    var iy2 = Math.max(a[3], b[3]);   // bottom 쪽 (큰 bottom = 교집합의 bottom)
+    var ih = iy1 - iy2;
+    if (ih <= 0) return 0;
+
+    return iw * ih;
+}
+
+// ===== Phase 2 신규 함수 3: 요소 bbox와 가장 잘 매칭되는 조각 인덱스 =====
+/**
+ * 왜 필요한가:
+ *   - 요소 한 개가 어느 몸판 조각 위에 놓였는지 판정해야 한다.
+ *   - 1차: 교집합 면적 최대인 조각 선택.
+ *   - 2차: 교집합이 모두 0이면 중심 간 거리 최소인 조각으로 폴백.
+ *
+ * @param {number[]} itemBbox - [left, top, right, bottom]
+ * @param {Array} pieces - extractPatternPieces 결과
+ * @returns {number} 매칭된 조각 인덱스 (-1 = 매칭 실패)
+ */
+function findBestMatchingPiece(itemBbox, pieces) {
+    if (!pieces || pieces.length === 0) return -1;
+
+    var bestIdx = -1;
+    var bestArea = 0;
+
+    // 1차: 교집합 면적 최대 조각 찾기
+    for (var i = 0; i < pieces.length; i++) {
+        var area = bboxIntersectionArea(itemBbox, pieces[i].bbox);
+        if (area > bestArea) {
+            bestArea = area;
+            bestIdx = i;
+        }
+    }
+    if (bestIdx >= 0) return bestIdx;
+
+    // 2차 폴백: 중심 간 유클리드 거리 최소 조각
+    var icx = (itemBbox[0] + itemBbox[2]) / 2;
+    var icy = (itemBbox[1] + itemBbox[3]) / 2;
+    var bestDist = Infinity;
+    for (var j = 0; j < pieces.length; j++) {
+        var dx = icx - pieces[j].cx;
+        var dy = icy - pieces[j].cy;
+        var d = dx * dx + dy * dy; // 제곱 비교면 충분 (sqrt 생략)
+        if (d < bestDist) {
+            bestDist = d;
+            bestIdx = j;
+        }
+    }
+    return bestIdx;
+}
+
+// ===== Phase 2 신규 함수 4: 개별 요소를 매칭 조각으로 이동 =====
+/**
+ * 왜 필요한가:
+ *   - 요소 전체를 한 덩어리로 중앙 이동하면 각 조각(앞판/뒷판/소매) 위에 놓이지 않는다.
+ *   - 원본 디자인 AI에서 요소가 designPiece 기준으로 가진 상대 오프셋을 보존하면서,
+ *     basePiece(베이스 문서의 해당 몸판) 중심으로 맞춰 이동해야 자연스럽다.
+ *
+ * 방식 B (원본 상대 위치 보존):
+ *   - 새 중심 = basePiece.center + (원본 상대 오프셋 × linearScale)
+ *   - 원본 상대 오프셋 = 원본 요소 중심 - designPiece 중심 (스케일 전)
+ *   - 요소는 이미 linearScale로 스케일된 상태 → 오프셋도 동일 비율로 적용
+ *
+ * @param {PageItem} item - 이동 대상 요소 (이미 스케일된 상태)
+ * @param {Object} originalCenter - {cx, cy} 스케일 전 원본 요소 중심
+ * @param {Object} designPiece - 원본 디자인 AI의 매칭된 조각 {cx, cy}
+ * @param {Object} basePiece - 베이스 문서의 매칭된 조각 {cx, cy}
+ * @param {number} linearScale - 면적 비율 선형 스케일 (sqrt(targetArea/baseArea))
+ */
+function alignElementToPiece(item, originalCenter, designPiece, basePiece, linearScale) {
+    if (!item || !designPiece || !basePiece) return;
+
+    // 원본 상대 오프셋 (스케일 전 공간에서 측정)
+    var relX = originalCenter.cx - designPiece.cx;
+    var relY = originalCenter.cy - designPiece.cy;
+
+    // 스케일 적용 후 새 중심
+    var newCx = basePiece.cx + relX * linearScale;
+    var newCy = basePiece.cy + relY * linearScale;
+
+    // 현재(스케일 후) 요소 중심
+    var ib = item.geometricBounds;
+    var curCx = (ib[0] + ib[2]) / 2;
+    var curCy = (ib[1] + ib[3]) / 2;
+
+    // translate 오프셋 (현재 → 새 위치)
+    var dx = newCx - curCx;
+    var dy = newCy - curCy;
+    item.translate(dx, dy);
 }
 
 // ===== 신규 헬퍼: 요소 그룹을 몸판 중앙으로 정렬 =====
@@ -817,6 +996,16 @@ function main() {
         //   - 그래서 designDoc에서 먼저 clipboard로 담아두고,
         //     나중에 CMYK 베이스 문서에 paste한다.
         //   - paste 시점에 붙여넣어진 아이템의 잔존 RGB는 STEP 9 안전망에서 순회 변환.
+        //
+        // ★ Phase 2 추가: 요소 copy 전에 아래 두 가지를 사전 수집한다.
+        //   1) designPieces: "패턴선" 레이어의 각 조각 bbox (X 오름차순)
+        //   2) elementOriginalCenters[i] + elementPieceIndex[i]:
+        //      "요소" 레이어 i번째 아이템의 원본 중심 + 매핑된 조각 인덱스
+        //   → 베이스 문서에서 paste된 요소들을 이 인덱스에 따라 개별 배치할 때 사용.
+        var designPieces = [];             // 디자인 AI의 패턴선 조각들 (Phase 2 매핑 소스)
+        var elementOriginalCenters = [];   // 각 요소의 스케일 전 원본 중심 {cx, cy}
+        var elementPieceIndex = [];        // 각 요소가 매칭된 designPieces 인덱스
+        var elementCountAtCopy = 0;        // paste 시점에 수 불일치 감지용
         if (isAiFile) {
             var elemLayer;
             try {
@@ -825,7 +1014,37 @@ function main() {
                 throw new Error("AI 파일에 '요소' 레이어가 없습니다. 레이어 이름을 확인해주세요.");
             }
 
+            // --- Phase 2 사전 수집 ①: designPieces (패턴선 레이어 조각 bbox) ---
+            try {
+                var designPatternLayer = designDoc.layers.getByName("패턴선");
+                // minSize 50pt: importSvgPathsToDoc의 기준과 동일 → 동일 조각 집합 기대
+                designPieces = extractPatternPieces(designPatternLayer, 50);
+                $.writeln("[grading.jsx] [Phase 2] designPieces 수집: " + designPieces.length + "개 (X 오름차순)");
+            } catch (ePp) {
+                $.writeln("[grading.jsx] [Phase 2] 경고: '패턴선' 레이어 조각 수집 실패 — 전체 중심 폴백 예정 (" + ePp.message + ")");
+                designPieces = [];
+            }
+
             $.writeln("[grading.jsx] '요소' 레이어 아이템 수: " + elemLayer.pageItems.length);
+
+            // --- Phase 2 사전 수집 ②: 각 요소의 원본 중심 + 매칭 조각 인덱스 ---
+            // 주의: elemLayer.pageItems는 PathItem/GroupItem/TextItem 등 섞여있지만
+            //       모두 geometricBounds를 갖는다. 순서는 copy→paste 시 유지된다고 가정.
+            for (var emi = 0; emi < elemLayer.pageItems.length; emi++) {
+                var emItem = elemLayer.pageItems[emi];
+                var emb = emItem.geometricBounds; // [left, top, right, bottom]
+                var emCx = (emb[0] + emb[2]) / 2;
+                var emCy = (emb[1] + emb[3]) / 2;
+                elementOriginalCenters.push({ cx: emCx, cy: emCy });
+                // designPieces가 비었으면 매칭 스킵 (-1 저장)
+                var bestIdx = (designPieces.length > 0)
+                    ? findBestMatchingPiece([emb[0], emb[1], emb[2], emb[3]], designPieces)
+                    : -1;
+                elementPieceIndex.push(bestIdx);
+            }
+            elementCountAtCopy = elemLayer.pageItems.length;
+            $.writeln("[grading.jsx] [Phase 2] 요소별 매핑 기록: " + elementPieceIndex.length + "개");
+
             designDoc.selection = null;
             for (var ei = 0; ei < elemLayer.pageItems.length; ei++) {
                 elemLayer.pageItems[ei].selected = true;
@@ -837,7 +1056,7 @@ function main() {
                 $.writeln("[grading.jsx] 경고: '요소' 레이어에 선택 가능한 아이템이 없음");
             }
         } else {
-            // PDF 폴백: 전체 아트보드 요소
+            // PDF 폴백: 전체 아트보드 요소 — Phase 2 매핑 없음
             designDoc.selectObjectsOnActiveArtboard();
             app.executeMenuCommand("copy");
             $.writeln("[grading.jsx] 디자인 전체 요소 clipboard 적재 (PDF 폴백)");
@@ -891,8 +1110,11 @@ function main() {
         var importResult = importSvgPathsToDoc(svgDoc, baseDoc, mainColor, layerFill, layerPattern);
         var filledCount = importResult.filledCount;
         var targetArea = importResult.targetArea;
+        // Phase 2: 베이스 문서의 몸판 조각 bbox 목록 (X 오름차순) — 개별 정렬 타겟
+        var basePieces = importResult.basePieces || [];
         $.writeln("[grading.jsx] 패턴 " + filledCount + "개 조각 임포트 완료");
         $.writeln("[grading.jsx] 타겟 패턴 면적: " + targetArea.toFixed(0) + " pt² (" + filledCount + "개 조각)");
+        $.writeln("[grading.jsx] [Phase 2] basePieces 수집: " + basePieces.length + "개 (X 오름차순)");
 
         if (filledCount === 0) {
             $.writeln("[grading.jsx] 경고: 50pt 이상 조각이 없음 — 패턴 SVG를 확인하세요");
@@ -939,6 +1161,8 @@ function main() {
         // 붙여넣은 요소 수 확인
         var pastedItems = baseDoc.selection;
         var pastedGroup = null;
+        // Phase 2 개별 정렬에 사용할 effective linearScale (스케일 적용 후 값)
+        var linearScaleApplied = 1.0;
         if (pastedItems && pastedItems.length > 0) {
             $.writeln("[grading.jsx] 붙여넣은 요소 수: " + pastedItems.length);
 
@@ -962,15 +1186,102 @@ function main() {
                     var scalePct = linearScale * 100;
                     pastedGroup.resize(scalePct, scalePct, true, true, true, true);
                     $.writeln("[grading.jsx] 요소 스케일 적용: " + scalePct.toFixed(1) + "%");
+                    linearScaleApplied = linearScale;
                 } else {
                     $.writeln("[grading.jsx] 스케일 차이 0.5% 미만 — 원본 크기 유지");
+                    linearScaleApplied = 1.0;
                 }
             } else {
                 $.writeln("[grading.jsx] 면적 계산 불가(기준/타겟 중 하나 0) — 원본 크기 유지");
             }
 
-            // ===== STEP 10 (8번 작업): 몸판 중앙 정렬 =====
-            alignToBodyCenter(pastedGroup, layerFill);
+            // ===== STEP 10 (Phase 2): 조각별 개별 정렬 =====
+            // 왜 바뀌는가:
+            //   - 기존 alignToBodyCenter는 요소 전체 그룹을 한 번에 몸판 중앙으로 이동.
+            //   - 결과: 앞판/뒷판/소매 위에 각각 놓여야 할 요소들이 공중에 한 덩어리로 모임.
+            //   - 방식 B: 각 요소를 사전 매핑된 조각 중심으로 이동하되,
+            //             원본 designPiece 기준 상대 오프셋을 linearScale로 보존.
+            //
+            // 안전장치 3가지:
+            //   (S1) designPieces/basePieces 수 불일치 → 전체 중심 폴백 + 경고
+            //   (S2) paste된 요소 수 != 사전 기록한 elementCountAtCopy → 폴백 + 경고
+            //   (S3) elementPieceIndex[i]가 -1 또는 basePieces 범위 밖 → 해당 요소만 스킵
+            var useFallback = false;
+            var fallbackReason = "";
+
+            // (S1) 조각 수 불일치
+            if (!isAiFile) {
+                useFallback = true;
+                fallbackReason = "PDF 폴백 모드: 조각 매핑 미지원";
+            } else if (designPieces.length === 0 || basePieces.length === 0) {
+                useFallback = true;
+                fallbackReason = "designPieces(" + designPieces.length + ") 또는 basePieces(" + basePieces.length + ") 비어있음";
+            } else if (designPieces.length !== basePieces.length) {
+                useFallback = true;
+                fallbackReason = "조각 수 불일치: designPieces=" + designPieces.length + ", basePieces=" + basePieces.length;
+            }
+
+            // 그룹을 해제해 개별 요소에 접근 가능하도록 준비 (폴백이 아닐 때만)
+            // 주의: pastedGroup.pageItems는 그룹 내부 아이템이지만, 그룹 해제 후 layerDesign에
+            //       직접 속하도록 옮겨야 개별 translate가 편하다.
+            if (!useFallback) {
+                // (S2) paste 수 불일치 검증
+                var pastedChildren = pastedGroup.pageItems.length;
+                if (pastedChildren !== elementCountAtCopy) {
+                    useFallback = true;
+                    fallbackReason = "paste 수 불일치: paste 자식=" + pastedChildren + ", copy 당시=" + elementCountAtCopy;
+                }
+            }
+
+            if (useFallback) {
+                // 폴백: 기존 alignToBodyCenter(전체 중심 이동) 사용
+                $.writeln("[grading.jsx] [Phase 2] 폴백 사용 — 전체 중심 이동 (" + fallbackReason + ")");
+                alignToBodyCenter(pastedGroup, layerFill);
+            } else {
+                // 정상 경로: 그룹 해제 → 각 요소 개별 translate
+                // ① pastedGroup의 자식을 layerDesign으로 역순 move (배열 밀림 방지)
+                //    move 후 pastedGroup이 비면 제거 가능.
+                var individualItems = [];
+                while (pastedGroup.pageItems.length > 0) {
+                    // 항상 첫 번째 자식을 layerDesign의 PLACEATEND로 이동
+                    var child = pastedGroup.pageItems[0];
+                    child.move(layerDesign, ElementPlacement.PLACEATEND);
+                    individualItems.push(child);
+                }
+                // 빈 그룹 제거
+                try { pastedGroup.remove(); } catch (eRg) { /* 무시 */ }
+                pastedGroup = null;
+
+                $.writeln("[grading.jsx] [Phase 2] 그룹 해제 완료: " + individualItems.length + "개 개별 요소");
+
+                // ② individualItems[i]는 paste 순서대로 보장된다고 가정
+                //    → elementPieceIndex[i], elementOriginalCenters[i]와 1:1 매칭
+                var placedCount = 0;
+                var skippedCount = 0;
+                for (var idx = 0; idx < individualItems.length; idx++) {
+                    var pieceIdx = elementPieceIndex[idx];
+                    // (S3) 인덱스 범위 체크
+                    if (pieceIdx < 0 || pieceIdx >= basePieces.length) {
+                        skippedCount++;
+                        continue;
+                    }
+                    var origCenter = elementOriginalCenters[idx];
+                    if (!origCenter) {
+                        skippedCount++;
+                        continue;
+                    }
+                    alignElementToPiece(
+                        individualItems[idx],
+                        origCenter,
+                        designPieces[pieceIdx],
+                        basePieces[pieceIdx],
+                        linearScaleApplied
+                    );
+                    placedCount++;
+                }
+                $.writeln("[grading.jsx] [Phase 2] 개별 정렬 완료: 배치=" + placedCount
+                    + ", 스킵=" + skippedCount + " / 총 " + individualItems.length);
+            }
         } else {
             $.writeln("[grading.jsx] 경고: 붙여넣은 요소가 없음 — 디자인 파일 확인 필요");
         }
@@ -1006,28 +1317,28 @@ function main() {
 
         // ===== STEP 11-B (10번 작업): 레이어 z-order 통합 =====
         // Illustrator stacking 규칙: 컨테이너 배열 앞(index 0) = 위, 끝(PLACEATEND) = 아래.
-        // 의도한 z-order: 디자인 요소(위) > 배경 fill(중간) > 패턴선(아래).
+        // 의도한 z-order: 패턴선(위) > 디자인 요소(중간) > 배경 fill(아래).
         // 따라서 "위에 놓일 것부터" PLACEATEND로 먼저 이동해야 뒤에 옮긴 것이 아래로 쌓인다.
         var finalLayer = baseDoc.layers.add();
         finalLayer.name = "그레이딩 출력";
 
-        // 1) 디자인 요소를 먼저 이동 → finalLayer 최상단에 자리잡음
+        // 1) 패턴선을 먼저 이동 → finalLayer 최상단에 자리잡음
+        while (layerPattern.pageItems.length > 0) {
+            layerPattern.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
+        }
+        // 2) 디자인 요소는 그 아래로 쌓임 (중간)
         while (layerDesign.pageItems.length > 0) {
             layerDesign.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
         }
-        // 2) 배경 fill은 그 아래로 쌓임
+        // 3) 배경 fill은 최하단
         while (layerFill.pageItems.length > 0) {
             layerFill.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
-        }
-        // 3) 패턴선은 최하단
-        while (layerPattern.pageItems.length > 0) {
-            layerPattern.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
         }
         try { layerFill.remove(); } catch (e1) {}
         try { layerDesign.remove(); } catch (e2) {}
         try { layerPattern.remove(); } catch (e3) {}
 
-        $.writeln("[grading.jsx] 레이어 통합 완료: 디자인(위) > 배경fill > 패턴선(아래)");
+        $.writeln("[grading.jsx] 레이어 통합 완료: 패턴선(위) > 디자인(중간) > 배경fill(아래)");
 
         // ===== STEP 11-C: 파일 저장 (EPS 또는 PDF) =====
         var outputFile = new File(config.outputPath);
