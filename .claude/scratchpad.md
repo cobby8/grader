@@ -897,4 +897,4 @@ reviewer 참고:
 | 2026-04-08 | developer | SVG 패턴 클리핑 마스크+bleed 적용 + 좌표계 버그 수정 + 조각별 채워넣기 | 완료 |
 | 2026-04-08 | developer | SVG 아트보드 자동 보정 (normalize_artboard: viewBox 확장 1580x2000mm) | 완료 |
 | 2026-04-08 | developer | 데이터 보호 안전장치 (3 store 로드/저장 빈배열 차단 + 백업) | 완료 |
-| 2026-04-08 | developer | 패턴 카테고리 트리 분류 시스템 (CategoryTree+categoryStore+2컬럼 레이아웃) | 완료 |
+| 2026-04-08 | developer | grading.jsx 3가지 수정 (요소 몸판 중앙 정렬 + 레이어 통합 + CMYK 강제 변환) | 완료 |

@@ -797,11 +797,76 @@ function main() {
                         $.writeln("[grading.jsx] 요소 스케일 적용: " + scalePct.toFixed(1) + "%");
                     }
                 } else {
+                    // 스케일 불필요해도 중앙 정렬을 위해 그룹화는 필요
+                    app.executeMenuCommand("group");
+                    var pastedGroup = patternDoc.selection[0];
                     $.writeln("[grading.jsx] 스케일 차이 0.5% 미만 — 원본 크기 유지");
+                }
+
+                // ===== 요소 그룹을 패턴 몸판 중앙으로 이동 =====
+                // 왜 중앙 정렬이 필요한가:
+                //   - AI에서 복사한 요소는 원본 좌표 그대로 붙여넣기됨
+                //   - 타겟 패턴 몸판의 위치/크기가 다르므로 중앙에 맞춰야 자연스럽다
+                var pastedGroup = patternDoc.selection[0];
+                if (pastedGroup) {
+                    // fill 레이어의 전체 bounding box를 계산하여 몸판 중앙을 구한다
+                    var fillItems = layerFill.pageItems;
+                    var minX = Infinity;
+                    var minY = Infinity;  // Illustrator Y축: 위가 큰 값, 아래가 작은 값
+                    var maxX = -Infinity;
+                    var maxY = -Infinity;
+                    for (var fi = 0; fi < fillItems.length; fi++) {
+                        var fb = fillItems[fi].geometricBounds; // [left, top, right, bottom]
+                        if (fb[0] < minX) minX = fb[0];        // 가장 왼쪽
+                        if (fb[1] > maxY) maxY = fb[1];         // 가장 위 (큰 값)
+                        if (fb[2] > maxX) maxX = fb[2];         // 가장 오른쪽
+                        if (fb[3] < minY) minY = fb[3];         // 가장 아래 (작은 값)
+                    }
+                    var patternCenterX = (minX + maxX) / 2;
+                    var patternCenterY = (minY + maxY) / 2;
+
+                    // 요소 그룹의 현재 중앙 좌표
+                    var gb = pastedGroup.geometricBounds; // [left, top, right, bottom]
+                    var groupCenterX = (gb[0] + gb[2]) / 2;
+                    var groupCenterY = (gb[1] + gb[3]) / 2;
+
+                    // 오프셋만큼 이동하여 몸판 중앙에 맞춘다
+                    var offsetX = patternCenterX - groupCenterX;
+                    var offsetY = patternCenterY - groupCenterY;
+                    pastedGroup.translate(offsetX, offsetY);
+
+                    $.writeln("[grading.jsx] 요소 중앙 정렬: 몸판중앙(" + patternCenterX.toFixed(1) + ", " + patternCenterY.toFixed(1)
+                        + ") 이동량(" + offsetX.toFixed(1) + ", " + offsetY.toFixed(1) + ")");
                 }
             } else {
                 // 면적 계산이 불가능한 경우 (PDF 폴백이거나 패턴선 레이어 없음)
-                $.writeln("[grading.jsx] 면적 계산 불가 — 요소 원본 크기 유지");
+                // 그래도 중앙 정렬은 시도한다
+                app.executeMenuCommand("group");
+                var pastedGroup = patternDoc.selection[0];
+                if (pastedGroup) {
+                    var fillItems = layerFill.pageItems;
+                    var minX = Infinity;
+                    var minY = Infinity;
+                    var maxX = -Infinity;
+                    var maxY = -Infinity;
+                    for (var fi = 0; fi < fillItems.length; fi++) {
+                        var fb = fillItems[fi].geometricBounds;
+                        if (fb[0] < minX) minX = fb[0];
+                        if (fb[1] > maxY) maxY = fb[1];
+                        if (fb[2] > maxX) maxX = fb[2];
+                        if (fb[3] < minY) minY = fb[3];
+                    }
+                    var patternCenterX = (minX + maxX) / 2;
+                    var patternCenterY = (minY + maxY) / 2;
+                    var gb = pastedGroup.geometricBounds;
+                    var groupCenterX = (gb[0] + gb[2]) / 2;
+                    var groupCenterY = (gb[1] + gb[3]) / 2;
+                    var offsetX = patternCenterX - groupCenterX;
+                    var offsetY = patternCenterY - groupCenterY;
+                    pastedGroup.translate(offsetX, offsetY);
+                    $.writeln("[grading.jsx] 요소 중앙 정렬 (면적계산 불가): 이동량(" + offsetX.toFixed(1) + ", " + offsetY.toFixed(1) + ")");
+                }
+                $.writeln("[grading.jsx] 면적 계산 불가 — 요소 원본 크기 유지, 중앙 정렬만 적용");
             }
         } else {
             $.writeln("[grading.jsx] 경고: 붙여넣은 요소가 없음 — 디자인 파일 확인 필요");
@@ -810,7 +875,40 @@ function main() {
         // 선택 해제
         patternDoc.selection = null;
 
-        // ===== STEP 9: 파일 저장 (EPS 또는 PDF, config.outputFormat으로 판별) =====
+        // ===== STEP 9A: CMYK 색상 강제 변환 =====
+        // 왜 필요한가:
+        //   - SVG 파일 자체가 RGB 색상 공간으로 정의되어 있으면
+        //   - DocumentColorSpace.CMYK로 열어도 내부 색상이 RGB로 남을 수 있다
+        //   - 저장 전에 문서 전체를 CMYK로 강제 변환하여 인쇄 색상을 보장한다
+        if (patternDoc.documentColorSpace !== DocumentColorSpace.CMYK) {
+            // 문서 색상 모드가 CMYK가 아니면 메뉴 커맨드로 변환
+            app.executeMenuCommand("doc-color-cmyk");
+            $.writeln("[grading.jsx] 문서 색상 모드를 CMYK로 변환함");
+        } else {
+            $.writeln("[grading.jsx] 문서 색상 모드 이미 CMYK");
+        }
+        // 추가 안전장치: Edit > Edit Colors > Convert to CMYK
+        // SVG에서 온 RGB 개별 오브젝트들도 CMYK로 변환
+        app.executeMenuCommand("doc-color-cmyk");
+        $.writeln("[grading.jsx] CMYK 강제 변환 완료");
+
+        // ===== STEP 9B: 레이어 통합 (저장 전 모든 아이템을 하나의 레이어로) =====
+        // 왜 통합하나:
+        //   - 출력 파일에 불필요한 레이어 구분이 남으면 인쇄 업체에서 혼란 발생
+        //   - 하나의 레이어로 합치면 깔끔한 출력물이 된다
+        var finalLayer = patternDoc.layers[0]; // 최상위 레이어를 기준으로 사용
+        finalLayer.name = "그레이딩 출력";
+        // 나머지 레이어의 모든 아이템을 최상위 레이어로 이동
+        for (var li = patternDoc.layers.length - 1; li >= 1; li--) {
+            var mergeLayer = patternDoc.layers[li];
+            while (mergeLayer.pageItems.length > 0) {
+                mergeLayer.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
+            }
+            mergeLayer.remove();
+        }
+        $.writeln("[grading.jsx] 레이어 통합 완료: '" + finalLayer.name + "' 단일 레이어");
+
+        // ===== STEP 9C: 파일 저장 (EPS 또는 PDF, config.outputFormat으로 판별) =====
         var outputFile = new File(config.outputPath);
         if (config.outputFormat === "eps") {
             // EPS 저장 — 승화전사 업체에서 EPS를 요구하는 경우
