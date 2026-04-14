@@ -841,6 +841,41 @@ reviewer 참고:
 - 위치 보정: 디자인 아트보드 원점 기준 오프셋을 패턴 아트보드 원점 기준으로 변환
 - EPS PostScript Level 2 사용 (Level 3보다 호환성 우선)
 
+### [2026-04-08] grading.jsx 면적 비율 기반 요소 스케일링
+
+구현한 기능: 디자인 AI "패턴선" 레이어와 타겟 SVG 패턴의 면적 비율을 비교하여 요소를 자동 스케일링
+
+핵심 변경점:
+1. calcLayerArea(layer) 유틸 함수 추가 -- 특정 레이어의 50pt 이상 pathItem 면적 합산
+2. calcTotalArea(doc) 유틸 함수 추가 -- 문서 전체 레이어의 면적 합산
+3. STEP 2A: "패턴선" 레이어에서 기준 면적(baseArea) 추출 (AI 파일일 때만)
+4. STEP 7: fill 루프에서 targetArea 합산 추가 (패턴 조각 면적)
+5. STEP 8: 면적 비율의 제곱근 = 선형 스케일로 요소 그룹 resize (0.5% 이상 차이일 때만)
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| illustrator-scripts/grading.jsx | calcLayerArea + calcTotalArea 유틸 추가, STEP 2A 기준 면적 추출, STEP 7 targetArea 합산, STEP 8 면적 비율 스케일링 | 수정 |
+
+tester 참고:
+- ES3 호환성: let/const 0건, arrow function 0건, template literal 0건 확인 완료
+- 테스트 방법: Illustrator에서 grading.jsx 실행 -> 콘솔(ExtendScript Toolkit)에서 로그 확인
+- 정상 동작 로그 예시:
+  - "기준 패턴 면적: 123456 pt2 (5개 조각)"
+  - "타겟 패턴 면적: 100000 pt2 (5개 조각)"
+  - "면적 비율: 0.8100 (기준:123456 -> 타겟:100000)"
+  - "선형 스케일: 0.9000 (90.0%)"
+  - "요소 스케일 적용: 90.0%"
+- 스케일 차이 0.5% 미만이면 "원본 크기 유지" (스킵)
+- PDF 폴백(AI 아닌 경우): "면적 계산 불가" -> 기존 uniformScale 방식 유지
+- AI 파일에 "패턴선" 레이어 없으면: "면적 계산 실패" -> 원본 크기 유지
+- 기존 uniformScale(아트보드 비율) 스케일링 코드는 이 면적 스케일링으로 교체됨
+
+reviewer 참고:
+- path.area는 반시계방향 경로에서 음수를 반환하므로 Math.abs() 필수
+- resize()의 인자는 퍼센트(89.4% -> 89.4 전달), 6개 boolean은 변환점선/패턴/획폭/효과도 함께 스케일
+- 면적 비율의 제곱근이 선형 스케일인 이유: 면적은 길이의 제곱에 비례 (A = L^2)
+- 열린 경로를 닫는 것은 면적 계산을 위한 것이며, fill은 이미 STEP 7에서 별도 처리
+
 ## 리뷰 결과 (reviewer)
 (아직 없음 — 소규모 수정 시 tester만 실행 규칙에 따라 생략 중)
 
@@ -853,6 +888,7 @@ reviewer 참고:
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
+| 2026-04-08 | developer | grading.jsx 면적 비율 기반 요소 스케일링 (calcLayerArea+calcTotalArea+baseArea/targetArea+linearScale resize) | 완료 |
 | 2026-04-08 | developer | grading.jsx 요소 위치/크기 보정 + EPS 출력 지원 (uniformScale + createEpsSaveOptions) | 완료 |
 | 2026-04-08 | developer | grading.jsx AI 레이어 기반 전면 재작성 (몸판 색상 추출 + 요소 레이어만 복사 + PDF 폴백) | 완료 |
 | 2026-04-08 | developer | (A) CMYK 보존 코드 검증 통과 + (B) grading.jsx 디자인 요소 자동 배치 (레이어 3개 z-order + 복사/붙여넣기) | 완료 |
@@ -862,4 +898,3 @@ reviewer 참고:
 | 2026-04-08 | developer | SVG 아트보드 자동 보정 (normalize_artboard: viewBox 확장 1580x2000mm) | 완료 |
 | 2026-04-08 | developer | 데이터 보호 안전장치 (3 store 로드/저장 빈배열 차단 + 백업) | 완료 |
 | 2026-04-08 | developer | 패턴 카테고리 트리 분류 시스템 (CategoryTree+categoryStore+2컬럼 레이아웃) | 완료 |
-| 2026-04-08 | developer | 패턴 다중 업로드+드래그앤드롭+폴더+사이즈 자동 추출 | 완료 |

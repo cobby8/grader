@@ -474,6 +474,61 @@ function resolveDesignFile(config) {
     throw new Error("config에 유효한 디자인 파일 경로가 없습니다.");
 }
 
+// ===== 면적 계산 유틸 =====
+
+/**
+ * 특정 레이어의 pathItem 면적을 합산한다.
+ * 왜 면적을 계산하나:
+ *   - 디자인 AI의 "패턴선" 레이어 면적(기준)과 타겟 SVG 패턴 면적을 비교하여
+ *     요소를 적절한 비율로 스케일링하기 위해서다.
+ * 50pt 미만 조각은 너치/가이드이므로 제외한다.
+ * path.area는 닫힌 경로에서만 유효하므로, 열린 경로는 닫고 계산한다.
+ * @param {Layer} layer - 대상 레이어
+ * @returns {{ totalArea: number, pieceCount: number }}
+ */
+function calcLayerArea(layer) {
+    var totalArea = 0;
+    var count = 0;
+    for (var i = 0; i < layer.pathItems.length; i++) {
+        var path = layer.pathItems[i];
+        // 가로/세로 모두 50pt 이상인 조각만 면적 계산 (너치/가이드 제외)
+        if (Math.abs(path.width) > 50 && Math.abs(path.height) > 50) {
+            // 열린 경로는 면적 계산을 위해 닫는다
+            if (!path.closed) {
+                path.closed = true;
+            }
+            // path.area는 반시계방향이면 음수이므로 절대값 사용
+            totalArea += Math.abs(path.area);
+            count++;
+        }
+    }
+    return { totalArea: totalArea, pieceCount: count };
+}
+
+/**
+ * 문서의 모든 레이어에서 큰 pathItem(50pt 이상)의 면적을 합산한다.
+ * @param {Document} doc - 대상 문서
+ * @returns {{ totalArea: number, pieceCount: number }}
+ */
+function calcTotalArea(doc) {
+    var totalArea = 0;
+    var count = 0;
+    for (var li = 0; li < doc.layers.length; li++) {
+        var layer = doc.layers[li];
+        for (var pi = 0; pi < layer.pathItems.length; pi++) {
+            var path = layer.pathItems[pi];
+            if (Math.abs(path.width) > 50 && Math.abs(path.height) > 50) {
+                if (!path.closed) {
+                    path.closed = true;
+                }
+                totalArea += Math.abs(path.area);
+                count++;
+            }
+        }
+    }
+    return { totalArea: totalArea, pieceCount: count };
+}
+
 // ===== 메인 로직 =====
 
 /**
@@ -516,6 +571,25 @@ function main() {
         var designAbHeight = designAb[1] - designAb[3];  // 아트보드 세로 (pt)
         $.writeln("[grading.jsx] 디자인 아트보드: " + designAbWidth.toFixed(1) + " x " + designAbHeight.toFixed(1) + " pt"
             + " (left=" + designAbLeft.toFixed(1) + ", top=" + designAbTop.toFixed(1) + ")");
+
+        // ===== STEP 2A: "패턴선" 레이어에서 기준 패턴 면적 추출 =====
+        // 왜 기준 면적이 필요한가:
+        //   - AI 디자인 파일의 "패턴선" 레이어는 디자이너가 작업한 원본 패턴 크기를 나타낸다.
+        //   - 타겟 SVG 패턴과 면적 비율을 계산해서 요소를 적절히 축소/확대한다.
+        //   - 예: 기준 면적 10000, 타겟 면적 8100 → 비율 0.81 → 선형 스케일 0.9 (90%)
+        var baseArea = 0;
+        var basePieceCount = 0;
+        if (isAiFile) {
+            try {
+                var patternLineLayer = designDoc.layers.getByName("패턴선");
+                var baseResult = calcLayerArea(patternLineLayer);
+                baseArea = baseResult.totalArea;
+                basePieceCount = baseResult.pieceCount;
+                $.writeln("[grading.jsx] 기준 패턴 면적: " + baseArea.toFixed(0) + " pt² (" + basePieceCount + "개 조각)");
+            } catch (e) {
+                $.writeln("[grading.jsx] 경고: '패턴선' 레이어 면적 계산 실패: " + e.message);
+            }
+        }
 
         // ===== STEP 3: 메인 색상 추출 =====
         var mainColor = null;
@@ -625,6 +699,8 @@ function main() {
         // 큰 경로 = 패턴 조각, 작은 경로 = 너치/가이드
         var filledCount = 0;
         var pathCount = defaultLayer.pathItems.length;
+        // 타겟 패턴 면적 합산용 — STEP 8에서 면적 비율 스케일링에 사용
+        var targetArea = 0;
 
         // 뒤에서부터 처리 (이동하면 인덱스 변함)
         for (var pi = pathCount - 1; pi >= 0; pi--) {
@@ -636,6 +712,9 @@ function main() {
                 if (!path.closed) {
                     path.closed = true;
                 }
+
+                // 타겟 패턴 면적 합산 (기준 면적 대비 비율 계산에 사용)
+                targetArea += Math.abs(path.area);
 
                 // 복제 → fill 적용 → 배경 레이어로 이동
                 var fillCopy = path.duplicate();
@@ -661,6 +740,7 @@ function main() {
         }
 
         $.writeln("[grading.jsx] 패턴 " + filledCount + "개 조각에 색상 채움");
+        $.writeln("[grading.jsx] 타겟 패턴 면적: " + targetArea.toFixed(0) + " pt² (" + filledCount + "개 조각)");
 
         if (filledCount === 0) {
             $.writeln("[grading.jsx] 경고: 50pt 이상 조각이 없음 — 패턴 SVG를 확인하세요");
@@ -688,10 +768,41 @@ function main() {
         if (pastedItems && pastedItems.length > 0) {
             $.writeln("[grading.jsx] 붙여넣은 요소 수: " + pastedItems.length);
 
-            // 요소는 원본 크기 그대로 배치 (스케일링 없음)
-            // 아트보드 크기가 다르면 위치가 약간 어긋날 수 있으나,
-            // 디자이너가 AI 아트보드를 패턴과 맞추면 해결됨
-            $.writeln("[grading.jsx] 요소 원본 크기 그대로 배치 (스케일링 없음)");
+            // ===== 면적 비율 기반 요소 스케일링 =====
+            // 왜 면적 비율인가:
+            //   - 패턴 사이즈가 달라지면 디자인 요소(로고, 스트라이프 등)도 비례 축소/확대해야 자연스럽다.
+            //   - 면적 비율의 제곱근이 선형 스케일 (면적은 길이²에 비례하므로)
+            //   - 예: 면적 비율 0.81 → sqrt(0.81) = 0.9 → 가로세로 각각 90%로 축소
+            if (baseArea > 0 && targetArea > 0) {
+                var areaRatio = targetArea / baseArea;
+                // 면적 비율의 제곱근 = 선형 스케일 (가로/세로 동일 비율)
+                var linearScale = Math.sqrt(areaRatio);
+
+                $.writeln("[grading.jsx] 면적 비율: " + areaRatio.toFixed(4)
+                    + " (기준:" + baseArea.toFixed(0) + " → 타겟:" + targetArea.toFixed(0) + ")");
+                $.writeln("[grading.jsx] 선형 스케일: " + linearScale.toFixed(4)
+                    + " (" + (linearScale * 100).toFixed(1) + "%)");
+
+                // 스케일 차이가 0.5% 이상일 때만 적용 (거의 같으면 스킵)
+                if (Math.abs(linearScale - 1.0) > 0.005) {
+                    // 붙여넣은 요소를 그룹화하여 한 번에 스케일링
+                    app.executeMenuCommand("group");
+                    var pastedGroup = patternDoc.selection[0];
+
+                    if (pastedGroup) {
+                        // resize()는 퍼센트 단위 (0.9 → 90 전달)
+                        var scalePct = linearScale * 100;
+                        // 인자: scaleX%, scaleY%, 변환점선/패턴/획폭/효과도 스케일
+                        pastedGroup.resize(scalePct, scalePct, true, true, true, true);
+                        $.writeln("[grading.jsx] 요소 스케일 적용: " + scalePct.toFixed(1) + "%");
+                    }
+                } else {
+                    $.writeln("[grading.jsx] 스케일 차이 0.5% 미만 — 원본 크기 유지");
+                }
+            } else {
+                // 면적 계산이 불가능한 경우 (PDF 폴백이거나 패턴선 레이어 없음)
+                $.writeln("[grading.jsx] 면적 계산 불가 — 요소 원본 크기 유지");
+            }
         } else {
             $.writeln("[grading.jsx] 경고: 붙여넣은 요소가 없음 — 디자인 파일 확인 필요");
         }
