@@ -1,7 +1,7 @@
 {
   "designAiPath": "C:/0. Programing/grader/illustrator-scripts/test/design_XL.ai",
   "designPdfPath": "C:/Users/user/AppData/Roaming/com.grader.app/designs/design-mnxa0pqs-kv7rdo.pdf",
-  "patternSvgPath": "C:/0. Programing/grader/illustrator-scripts/test/pattern_XS.svg",
+  "patternSvgPath": "C:/0. Programing/grader/illustrator-scripts/test/pattern_XS_original.svg",
   "outputPath": "C:/0. Programing/grader/illustrator-scripts/test/output_XS_ai.eps",
   "baseSize": "XL",
   "targetSize": "XS",

@@ -688,48 +688,10 @@ function main() {
         if (pastedItems && pastedItems.length > 0) {
             $.writeln("[grading.jsx] 붙여넣은 요소 수: " + pastedItems.length);
 
-            // ===== 요소 스케일링 + 위치 보정 =====
-            // 왜 필요한가:
-            //   - 디자인 AI 아트보드 (예: 1580x2000mm)와 패턴 SVG 아트보드 (예: 1530x1200mm)의
-            //     크기가 다르므로 복사/붙여넣기한 요소의 좌표가 어긋난다.
-            //   - 균일 스케일(uniformScale)을 사용하여 요소가 찌그러지지 않게 축소한다.
-            //   - 가로/세로 중 작은 비율을 사용하면 요소가 아트보드 안에 들어간다.
-            var scaleX = docWidth / designAbWidth;     // 패턴 가로 / 디자인 가로
-            var scaleY = docHeight / designAbHeight;   // 패턴 세로 / 디자인 세로
-            // 균일 스케일: 가로세로 중 작은 비율 사용 (찌그러짐 방지)
-            var uniformScale = Math.min(scaleX, scaleY);
-
-            $.writeln("[grading.jsx] 스케일 비율 — X: " + scaleX.toFixed(4)
-                + ", Y: " + scaleY.toFixed(4)
-                + ", uniform: " + uniformScale.toFixed(4));
-
-            // 스케일이 1.0과 충분히 다를 때만 보정 (0.5% 이상 차이)
-            if (Math.abs(uniformScale - 1.0) > 0.005) {
-                // 방법: 붙여넣은 요소를 그룹화 → 그룹 단위로 리사이즈 + 위치 보정
-                // 왜 그룹화하나: 개별 아이템을 각각 변환하면 상대 위치가 틀어질 수 있다.
-                //               그룹으로 묶으면 내부 요소의 상대 관계가 유지된다.
-                app.executeMenuCommand("group");
-                var pastedGroup = patternDoc.selection[0];
-
-                if (pastedGroup) {
-                    // 리사이즈 (퍼센트 단위, 100 = 원본 크기)
-                    var scalePct = uniformScale * 100;
-                    // 6개 파라미터: scaleX%, scaleY%, 선/효과/패턴/글씨도 함께 변환
-                    pastedGroup.resize(scalePct, scalePct, true, true, true, true);
-
-                    // 위치 보정: 디자인 아트보드 원점 → 패턴 아트보드 원점 기준으로 재계산
-                    // Illustrator 좌표계: 좌상단이 원점, Y는 아래로 감소
-                    var curPos = pastedGroup.position;  // [x, y]
-                    var newX = abRect[0] + (curPos[0] - designAbLeft) * uniformScale;
-                    var newY = abRect[1] + (curPos[1] - designAbTop) * uniformScale;
-                    pastedGroup.position = [newX, newY];
-
-                    $.writeln("[grading.jsx] 요소 스케일 적용: " + scalePct.toFixed(1) + "%"
-                        + ", 위치: [" + newX.toFixed(1) + ", " + newY.toFixed(1) + "]");
-                }
-            } else {
-                $.writeln("[grading.jsx] 아트보드 크기 차이 미미 — 스케일 보정 생략");
-            }
+            // 요소는 원본 크기 그대로 배치 (스케일링 없음)
+            // 아트보드 크기가 다르면 위치가 약간 어긋날 수 있으나,
+            // 디자이너가 AI 아트보드를 패턴과 맞추면 해결됨
+            $.writeln("[grading.jsx] 요소 원본 크기 그대로 배치 (스케일링 없음)");
         } else {
             $.writeln("[grading.jsx] 경고: 붙여넣은 요소가 없음 — 디자인 파일 확인 필요");
         }
