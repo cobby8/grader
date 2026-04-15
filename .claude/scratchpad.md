@@ -287,3 +287,4 @@ G:\내 드라이브\grader-patterns\  ← 루트 (앱에서 경로 설정)
 | 2026-04-15 | planner-architect | 패턴 데이터 공유/중앙화 7방식 비교 (A3 OneDrive 단계적 권장, A6 서버구축 14일 견적) | 완료 |
 | 2026-04-15 | planner-architect | Google Drive 폴더 연동 타당성 (A1 Drive for Desktop 단방향 MVP 3~4일 권장, 5항 확인 필요) | 완료 |
 | 2026-04-15 | planner-architect | Google Drive 연동 구체 구현 PLAN 작성 (PLAN-GDRIVE-SYNC.md, 13섹션, Phase 0 대기) | 완료 |
+| 2026-04-15 | planner-architect | PLAN-GDRIVE-SYNC.md 미세 조정 (J-2/J-3/J-4 반영: 파싱 단순화, 3레벨, 신규 루트경로, J-8 신설, 474→472줄) | 완료 |
