@@ -2,6 +2,12 @@
 <!-- 담당: debugger, tester | 최대 30항목 -->
 <!-- 이 프로젝트에서 반복되는 에러 패턴, 함정, 주의사항을 기록 -->
 
+### [2026-04-16] ExtendScript clipboard(copy/paste) + svgDoc.close() 간헐 무효화
+- **분류**: error
+- **발견자**: debugger → developer (버그 B 수정)
+- **내용**: grading.jsx STEP 4에서 `app.executeMenuCommand("copy")`로 요소를 clipboard에 담은 뒤, STEP 5~7에서 svgDoc 열고 baseDoc 생성하고 svgDoc.close()하면 AICB 번역기가 간헐적으로 무효화되어 STEP 8의 `paste`가 **paste=0** 결과(요소 0개 붙여짐)를 낸다. 특히 Illustrator는 **단일 인스턴스** 앱이라 이전 실행의 clipboard 상태가 다음 실행과 공유되어 재현성도 간헐적. **해결**: clipboard 경로를 아예 제거하고 `PageItem.duplicate(targetContainer, ElementPlacement.PLACEATEND)`로 문서 간 직접 복제. STEP 7의 `path.duplicate(layerFill)` 패턴과 동일하며 clipboard를 건드리지 않는다. 단 duplicate는 원본 PageItem이 **살아있을 때만** 유효하므로 source document를 duplicate 루프 완료 직후 close해야 한다.
+- **참조횟수**: 0
+
 ### [2026-04-16] Illustrator 문서 간 geometricBounds 직접 비교 금지 (ruler origin 차이)
 - **분류**: error
 - **발견자**: planner-architect (PLAN-GRADING-RECOVERY 감사 중)

@@ -1292,11 +1292,15 @@ function main() {
             $.writeln("[grading.jsx] 메인 색상 타입: " + (mainColor ? mainColor.typename : "(null)"));
         }
 
-        // ===== STEP 4: "요소" 레이어 아이템을 클립보드에 적재 =====
-        // 왜 clipboard를 쓰나:
-        //   - 아직 베이스 문서가 존재하지 않아서 duplicate(targetDoc) 대상이 없다.
-        //   - 그래서 designDoc에서 먼저 clipboard로 담아두고,
-        //     나중에 CMYK 베이스 문서에 paste한다.
+        // ===== STEP 4: "요소" 레이어 아이템 레퍼런스 수집 (duplicate 모드) =====
+        // 버그 B 수정 (2026-04-16): clipboard copy 대신 elemItems 배열로 레퍼런스만 보관한다.
+        // 이유:
+        //   - 기존 app.copy() 호출은 이후 svgDoc.close() 시점에 AICB clipboard 번역기가
+        //     간헐적으로 무효화되어 paste=0(2XS/4XL 재현) 버그를 유발했다.
+        //   - Illustrator는 단일 인스턴스 앱이라 이전 실행의 clipboard/문서 상태가 공유된다.
+        //   - STEP 7의 path.duplicate(layerFill) 패턴과 동일하게 문서 간 직접 복제로 전환하면
+        //     clipboard 의존 자체를 제거할 수 있다 (실전 검증 완료).
+        //   - designDoc은 STEP 8의 duplicate 완료 직후까지 살려둬야 원본 참조가 유효하다.
         //   - paste 시점에 붙여넣어진 아이템의 잔존 RGB는 STEP 9 안전망에서 순회 변환.
         //
         // ★ Phase 2 추가: 요소 copy 전에 아래 두 가지를 사전 수집한다.
@@ -1308,6 +1312,8 @@ function main() {
         var elementOriginalCenters = [];   // 각 요소의 스케일 전 원본 중심 {cx, cy}
         var elementPieceIndex = [];        // 각 요소가 매칭된 designPieces 인덱스
         var elementCountAtCopy = 0;        // paste 시점에 수 불일치 감지용
+        // 버그 B 수정: clipboard 대신 원본 PageItem 레퍼런스 배열 (STEP 8에서 duplicate 사용)
+        var elemItems = [];
         if (isAiFile) {
             var elemLayer;
             try {
@@ -1347,23 +1353,28 @@ function main() {
             elementCountAtCopy = elemLayer.pageItems.length;
             $.writeln("[grading.jsx] [Phase 2] 요소별 매핑 기록: " + elementPieceIndex.length + "개");
 
-            designDoc.selection = null;
+            // 버그 B 수정: clipboard copy 대신 elemItems 배열에 레퍼런스만 축적한다.
+            //   - for 루프 순서가 pageItems[0..N]과 동일 → elementPieceIndex 매핑 정확히 동일 유지
+            //   - app.copy() 호출 제거로 svgDoc.close() 간섭 경로 원천 차단
             for (var ei = 0; ei < elemLayer.pageItems.length; ei++) {
-                elemLayer.pageItems[ei].selected = true;
+                elemItems.push(elemLayer.pageItems[ei]);
             }
-            if (designDoc.selection && designDoc.selection.length > 0) {
-                app.executeMenuCommand("copy");
-                $.writeln("[grading.jsx] '요소' 레이어 " + designDoc.selection.length + "개 아이템 clipboard 적재");
+            if (elemItems.length > 0) {
+                writeLog("STEP 4 (duplicate 모드): 요소 " + elemItems.length + "개 레퍼런스 보관");
+                $.writeln("[grading.jsx] '요소' 레이어 " + elemItems.length + "개 아이템 레퍼런스 보관 (duplicate 모드)");
             } else {
-                $.writeln("[grading.jsx] 경고: '요소' 레이어에 선택 가능한 아이템이 없음");
+                writeLog("[WARN] STEP 4: 요소 레이어에 pageItems 없음 — 디자인 AI 구조 확인 필요");
+                $.writeln("[grading.jsx] 경고: '요소' 레이어에 아이템이 없음");
             }
         } else {
-            // PDF 폴백: 전체 아트보드 요소 — Phase 2 매핑 없음
+            // PDF 폴백: 전체 아트보드 요소 clipboard 적재 (AI 경로 버그 B와 별개, 기존 유지)
+            // 사용자 Q1=A(PDF 제거 예정)이므로 최소 변경 유지
             designDoc.selectObjectsOnActiveArtboard();
             app.executeMenuCommand("copy");
             $.writeln("[grading.jsx] 디자인 전체 요소 clipboard 적재 (PDF 폴백)");
         }
-        // 주의: designDoc은 STEP 6까지 살려둔다. clipboard가 유효하려면 원본 문서 존재가 안전하다.
+        // 주의: designDoc은 STEP 8의 duplicate 완료 직후까지 살려둔다.
+        //       elemItems 배열이 참조하는 PageItem이 유효하려면 원본 문서가 열려 있어야 하기 때문.
 
         // ===== STEP 5: 패턴 SVG 열기 → 아트보드 크기 측정 → CMYK 베이스 문서 생성 =====
         // 왜 순서가 이러한가:
@@ -1441,21 +1452,51 @@ function main() {
         // 활성 문서를 베이스로 재확인
         app.activeDocument = baseDoc;
 
-        // ===== STEP 8: clipboard → "디자인 요소" 레이어에 paste =====
-        // 왜 지금 paste하나:
+        // ===== STEP 8: 요소를 baseDoc의 "디자인 요소" 레이어로 duplicate =====
+        // 왜 duplicate 기반으로 바뀌었나 (버그 B 수정 2026-04-16):
+        //   - clipboard(copy/paste)는 Illustrator 앱 전역 상태라 svgDoc.close()와 간섭,
+        //     2XS/4XL에서 paste=0(요소 0개) 간헐 실패가 발생했다.
+        //   - PageItem.duplicate(targetContainer, PLACEATEND)는 clipboard 없이 문서 간 직접 복제.
+        //   - STEP 7의 path.duplicate(layerFill)와 동일 패턴이라 실전 검증 완료.
+        //
+        // 왜 지금 duplicate하나:
         //   - STEP 7에서 몸판(패턴 SVG)이 이미 베이스 문서에 배치돼 있다.
-        //   - 그 위에 요소를 paste하면 몸판 좌표계를 기준으로 정렬하기 쉽다.
+        //   - 그 위에 요소를 올려야 몸판 좌표계를 기준으로 정렬하기 쉽다.
         baseDoc.activeLayer = layerDesign;
-        app.executeMenuCommand("paste");
-        $.writeln("[grading.jsx] 디자인 요소를 '디자인 요소' 레이어에 붙여넣기 완료");
-        // [DEBUG LOG] paste 직후 베이스 문서 pageItems 수 — 요소가 실제로 들어왔는지 확인
+        var pastedItems = [];
+        // AI 경로: elemItems 배열을 순회하며 각 요소를 layerDesign에 직접 복제
+        if (isAiFile && elemItems.length > 0) {
+            for (var di = 0; di < elemItems.length; di++) {
+                // ElementPlacement.PLACEATEND: layerDesign의 맨 끝(뒤)에 추가 — 순서 보존
+                var dup = elemItems[di].duplicate(layerDesign, ElementPlacement.PLACEATEND);
+                pastedItems.push(dup);
+            }
+            writeLog("STEP 8 duplicate 완료: " + pastedItems.length + "개 복제됨");
+            $.writeln("[grading.jsx] 디자인 요소를 '디자인 요소' 레이어에 duplicate 완료 ("
+                + pastedItems.length + "개)");
+        } else if (!isAiFile) {
+            // PDF 폴백: 기존 clipboard paste 경로 유지 (AI 경로와 별개)
+            app.executeMenuCommand("paste");
+            $.writeln("[grading.jsx] PDF 폴백: 디자인 요소 paste 완료");
+            // selection이 paste 결과를 반환 — pastedItems 배열로 변환
+            if (baseDoc.selection && baseDoc.selection.length > 0) {
+                for (var pi = 0; pi < baseDoc.selection.length; pi++) {
+                    pastedItems.push(baseDoc.selection[pi]);
+                }
+            }
+        } else {
+            // AI 경로인데 elemItems가 비어있는 방어 케이스
+            writeLog("[WARN] STEP 8: elemItems 비어있음 — 요소 복제 스킵");
+            $.writeln("[grading.jsx] 경고: elemItems 비어있음 — 요소 복제 스킵");
+        }
+        // [DEBUG LOG] duplicate 직후 검증 — 요소가 실제로 들어왔는지 확인
         try {
             writeLog("STEP 8 paste 직후: baseDoc.pageItems=" + baseDoc.pageItems.length
-                + ", baseDoc.selection.length=" + (baseDoc.selection ? baseDoc.selection.length : 0)
+                + ", pastedItems.length=" + pastedItems.length
                 + ", layerDesign.pageItems=" + layerDesign.pageItems.length);
         } catch (ePasteLog) { /* 무시 */ }
 
-        // 이제 designDoc 닫아도 안전 (clipboard 사용 완료)
+        // 이제 designDoc 닫아도 안전 (duplicate 완료 — elemItems 레퍼런스 더 이상 불필요)
         if (designDoc) {
             try {
                 designDoc.close(SaveOptions.DONOTSAVECHANGES);
@@ -1466,8 +1507,11 @@ function main() {
             }
         }
 
-        // 붙여넣은 요소 수 확인
-        var pastedItems = baseDoc.selection;
+        // 이후 기존 group/scale/align 로직은 selection 기반이므로, pastedItems를 선택 상태로 만든다.
+        baseDoc.selection = null;
+        for (var psi = 0; psi < pastedItems.length; psi++) {
+            try { pastedItems[psi].selected = true; } catch (eSel) { /* 무시 */ }
+        }
         var pastedGroup = null;
         // Phase 2 개별 정렬에 사용할 effective linearScale (스케일 적용 후 값)
         var linearScaleApplied = 1.0;

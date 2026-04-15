@@ -2,6 +2,12 @@
 <!-- 담당: 전체 에이전트 | 최대 30항목 -->
 <!-- 삽질 경험, 다음에 피해야 할 것, 효과적이었던 접근법을 기록 -->
 
+### [2026-04-16] ExtendScript 문서 간 이동은 clipboard 대신 duplicate가 기본
+- **분류**: lesson
+- **발견자**: developer (버그 B 수정)
+- **내용**: Illustrator ExtendScript에서 source document의 아이템을 target document로 옮길 때 가장 직관적인 `copy/paste` 패턴은 Illustrator 앱 전역 상태(AICB clipboard)에 의존하기 때문에, 중간에 다른 문서를 열거나 닫으면 간헐적으로 clipboard가 무효화되는 위험이 있다. 특히 Illustrator는 **단일 인스턴스** 앱이라 이전 실행의 clipboard까지 섞이면서 재현도 불규칙하다. **대안**: `PageItem.duplicate(targetContainer, ElementPlacement.PLACEATEND)`는 clipboard를 거치지 않고 문서 간 직접 복제를 수행하며, 이미 grading.jsx STEP 7의 `path.duplicate(layerFill)`에서 검증된 방식이다. 제약: source document가 duplicate 호출 시점에 **열려 있어야** 원본 PageItem 참조가 유효. 교훈: 문서 간 이동 로직은 **처음부터 duplicate 패턴을 기본으로** 설계하고, clipboard는 "선택 복원이 필요한 경우에만" 제한적으로 사용한다.
+- **참조횟수**: 0
+
 ### [2026-04-16] 회귀 누적 상태는 revert로 "기저점 확보 → 한 걸음씩 재도입"이 정답
 - **분류**: lesson
 - **발견자**: planner-architect (grading.jsx 4커밋 누적 회귀 감사)
