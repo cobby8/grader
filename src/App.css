@@ -706,8 +706,11 @@ html, body, #root {
 }
 
 /* 좌측 사이드바 (카테고리 트리) */
+/* 왜 440px로 넓혔나: 카테고리 폴더명이 길어(예: "00. 2026 커스텀용 패턴 SVG")
+   220px에서는 줄바꿈·말줄임이 발생해 가독성이 떨어졌다. 2배폭으로 확장하여
+   긴 한글 이름도 한 줄에 보이도록 한다. (flex: 0 0 → 고정폭, 좌우 늘어나지 않음) */
 .pattern-layout__sidebar {
-  flex: 0 0 220px;
+  flex: 0 0 440px;
   background-color: var(--color-bg-surface);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-sm);

@@ -38,14 +38,22 @@ import { SIZE_LIST } from "../types/pattern";
  * 사이즈 토큰 정규식
  *
  * 왜 이 패턴인가:
- *   파일명 끝이 `_{사이즈}.svg`로 끝나면 그 앞 전부를 패턴명으로 간주한다.
+ *   파일명 끝이 `{구분자}{사이즈}.svg`로 끝나면 그 앞 전부를 패턴명으로 간주한다.
  *   alternation(|)은 정규식 엔진이 긴 것부터 시도하지 않으므로,
  *   길이 내림차순으로 정렬한 SIZE_LIST를 사용한다 (5XL이 XL보다 먼저 와야
  *   "농구_5XL.svg"가 "농구_5" + "XL"이 아닌 "농구" + "5XL"로 파싱된다).
+ *
+ * 왜 구분자를 `[\s_\-]+`로 유연화했나:
+ *   실측 데이터에 언더스코어(_), 공백( ), 하이픈(-)이 혼용되어 있고
+ *   "패턴명 _  XL.svg"처럼 공백+언더스코어가 섞인 경우도 있다.
+ *   `[\s_\-]+`는 "언더스코어/공백/하이픈 1개 이상"을 의미하며,
+ *   앞의 `(.+?)`(non-greedy)와 결합해 "최단 매칭"을 통해 맨 오른쪽 사이즈 토큰을 잡는다.
+ *   `i` 플래그는 확장자 대소문자(.SVG, .Svg)까지 허용한다.
  */
 const SIZE_LIST_DESC = [...SIZE_LIST].sort((a, b) => b.length - a.length);
 const SIZE_ALT = SIZE_LIST_DESC.join("|");
-export const SIZE_REGEX = new RegExp(`^(.+)_(${SIZE_ALT})\\.svg$`, "i");
+// non-greedy (.+?) + 유연 구분자 [\s_\-]+ + 대소문자 무시(i)
+export const SIZE_REGEX = new RegExp(`^(.+?)[\\s_\\-]+(${SIZE_ALT})\\.svg$`, "i");
 
 /**
  * 재귀 스캔 최대 깊이 (무한 재귀 방지 안전장치)
@@ -125,7 +133,11 @@ export function parseFilename(
 ): { presetName: string; size: string } | null {
   const match = filename.match(SIZE_REGEX);
   if (!match) return null;
-  const [, presetName, size] = match;
+  const [, rawPresetName, size] = match;
+  // 왜 trim이 필요한가: non-greedy 매칭이 "이름 끝의 공백/언더스코어/하이픈"을
+  // 흘려보낼 수 있다. 예) "농구 유니폼 _ XL.svg" → rawPresetName="농구 유니폼 "(끝에 공백).
+  // 사용자 기대 이름은 "농구 유니폼"이므로, 끝의 구분자 문자(\s_\-)만 제거한다.
+  const presetName = rawPresetName.replace(/[\s_\-]+$/, "");
   // 사이즈는 대문자로 정규화 (SIZE_LIST와 비교 용이)
   return { presetName, size: size.toUpperCase() };
 }
