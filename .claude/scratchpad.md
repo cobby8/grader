@@ -188,6 +188,52 @@ grader/
 | reviewer | src/App.css:1728-1783 | `.drive-import-modal*` CSS 잔존(56줄, dead code) — 다음 커밋에서 함께 제거 권장 | 제안 |
 | tester | src/pages/Settings.tsx L306 | driveSyncEnabled 활성 안내 문구가 "PatternManage에 가져오기 버튼 표시"로 남아있음 — 버튼 제거됐으므로 "페이지 진입 시 자동 동기화" 등으로 수정 권장 (치명 아님) | 제안 |
 
+### [2026-04-15] 트리 더블클릭 토글 + 앱 내 rename 제거 + Drive 읽기 전용
+
+📝 구현한 기능: CategoryTree 더블클릭이 펼침/접힘 토글로 변경, 앱 내 카테고리 rename 기능 전체 제거, Drive 출처 카테고리/프리셋의 편집·삭제·하위추가 UI를 비활성화 + 읽기 전용 토스트 안내.
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| src/types/pattern.ts | `PatternCategory.source?: "local" \| "drive"` 필드 추가 | 수정 |
+| src/services/driveSync.ts | mergeDriveScanResult 신규 카테고리에 `source: "drive"` 지정 | 수정 |
+| src/components/CategoryTree.tsx | rename state/UI/handler 전체 제거, 더블클릭=토글, Drive 카테고리 +/× 비활성화 + 토스트, onRenameCategory prop 제거 | 수정 |
+| src/pages/PatternManage.tsx | handleRenameCategory 제거, isDrivePreset/isDriveCategoryById/showDriveReadonlyToast 헬퍼 추가, "+ 새 프리셋 추가"·편집·삭제 버튼 Drive 시 비활성화 | 수정 |
+
+**핵심 구현 포인트**:
+- **rename UI 완전 제거**: CategoryTree에서 `editing`, `editName`, `inputRef`, `useEffect`(focus), `commitRename`, `<input>` 분기 모두 삭제. `useState`만 import (`useRef`, `useEffect` 제거).
+- **더블클릭 토글**: `onDoubleClick` → `toggleExpanded()` (자식 있을 때만). 화살표 토글과 동일한 동작이 행 더블클릭에서도 작동.
+- **isDriveCategory(컴포넌트 내부)**: `category.source === "drive"`로 단순 판정. 자식 prefix 검사는 driveSync가 이미 source 필드를 부여하므로 불필요.
+- **토스트 fallback**: 토스트 시스템 부재 → `alert("이 항목은 Google Drive에서만 수정할 수 있습니다.")`로 통일. CategoryTree 내부와 PatternManage 모두 동일 문구.
+- **PatternManage 헬퍼**: `isDrivePreset(preset)` = `pieces.some(p => p.svgSource === "drive")`. `isDriveCategoryById(id)` = `categories.find(...).source === "drive"`.
+- **+ 새 프리셋 추가**: `selectedCategory.type === "category" && isDriveCategoryById(id)`일 때만 비활성화. 전체/미분류는 영향 없음.
+- **편집/삭제 버튼**: `disabled` 속성 + onClick 가드(이중 안전망). title에 비활성화 사유 표시.
+- **루트 카테고리 추가 버튼**: 항상 활성화 유지 (사용자가 만드는 Local 루트는 source=undefined → local).
+
+**검증 결과**:
+- `npx tsc --noEmit` PASS (에러 0)
+- `npm run build` PASS (vite 805ms, 319.07 kB)
+
+💡 tester 참고:
+- 테스트 방법:
+  1. 카테고리 더블클릭 → 펼침/접힘 토글 동작 확인 (이전엔 입력창 진입했음)
+  2. Drive 동기화 후 생성된 카테고리에 마우스 올리기 → +/× 버튼이 disabled 상태로 표시
+  3. Drive 카테고리의 +/× 클릭 → "이 항목은 Google Drive에서만 수정할 수 있습니다." alert
+  4. Drive 카테고리 선택 → "+ 새 프리셋 추가" 버튼 disabled
+  5. Drive 프리셋 카드의 편집/삭제 버튼 disabled, 클릭 시 동일 alert
+  6. Local 카테고리/프리셋은 모두 정상 동작 (편집/삭제/추가 다 가능)
+- 정상 동작:
+  - Local 카테고리: 더블클릭=토글, +/× 정상 동작
+  - Drive 카테고리: 더블클릭=토글, +/× 비활성화 + 토스트
+  - 루트 "+ 카테고리" 버튼은 항상 활성화 (Local 루트 추가는 가능)
+- 주의할 입력:
+  - 기존 categories.json에 source 필드가 없는 데이터 → undefined → "local"로 간주(정상)
+  - Drive 동기화 전에 만들어진 Local 카테고리에 같은 이름의 Drive 폴더가 매칭될 경우, mergeDriveScanResult가 기존 카테고리 ID를 재사용하므로 그 카테고리는 source가 안 바뀜(Local로 유지됨). 의도 여부는 reviewer 판단.
+
+⚠️ reviewer 참고:
+- **알려진 한계**: mergeDriveScanResult가 "기존 카테고리 재사용 시 source를 drive로 승격"하지 않음. 기존 Local 카테고리("농구") 아래 Drive 폴더가 같은 이름이면, 그 카테고리는 Local로 남아 사용자가 rename/삭제 가능. 의도된 동작인지 결정 필요.
+- **alert 사용**: 토스트 라이브러리 도입 비용 대비 alert가 가장 단순. 향후 Phase에서 toast UX 도입 시 한 곳(showDriveReadonlyToast 함수)만 교체.
+- **CategoryTree IIFE 패턴**: PatternManage에서 `(() => { ... })()`로 buttons 분기를 감쌌음. 가독성 vs JSX 외부 함수 추출 트레이드오프 — 현재는 작아서 인라인 유지.
+
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
@@ -201,3 +247,4 @@ grader/
 | 2026-04-15 | developer | Drive 옵션 4 리팩터 (mergeDriveScanResult + 자동 동기화 + 모달 삭제) tsc/build PASS | 커밋 대기 |
 | 2026-04-15 | reviewer | Drive 옵션 4 리뷰 — 치명 이슈 없음, 커밋 가능 (CSS 잔존 개선만 후속) | 통과 |
 | 2026-04-15 | tester | Drive 옵션 4 정적 검증 11/11 통과 (tsc/build/치수 보존/쿨다운/무한루프 방지 확인) | 커밋 가능 |
+| 2026-04-15 | developer | 트리 더블클릭=토글 + rename 제거 + Drive 카테고리/프리셋 readonly UI (4파일, tsc/build PASS) | 커밋 대기 |

@@ -747,12 +747,30 @@ function PatternManage() {
     }
   };
 
-  // === 카테고리 이름 변경 ===
-  const handleRenameCategory = (id: string, newName: string) => {
-    const updated = categories.map((c) =>
-      c.id === id ? { ...c, name: newName } : c
-    );
-    persistCategories(updated);
+  // === 카테고리 이름 변경 핸들러 제거 (2026-04-15) ===
+  // 사용자 정책: 앱 내에서 폴더명/파일명 변경 기능 전체 제거.
+  // Drive 카테고리는 Drive에서, Local 카테고리도 앱에서 rename 불가.
+  // 필요 시 카테고리 삭제 후 새로 추가하는 것이 정책.
+
+  // === Drive 출처 프리셋 판정 ===
+  // 왜 헬퍼인가: 편집/삭제 버튼 비활성화 + 토스트 분기에 반복 사용된다.
+  // piece 중 하나라도 svgSource="drive"면 Drive 출처로 간주(하이브리드 케이스 방어).
+  const isDrivePreset = (preset: PatternPreset): boolean => {
+    return preset.pieces.some((p) => p.svgSource === "drive");
+  };
+
+  // === Drive 출처 카테고리 판정 ===
+  // 왜 헬퍼인가: "선택된 카테고리가 Drive면 + 새 프리셋 추가 버튼 비활성화" 분기에 사용.
+  // source 필드가 "drive"이면 즉시 Drive로 판정.
+  const isDriveCategoryById = (categoryId: string): boolean => {
+    const cat = categories.find((c) => c.id === categoryId);
+    return cat?.source === "drive";
+  };
+
+  // === 읽기 전용 안내 토스트 (alert로 fallback) ===
+  // 토스트 시스템이 없으므로 alert로 대체 — 동일 문구 일관성 유지를 위해 헬퍼화.
+  const showDriveReadonlyToast = () => {
+    alert("이 항목은 Google Drive에서만 수정할 수 있습니다.");
   };
 
   // === 조각이 실제로 보유한 사이즈 키 집합 계산 ===
@@ -832,7 +850,6 @@ function PatternManage() {
               onSelect={setSelectedCategory}
               onAddCategory={handleAddCategory}
               onDeleteCategory={handleDeleteCategory}
-              onRenameCategory={handleRenameCategory}
             />
           </aside>
 
@@ -866,10 +883,35 @@ function PatternManage() {
             )}
 
             {/* 프리셋 추가 버튼 (Drive 가져오기 버튼은 옵션 4에서 자동 동기화로 대체되어 제거됨) */}
+            {/* 왜 조건부 비활성화: 현재 선택된 카테고리가 Drive 출처면 새 프리셋 생성을 막는다.
+                Drive 카테고리는 SSOT가 Drive 폴더이므로 앱에서 만든 프리셋이 다음 동기화에서
+                "고립"되거나 정합성을 깨뜨릴 수 있다. */}
             <div className="preset-actions">
-              <button className="btn btn--primary" onClick={handleCreate}>
-                + 새 프리셋 추가
-              </button>
+              {(() => {
+                const blocked =
+                  selectedCategory.type === "category" &&
+                  isDriveCategoryById(selectedCategory.id);
+                return (
+                  <button
+                    className="btn btn--primary"
+                    onClick={() => {
+                      if (blocked) {
+                        showDriveReadonlyToast();
+                        return;
+                      }
+                      handleCreate();
+                    }}
+                    disabled={blocked}
+                    title={
+                      blocked
+                        ? "Drive 카테고리에는 앱에서 프리셋을 추가할 수 없습니다"
+                        : undefined
+                    }
+                  >
+                    + 새 프리셋 추가
+                  </button>
+                );
+              })()}
             </div>
 
             {/* 프리셋이 없을 때 안내 */}
@@ -973,19 +1015,53 @@ function PatternManage() {
                         }}
                       />
                     )}
+                    {/* 편집/삭제 버튼 — Drive 출처 프리셋은 비활성화 + 토스트 안내.
+                        왜: Drive 프리셋의 SSOT는 Drive 폴더이므로 앱 내 변경은
+                        다음 동기화에서 무효화될 수 있다(이름/조각 구조 등). */}
                     <div className="preset-card__actions">
-                      <button
-                        className="btn btn--small"
-                        onClick={() => handleEdit(preset)}
-                      >
-                        편집
-                      </button>
-                      <button
-                        className="btn btn--small btn--danger"
-                        onClick={() => handleDelete(preset.id)}
-                      >
-                        삭제
-                      </button>
+                      {(() => {
+                        const isDrive = isDrivePreset(preset);
+                        return (
+                          <>
+                            <button
+                              className="btn btn--small"
+                              onClick={() => {
+                                if (isDrive) {
+                                  showDriveReadonlyToast();
+                                  return;
+                                }
+                                handleEdit(preset);
+                              }}
+                              disabled={isDrive}
+                              title={
+                                isDrive
+                                  ? "Drive 프리셋은 앱에서 편집할 수 없습니다"
+                                  : undefined
+                              }
+                            >
+                              편집
+                            </button>
+                            <button
+                              className="btn btn--small btn--danger"
+                              onClick={() => {
+                                if (isDrive) {
+                                  showDriveReadonlyToast();
+                                  return;
+                                }
+                                handleDelete(preset.id);
+                              }}
+                              disabled={isDrive}
+                              title={
+                                isDrive
+                                  ? "Drive 프리셋은 앱에서 삭제할 수 없습니다"
+                                  : undefined
+                              }
+                            >
+                              삭제
+                            </button>
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                 ))}

@@ -580,6 +580,9 @@ export function mergeDriveScanResult(
         name: sc.name,
         parentId: finalParentId,
         order: maxOrder + 1,
+        // Drive 스캔으로 자동 생성된 카테고리는 source="drive"로 표시.
+        // 이 표식은 앱 내 rename/삭제/하위 추가를 막는 readonly 가드로 쓰인다.
+        source: "drive",
       });
       scanIdToFinalId.set(sc.id, newId);
     }

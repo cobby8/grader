@@ -15,6 +15,11 @@ export interface PatternCategory {
   name: string;            // "농구", "상의" 등 카테고리 이름
   parentId: string | null; // null이면 최상위(루트) 카테고리
   order: number;           // 같은 레벨 내에서의 정렬 순서
+  // === Drive 연동 옵션 4 신규 필드 (optional, 기존 데이터 호환) ===
+  // 왜 필요한가: Drive 동기화로 자동 생성된 카테고리는 앱 내에서 rename/삭제/하위추가를
+  // 하지 못하도록 잠가야 한다. (Drive 폴더가 진실의 원천이므로)
+  // 미지정 시 "local"로 간주 — 사용자가 앱 내에서 수동 추가한 카테고리.
+  source?: "local" | "drive";
 }
 
 /** 하나의 패턴 조각 (예: 앞판, 뒷판, 왼쪽소매) */
