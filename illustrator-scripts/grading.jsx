@@ -1181,13 +1181,24 @@ function main() {
     var allowRgbDesign = (config.allowRgbDesign === true);
 
     // ===== 디버그 로그 파일 경로 초기화 =====
-    // 왜 여기서 하나: config.resultJsonPath를 읽은 직후여야 경로를 만들 수 있다.
-    // resultJsonPath(예: illustrator-scripts/result.json)와 같은 폴더에 grading-log.txt 저장.
+    // 왜 outputPath 기준인가:
+    //   - 사용자가 실제로 받아보는 결과물(.ai)이 outputPath에 저장된다.
+    //   - 로그가 결과물 바로 옆에 있어야 "이 파일 어떻게 나왔지?"를 바로 추적 가능.
+    //   - resultJsonPath는 내부 메타 경로라 사용자 입장에서는 outputPath가 더 자연스럽다.
+    // 폴백 순서: outputPath 폴더 → resultJsonPath 폴더 (둘 다 없으면 로그 스킵)
     // append 모드라 사이즈별 실행이 누적된다 → 사용자가 이 파일 하나만 공유하면 됨.
     try {
-        if (config.resultJsonPath) {
-            var resultFile = new File(config.resultJsonPath);
-            _logFilePath = resultFile.parent.fsName + "\\grading-log.txt";
+        var _logBasePath = null;
+        // 1순위: outputPath (결과물 저장 경로)와 같은 폴더
+        if (config.outputPath) {
+            _logBasePath = config.outputPath;
+        } else if (config.resultJsonPath) {
+            // 2순위 폴백: resultJsonPath 폴더
+            _logBasePath = config.resultJsonPath;
+        }
+        if (_logBasePath) {
+            var _logBaseFile = new File(_logBasePath);
+            _logFilePath = _logBaseFile.parent.fsName + "\\grading-log.txt";
             writeLog("=== grading.jsx 시작 ===");
             writeLog("config: designAiPath=" + (config.designAiPath || "(없음)"));
             writeLog("config: designPdfPath=" + (config.designPdfPath || "(없음)"));
