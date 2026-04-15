@@ -57,6 +57,14 @@ grader/
 
 ## 기획설계 (planner-architect)
 
+### [2026-04-15] 작업 흐름 재설계 계획
+
+**산출물**: `PLAN-WORKFLOW-REDESIGN.md` (500줄+)
+**핵심**: 4단계(프리셋 중심) → 3단계(작업 중심) 재설계 — `/work`(작업선택) → `/pattern`(패턴) → `/generate`(주문서+생성)
+**주요 변경**: (1) DesignUpload 삭제 + designs.json 폐기 + 1회성 세션(sessionStorage), (2) PDF→AI 전용(Illustrator 필수), (3) 출력을 `session.workFolder/grader-output/`로, (4) SizeSelect+FileGenerate→OrderGenerate 통합, (5) 즐겨찾기 favorites.json 신규, (6) Python 엔진 parse_order 전용으로 축소
+**Phase**: 1=뼈대(2h) / 2=패턴선택 / 3=즐겨찾기 / 4=OrderGenerate / 5=PDF제거 / 6=문서. 총 8~12일, MVP(1~4) 5~7일
+**사용자 의사결정 8개 대기**: Q1(PDF완전제거), Q2(AI미리보기), Q3(designs.json처리), Q4(즐겨찾기저장), Q5(Illustrator필수), Q6(파일명규칙), Q7(수동수정허용), Q8(MVP범위)
+
 ### [2026-04-15] Drive 폴더 직접 표시 방식 재검토 → 옵션 4 채택
 
 **결론**: 사용자 속뜻(가져오기 버튼 귀찮음 + 경고 부담)을 충족하되, 그레이딩 호환성 유지.
@@ -248,3 +256,4 @@ grader/
 | 2026-04-15 | reviewer | Drive 옵션 4 리뷰 — 치명 이슈 없음, 커밋 가능 (CSS 잔존 개선만 후속) | 통과 |
 | 2026-04-15 | tester | Drive 옵션 4 정적 검증 11/11 통과 (tsc/build/치수 보존/쿨다운/무한루프 방지 확인) | 커밋 가능 |
 | 2026-04-15 | developer | 트리 더블클릭=토글 + rename 제거 + Drive 카테고리/프리셋 readonly UI (4파일, tsc/build PASS) | 커밋 대기 |
+| 2026-04-15 | planner-architect | 작업 흐름 재설계 상세 계획 PLAN-WORKFLOW-REDESIGN.md 작성 (4→3단계, PDF→AI, 1회성세션) | 완료 |
