@@ -167,7 +167,17 @@
       "Bash(git push:*)",
       "Bash(wc:*)",
       "Bash(git add:*)",
-      "Bash(git commit -m ':*)"
+      "Bash(git commit -m ':*)",
+      "Bash(py:*)",
+      "Bash(node:*)",
+      "Bash(\"./build.bat\")",
+      "Bash(tee \"C:/0. Programing/grader/build-output.log\")",
+      "Bash(tasklist //FI \"IMAGENAME eq cargo.exe\")",
+      "Bash(tasklist //FI \"IMAGENAME eq rustc.exe\")",
+      "Bash(tasklist)",
+      "Bash(powershell:*)",
+      "Bash(tasklist //FI \"IMAGENAME eq grader.exe\")",
+      "Bash(tasklist //FI \"IMAGENAME eq node.exe\")"
     ]
   }
 }
