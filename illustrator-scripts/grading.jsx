@@ -1365,28 +1365,6 @@ function main() {
         }
         // 주의: designDoc은 STEP 6까지 살려둔다. clipboard가 유효하려면 원본 문서 존재가 안전하다.
 
-        // ===== STEP 4B: "교체용요소" 레이어 선택적 탐색 =====
-        // 왜 선택적인가:
-        //   - 구버전 디자인 AI에는 이 레이어가 없을 수 있다 (호환성).
-        //   - 없으면 조용히 스킵 + 경고 로그.
-        // 왜 지금 copy하지 않나:
-        //   - clipboard에 "요소"가 이미 들어있다 (STEP 8에서 paste해야 함).
-        //   - 여기서 copy하면 "요소"가 덮어쓰인다.
-        //   - 따라서 STEP 8B (요소 paste 완료 후 + designDoc close 전)에서 copy/paste.
-        var refLayer = null;   // designDoc의 "교체용요소" 레이어 (AI 파일 한정)
-        if (isAiFile) {
-            try {
-                refLayer = designDoc.layers.getByName("교체용요소");
-                writeLog("STEP 4B 교체용요소 레이어 발견: pageItems=" + refLayer.pageItems.length);
-                $.writeln("[grading.jsx] '교체용요소' 레이어 발견 — STEP 8B에서 copy 예정");
-            } catch (eRef) {
-                refLayer = null;
-                writeLog("STEP 4B 교체용요소 레이어 없음 (건너뜀)");
-                $.writeln("[grading.jsx] '교체용요소' 레이어 없음 (건너뜀)");
-            }
-        }
-
-
         // ===== STEP 5: 패턴 SVG 열기 → 아트보드 크기 측정 → CMYK 베이스 문서 생성 =====
         // 왜 순서가 이러한가:
         //   1) SVG를 열어야 아트보드 크기(pt)를 정확히 알 수 있다.
@@ -1475,143 +1453,7 @@ function main() {
             writeLog("STEP 8 paste 직후: baseDoc.pageItems=" + baseDoc.pageItems.length
                 + ", baseDoc.selection.length=" + (baseDoc.selection ? baseDoc.selection.length : 0)
                 + ", layerDesign.pageItems=" + layerDesign.pageItems.length);
-            // 왜 이 진단이 필요한가:
-            //   - 3XL 등 특정 사이즈에서 paste 후 selection=0 현상이 보고됨.
-            //   - designDoc 상태와 activeDoc을 같이 찍어서 원인 추적용 별건 조사 근거 확보.
-            if (baseDoc.selection && baseDoc.selection.length === 0) {
-                writeLog("[WARN] STEP 8 paste 후 selection=0. designDoc 상태: "
-                    + "alive=" + (designDoc != null)
-                    + ", activeDoc=" + app.activeDocument.name);
-            }
         } catch (ePasteLog) { /* 무시 */ }
-
-        // ===== STEP 8B: "교체용요소" copy → baseDoc의 "교체용요소" 레이어에 paste =====
-        // 왜 이 시점에 하나:
-        //   - STEP 8에서 "요소" paste가 끝났으므로 clipboard 재사용 가능.
-        //   - designDoc이 아래에서 close되기 직전이라 copy 가능한 마지막 타이밍.
-        // 위치는 건드리지 않는다:
-        //   - 이 레이어는 아트보드 밖(위쪽)에 있는 백넘버 참조 숫자다.
-        //   - paste는 원본 좌표를 유지하므로 이동 없음 (scale만 STEP 9B에서 적용).
-        var baseRefLayer = null;  // baseDoc의 "교체용요소" 레이어
-        if (refLayer && refLayer.pageItems.length > 0) {
-            try {
-                // designDoc을 다시 활성 문서로 전환 (copy 대상 선택 위해)
-                app.activeDocument = designDoc;
-                designDoc.selection = null;
-
-                // 왜 copy 전에 원본 bounds를 기록하나:
-                //   - 일반 paste는 화면 중앙으로 붙여넣어 원본 좌표가 손실된다.
-                //   - pasteInPlace가 실패/미지원 버전일 경우를 대비해, 원본 bounds를 기억해 두고
-                //     paste 후 실제 위치와 차이가 크면 translate로 강제 복원한다.
-                // 합집합 bounding box 계산 (여러 pageItem 전체의 외곽 박스):
-                //   - geometricBounds = [left, top, right, bottom] (top은 Illustrator에서 큰 값)
-                var refOrigLeft = null, refOrigTop = null, refOrigRight = null, refOrigBottom = null;
-                for (var r = 0; r < refLayer.pageItems.length; r++) {
-                    refLayer.pageItems[r].selected = true;
-                    var gb = refLayer.pageItems[r].geometricBounds;
-                    if (refOrigLeft === null) {
-                        refOrigLeft = gb[0]; refOrigTop = gb[1];
-                        refOrigRight = gb[2]; refOrigBottom = gb[3];
-                    } else {
-                        if (gb[0] < refOrigLeft)   refOrigLeft = gb[0];
-                        if (gb[1] > refOrigTop)    refOrigTop = gb[1];    // top: 값이 클수록 위
-                        if (gb[2] > refOrigRight)  refOrigRight = gb[2];
-                        if (gb[3] < refOrigBottom) refOrigBottom = gb[3]; // bottom: 값이 작을수록 아래
-                    }
-                }
-                writeLog("STEP 8B 교체용요소 원본 bounds: ["
-                    + refOrigLeft + ", " + refOrigTop + ", " + refOrigRight + ", " + refOrigBottom + "]");
-
-                if (designDoc.selection && designDoc.selection.length > 0) {
-                    app.executeMenuCommand("copy");
-                    $.writeln("[grading.jsx] '교체용요소' " + designDoc.selection.length + "개 copy 완료");
-
-                    // baseDoc에 "교체용요소" 레이어 확보 (이미 있으면 재사용)
-                    app.activeDocument = baseDoc;
-                    try {
-                        baseRefLayer = baseDoc.layers.getByName("교체용요소");
-                    } catch (eLook) {
-                        baseRefLayer = baseDoc.layers.add();
-                        baseRefLayer.name = "교체용요소";
-                    }
-                    baseDoc.activeLayer = baseRefLayer;
-
-                    // 왜 pasteInPlace인가:
-                    //   - 일반 paste는 화면 중앙에 붙여넣어 교체용요소가 아트보드 중앙으로 이동하는 버그 발생.
-                    //   - pasteInPlace는 원본 좌표 그대로 붙여넣어, 아트보드 밖 원래 위치를 유지한다.
-                    //   - 메뉴 명령어 이름이 버전에 따라 다를 수 있어 try/catch로 폴백 체인 구성.
-                    var pasteMethod = "unknown";
-                    try {
-                        app.executeMenuCommand("pasteInPlace");
-                        pasteMethod = "pasteInPlace";
-                        writeLog("STEP 8B 교체용요소 pasteInPlace 성공");
-                    } catch (ePasteInPlace) {
-                        writeLog("[WARN] pasteInPlace 실패, 일반 paste로 폴백: " + ePasteInPlace);
-                        try {
-                            app.executeMenuCommand("paste");
-                            pasteMethod = "paste(fallback)";
-                        } catch (ePasteMenu) {
-                            app.paste();
-                            pasteMethod = "app.paste(fallback)";
-                        }
-                    }
-
-                    // 폴백 안전망: paste 후 위치를 원본과 비교하여 어긋나면 translate로 복원.
-                    //   - pasteInPlace가 성공해도 만일을 대비해 항상 검사 (오차 0.01pt 이상이면 복원).
-                    //   - geometricBounds는 스트로크 제외 기하학적 경계 → 원본 비교에 적합.
-                    if (baseRefLayer.pageItems.length > 0 && refOrigLeft !== null) {
-                        var newLeft = null, newTop = null;
-                        for (var nk = 0; nk < baseRefLayer.pageItems.length; nk++) {
-                            var nb = baseRefLayer.pageItems[nk].geometricBounds;
-                            if (newLeft === null) {
-                                newLeft = nb[0]; newTop = nb[1];
-                            } else {
-                                if (nb[0] < newLeft) newLeft = nb[0];
-                                if (nb[1] > newTop)  newTop = nb[1];
-                            }
-                        }
-                        var dx = refOrigLeft - newLeft;   // 좌측 기준 x 이동량
-                        var dy = refOrigTop - newTop;     // 상단 기준 y 이동량
-                        if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
-                            // 붙여넣은 모든 요소를 동일 벡터로 이동 (상대 위치 유지)
-                            for (var tk = 0; tk < baseRefLayer.pageItems.length; tk++) {
-                                baseRefLayer.pageItems[tk].translate(dx, dy);
-                            }
-                            writeLog("STEP 8B 교체용요소 위치 복원: dx=" + dx + ", dy=" + dy
-                                + " (method=" + pasteMethod + ")");
-                            $.writeln("[grading.jsx] 교체용요소 위치 복원: dx=" + dx + ", dy=" + dy);
-                        } else {
-                            writeLog("STEP 8B 교체용요소 위치 일치 (복원 불필요, method=" + pasteMethod + ")");
-                        }
-                    }
-
-                    writeLog("STEP 8B 교체용요소 paste 완료: baseRefLayer.pageItems=" + baseRefLayer.pageItems.length
-                        + " (method=" + pasteMethod + ")");
-                    $.writeln("[grading.jsx] '교체용요소' → baseDoc 레이어에 paste 완료 ("
-                        + baseRefLayer.pageItems.length + "개, method=" + pasteMethod + ")");
-                } else {
-                    $.writeln("[grading.jsx] 경고: '교체용요소' 선택 가능한 아이템 없음 — 스킵");
-                    baseRefLayer = null;
-                }
-            } catch (eRefPaste) {
-                // 기존 흐름을 방해하지 않도록 에러 삼키고 경고만
-                writeLog("[WARN] STEP 4B 교체용요소 copy/paste 실패: " + eRefPaste.message);
-                $.writeln("[grading.jsx] 경고: 교체용요소 처리 실패 (" + eRefPaste.message + ") — 기존 흐름 계속");
-                baseRefLayer = null;
-                // 활성 문서를 baseDoc으로 복원 (아래 close 로직이 designDoc 전제)
-                try { app.activeDocument = baseDoc; } catch (eAct) {}
-            }
-        }
-
-        // 왜 여기서 상태 복원인가:
-        //   - STEP 8B에서 baseRefLayer로 activeLayer가 바뀌고 selection은 교체용요소로 오염됨.
-        //   - 후속 STEP 9/10은 layerDesign의 디자인 요소를 다뤄야 하므로 activeLayer/selection을 되돌린다.
-        //   - (2026-04-16 회귀 수정: 교체용요소 도입 후 selection 오염 방지 방어선)
-        try {
-            baseDoc.activeLayer = layerDesign;
-            baseDoc.selection = null;
-            writeLog("STEP 8B 종료 후 activeLayer/selection 복원 완료");
-        } catch (eRestore) { /* 무시 */ }
 
         // 이제 designDoc 닫아도 안전 (clipboard 사용 완료)
         if (designDoc) {
@@ -1625,22 +1467,7 @@ function main() {
         }
 
         // 붙여넣은 요소 수 확인
-        // 왜 selection이 아닌 layerDesign을 직접 참조하나:
-        //   - STEP 8B에서 교체용요소를 paste하면서 selection이 [교체용요소]로 덮어써졌다.
-        //   - 실제 디자인 요소는 STEP 8에서 layerDesign("디자인 요소" 레이어)에 이미 안전하게 paste되어 있다.
-        //   - 따라서 selection을 초기화한 뒤 layerDesign의 pageItems를 직접 순회하여 재선택한다.
-        //   - 이렇게 해야 STEP 9(스케일링)/STEP 10이 엉뚱한 교체용요소 대신 진짜 디자인 요소에 작용한다.
-        //   - (2026-04-16 회귀 수정)
-        baseDoc.selection = null;  // 오염된 selection 초기화
-        var pastedItems = [];
-        for (var liLd = 0; liLd < layerDesign.pageItems.length; liLd++) {
-            var itemLd = layerDesign.pageItems[liLd];
-            itemLd.selected = true;       // 후속 group 메뉴 작동을 위해 실제 선택 상태로
-            pastedItems.push(itemLd);     // 배열에도 축적 (length/index 접근 호환)
-        }
-        try {
-            writeLog("pastedItems 재확보 (layerDesign 직접 참조): " + pastedItems.length + "개");
-        } catch (ePiLog) { /* 무시 */ }
+        var pastedItems = baseDoc.selection;
         var pastedGroup = null;
         // Phase 2 개별 정렬에 사용할 effective linearScale (스케일 적용 후 값)
         var linearScaleApplied = 1.0;
@@ -1670,22 +1497,8 @@ function main() {
 
                 if (Math.abs(linearScale - 1.0) > 0.005) {
                     var scalePct = linearScale * 100;
-                    // D1 (2026-04-16): Transformation.CENTER로 그룹 자기 중심 기준 스케일.
-                    // 왜 CENTER인가:
-                    //   - 기본 DOCUMENTORIGIN은 원점(0,0) 기준이라 스케일과 동시에 위치가 크게 이동함.
-                    //   - CENTER는 그룹 bounds 중심을 고정하고 크기만 변경 → 위치 유지.
-                    //   - STEP 10 조각별 정렬(D1 모드에서는 skip)이 없어도 요소가 제자리에 남음.
-                    // resize 파라미터:
-                    //   (scaleX%, scaleY%, changePositions, changeFillPatterns,
-                    //    changeFillGradients, changeStrokePattern, changeLineWidths%, Transformation)
-                    pastedGroup.resize(
-                        scalePct, scalePct,
-                        true, true, true, true,
-                        scalePct,
-                        Transformation.CENTER
-                    );
-                    $.writeln("[grading.jsx] 요소 스케일 적용: " + scalePct.toFixed(1) + "% (CENTER 기준)");
-                    writeLog("STEP 9 D1 resize: Transformation.CENTER, scale=" + linearScale.toFixed(4));
+                    pastedGroup.resize(scalePct, scalePct, true, true, true, true);
+                    $.writeln("[grading.jsx] 요소 스케일 적용: " + scalePct.toFixed(1) + "%");
                     linearScaleApplied = linearScale;
                     // [DEBUG LOG] 스케일 적용 후 그룹 bounds
                     try {
@@ -1706,118 +1519,17 @@ function main() {
                     + ", pastedGroup=" + (pastedGroup ? "있음" : "null"));
             }
 
-            // ===== STEP 9B: "교체용요소" 중심점 기준 scale만 적용 =====
-            // 왜 Transformation.CENTER인가:
-            //   - 이 레이어는 아트보드 밖(위쪽)에 있는 백넘버 참조 숫자다.
-            //   - 디자이너가 편집용으로 남겨두는 것 → 위치는 원본 그대로 유지해야 함.
-            //   - resize의 기본(Transformation.DOCUMENTORIGIN)은 원점 기준이라 위치가 이동함.
-            //   - CENTER는 각 객체의 자기 중심 기준이라 scale만 적용되고 위치 이동 없음.
-            // 왜 개별 아이템 순회인가:
-            //   - 레이어 전체를 한 번에 resize하면 레이어 묶음의 중심 기준으로 스케일되어
-            //     여러 아이템 사이의 상대 위치가 바뀔 수 있다.
-            //   - 각 아이템 독립적으로 자기 중심 기준 scale → 각자 제자리에서 크기만 변함.
-            if (baseRefLayer && baseRefLayer.pageItems.length > 0 && linearScaleApplied !== 1.0) {
-                var scalePctRef = linearScaleApplied * 100;
-                for (var ri = 0; ri < baseRefLayer.pageItems.length; ri++) {
-                    var refItem = baseRefLayer.pageItems[ri];
-                    // resize 파라미터:
-                    //   (scaleX%, scaleY%, changePositions, changeFillPatterns, changeFillGradients,
-                    //    changeStrokePattern, changeLineWidths%, Transformation)
-                    refItem.resize(
-                        scalePctRef, scalePctRef,
-                        true, true, true, true,
-                        scalePctRef,
-                        Transformation.CENTER
-                    );
-                }
-                writeLog("STEP 9B 교체용요소 scale 적용: " + scalePctRef.toFixed(1) + "% (중심점 기준, "
-                    + baseRefLayer.pageItems.length + "개)");
-                $.writeln("[grading.jsx] '교체용요소' scale 적용: " + scalePctRef.toFixed(1) + "% (위치 유지)");
-            } else {
-                var skipReason = !baseRefLayer ? "레이어 없음"
-                    : (baseRefLayer.pageItems.length === 0 ? "빈 레이어" : "scale=1.0");
-                writeLog("STEP 9B 교체용요소 scale 생략 (" + skipReason + ")");
-            }
-
-            // ===== STEP 10 (D1 재설계, 2026-04-16): 조각별 개별 정렬 제거 =====
-            // 배경:
-            //   - 기존 Phase 2는 각 요소를 매칭 조각(basePiece) 중심으로 이동 →
-            //     사이즈 커질수록 조각 간격 벌어짐이 요소에 1:1 전가 → 아트보드 초과.
-            //   - 사용자 D1 채택: 요소는 제자리에서 스케일만, 조각별 정렬 전면 skip.
+            // ===== STEP 10 (Phase 2): 조각별 개별 정렬 =====
+            // 왜 바뀌는가:
+            //   - 기존 alignToBodyCenter는 요소 전체 그룹을 한 번에 몸판 중앙으로 이동.
+            //   - 결과: 앞판/뒷판/소매 위에 각각 놓여야 할 요소들이 공중에 한 덩어리로 모임.
+            //   - 방식 B: 각 요소를 사전 매핑된 조각 중심으로 이동하되,
+            //             원본 designPiece 기준 상대 오프셋을 linearScale로 보존.
             //
-            // USE_D1_MODE = true  → D1 모드 (기본): 조각별 이동 없음, 중심 복원 안전망만
-            // USE_D1_MODE = false → 레거시 Phase 2 (조각별 개별 정렬, 롤백 대비 보존)
-            var USE_D1_MODE = true;
-
-            if (USE_D1_MODE) {
-                // === D1 모드: 조각별 정렬 건너뜀 ===
-                // STEP 9의 Transformation.CENTER 스케일로 이미 요소가 원위치에 크기만 바뀐 상태.
-                // 그룹 해제도 불필요 (폴백 조건 계산도 생략).
-                $.writeln("[grading.jsx] [STEP 10 D1] 조각별 정렬 skip — 요소 중심점 기준 스케일만 유지");
-                writeLog("STEP 10 D1 모드: 조각별 정렬 건너뜀, 요소 중심점 기준 스케일만 유지");
-
-                // 그룹 해제 (이후 bounds/translate 편의를 위해 layerDesign 직속으로 분리)
-                // 왜 해제하나:
-                //   - pastedGroup이 유지되면 레이어 통합 시 불필요한 그룹 래핑이 남을 수 있음.
-                //   - 개별 아이템으로 분리해두면 STEP 11(merge)에서도 깔끔하게 처리됨.
-                var d1Items = [];
-                if (pastedGroup) {
-                    while (pastedGroup.pageItems.length > 0) {
-                        var d1Child = pastedGroup.pageItems[0];
-                        d1Child.move(layerDesign, ElementPlacement.PLACEATEND);
-                        d1Items.push(d1Child);
-                    }
-                    try { pastedGroup.remove(); } catch (eD1Rg) { /* 무시 */ }
-                    pastedGroup = null;
-                }
-
-                // D1 안전망: 요소 전체 중심 vs 아트보드 중심 오차 50pt 초과 시 translate 복원
-                // 왜 필요한가:
-                //   - 기준 AI의 요소가 이미 몸판에서 크게 벗어나 있으면 scale 후 더 벗어남.
-                //   - 오차 50pt 이하면 무시 (디자이너 의도된 미세 오프셋 존중).
-                if (d1Items.length > 0) {
-                    try {
-                        var abRect = baseDoc.artboards[0].artboardRect; // [l, t, r, b]
-                        var abCx = (abRect[0] + abRect[2]) / 2;
-                        var abCy = (abRect[1] + abRect[3]) / 2;
-
-                        // 요소 전체 합집합 bounds
-                        var d1MinL = Infinity, d1MaxT = -Infinity, d1MaxR = -Infinity, d1MinB = Infinity;
-                        for (var d1i = 0; d1i < d1Items.length; d1i++) {
-                            var d1b = d1Items[d1i].geometricBounds;
-                            if (d1b[0] < d1MinL) d1MinL = d1b[0];
-                            if (d1b[1] > d1MaxT) d1MaxT = d1b[1];
-                            if (d1b[2] > d1MaxR) d1MaxR = d1b[2];
-                            if (d1b[3] < d1MinB) d1MinB = d1b[3];
-                        }
-                        var elemCx = (d1MinL + d1MaxR) / 2;
-                        var elemCy = (d1MinB + d1MaxT) / 2;
-
-                        var ddx = abCx - elemCx;
-                        var ddy = abCy - elemCy;
-
-                        writeLog("STEP 10 D1 최종 요소 전체 bounds=["
-                            + d1MinL.toFixed(1) + "," + d1MaxT.toFixed(1)
-                            + "," + d1MaxR.toFixed(1) + "," + d1MinB.toFixed(1) + "]"
-                            + " size=" + (d1MaxR - d1MinL).toFixed(1) + "x" + (d1MaxT - d1MinB).toFixed(1));
-
-                        if (Math.abs(ddx) > 50 || Math.abs(ddy) > 50) {
-                            for (var d1pi = 0; d1pi < d1Items.length; d1pi++) {
-                                d1Items[d1pi].translate(ddx, ddy);
-                            }
-                            writeLog("STEP 10 D1 중심 복원: dx=" + ddx.toFixed(1) + ", dy=" + ddy.toFixed(1));
-                            $.writeln("[grading.jsx] [STEP 10 D1] 중심 복원 translate: dx=" + ddx.toFixed(1) + ", dy=" + ddy.toFixed(1));
-                        } else {
-                            writeLog("STEP 10 D1 중심 복원 불필요 (오차 50pt 미만, dx=" + ddx.toFixed(1) + ", dy=" + ddy.toFixed(1) + ")");
-                        }
-                    } catch (eD1Safety) {
-                        writeLog("[WARN] STEP 10 D1 중심 복원 실패: " + eD1Safety);
-                    }
-                } else {
-                    writeLog("STEP 10 D1: 요소 없음 (d1Items=0)");
-                }
-            } else {
-            // === 레거시 Phase 2 경로 (USE_D1_MODE=false 일 때만 실행, 롤백 대비 보존) ===
+            // 안전장치 3가지:
+            //   (S1) designPieces/basePieces 수 불일치 → 전체 중심 폴백 + 경고
+            //   (S2) paste된 요소 수 != 사전 기록한 elementCountAtCopy → 폴백 + 경고
+            //   (S3) elementPieceIndex[i]가 -1 또는 basePieces 범위 밖 → 해당 요소만 스킵
             var useFallback = false;
             var fallbackReason = "";
 
@@ -1920,7 +1632,6 @@ function main() {
                     }
                 } catch (eBoundsLog) { /* 무시 */ }
             }
-            } // end of else (USE_D1_MODE=false 레거시 Phase 2 블록)
         } else {
             $.writeln("[grading.jsx] 경고: 붙여넣은 요소가 없음 — 디자인 파일 확인 필요");
             // [DEBUG LOG] S 사이즈 증상 — paste 후 선택된 요소 0개
