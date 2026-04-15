@@ -1475,6 +1475,14 @@ function main() {
             writeLog("STEP 8 paste 직후: baseDoc.pageItems=" + baseDoc.pageItems.length
                 + ", baseDoc.selection.length=" + (baseDoc.selection ? baseDoc.selection.length : 0)
                 + ", layerDesign.pageItems=" + layerDesign.pageItems.length);
+            // 왜 이 진단이 필요한가:
+            //   - 3XL 등 특정 사이즈에서 paste 후 selection=0 현상이 보고됨.
+            //   - designDoc 상태와 activeDoc을 같이 찍어서 원인 추적용 별건 조사 근거 확보.
+            if (baseDoc.selection && baseDoc.selection.length === 0) {
+                writeLog("[WARN] STEP 8 paste 후 selection=0. designDoc 상태: "
+                    + "alive=" + (designDoc != null)
+                    + ", activeDoc=" + app.activeDocument.name);
+            }
         } catch (ePasteLog) { /* 무시 */ }
 
         // ===== STEP 8B: "교체용요소" copy → baseDoc의 "교체용요소" 레이어에 paste =====
@@ -1525,6 +1533,16 @@ function main() {
             }
         }
 
+        // 왜 여기서 상태 복원인가:
+        //   - STEP 8B에서 baseRefLayer로 activeLayer가 바뀌고 selection은 교체용요소로 오염됨.
+        //   - 후속 STEP 9/10은 layerDesign의 디자인 요소를 다뤄야 하므로 activeLayer/selection을 되돌린다.
+        //   - (2026-04-16 회귀 수정: 교체용요소 도입 후 selection 오염 방지 방어선)
+        try {
+            baseDoc.activeLayer = layerDesign;
+            baseDoc.selection = null;
+            writeLog("STEP 8B 종료 후 activeLayer/selection 복원 완료");
+        } catch (eRestore) { /* 무시 */ }
+
         // 이제 designDoc 닫아도 안전 (clipboard 사용 완료)
         if (designDoc) {
             try {
@@ -1537,7 +1555,22 @@ function main() {
         }
 
         // 붙여넣은 요소 수 확인
-        var pastedItems = baseDoc.selection;
+        // 왜 selection이 아닌 layerDesign을 직접 참조하나:
+        //   - STEP 8B에서 교체용요소를 paste하면서 selection이 [교체용요소]로 덮어써졌다.
+        //   - 실제 디자인 요소는 STEP 8에서 layerDesign("디자인 요소" 레이어)에 이미 안전하게 paste되어 있다.
+        //   - 따라서 selection을 초기화한 뒤 layerDesign의 pageItems를 직접 순회하여 재선택한다.
+        //   - 이렇게 해야 STEP 9(스케일링)/STEP 10이 엉뚱한 교체용요소 대신 진짜 디자인 요소에 작용한다.
+        //   - (2026-04-16 회귀 수정)
+        baseDoc.selection = null;  // 오염된 selection 초기화
+        var pastedItems = [];
+        for (var liLd = 0; liLd < layerDesign.pageItems.length; liLd++) {
+            var itemLd = layerDesign.pageItems[liLd];
+            itemLd.selected = true;       // 후속 group 메뉴 작동을 위해 실제 선택 상태로
+            pastedItems.push(itemLd);     // 배열에도 축적 (length/index 접근 호환)
+        }
+        try {
+            writeLog("pastedItems 재확보 (layerDesign 직접 참조): " + pastedItems.length + "개");
+        } catch (ePiLog) { /* 무시 */ }
         var pastedGroup = null;
         // Phase 2 개별 정렬에 사용할 effective linearScale (스케일 적용 후 값)
         var linearScaleApplied = 1.0;
