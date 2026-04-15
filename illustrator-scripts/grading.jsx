@@ -1670,8 +1670,22 @@ function main() {
 
                 if (Math.abs(linearScale - 1.0) > 0.005) {
                     var scalePct = linearScale * 100;
-                    pastedGroup.resize(scalePct, scalePct, true, true, true, true);
-                    $.writeln("[grading.jsx] 요소 스케일 적용: " + scalePct.toFixed(1) + "%");
+                    // D1 (2026-04-16): Transformation.CENTER로 그룹 자기 중심 기준 스케일.
+                    // 왜 CENTER인가:
+                    //   - 기본 DOCUMENTORIGIN은 원점(0,0) 기준이라 스케일과 동시에 위치가 크게 이동함.
+                    //   - CENTER는 그룹 bounds 중심을 고정하고 크기만 변경 → 위치 유지.
+                    //   - STEP 10 조각별 정렬(D1 모드에서는 skip)이 없어도 요소가 제자리에 남음.
+                    // resize 파라미터:
+                    //   (scaleX%, scaleY%, changePositions, changeFillPatterns,
+                    //    changeFillGradients, changeStrokePattern, changeLineWidths%, Transformation)
+                    pastedGroup.resize(
+                        scalePct, scalePct,
+                        true, true, true, true,
+                        scalePct,
+                        Transformation.CENTER
+                    );
+                    $.writeln("[grading.jsx] 요소 스케일 적용: " + scalePct.toFixed(1) + "% (CENTER 기준)");
+                    writeLog("STEP 9 D1 resize: Transformation.CENTER, scale=" + linearScale.toFixed(4));
                     linearScaleApplied = linearScale;
                     // [DEBUG LOG] 스케일 적용 후 그룹 bounds
                     try {
@@ -1725,17 +1739,85 @@ function main() {
                 writeLog("STEP 9B 교체용요소 scale 생략 (" + skipReason + ")");
             }
 
-            // ===== STEP 10 (Phase 2): 조각별 개별 정렬 =====
-            // 왜 바뀌는가:
-            //   - 기존 alignToBodyCenter는 요소 전체 그룹을 한 번에 몸판 중앙으로 이동.
-            //   - 결과: 앞판/뒷판/소매 위에 각각 놓여야 할 요소들이 공중에 한 덩어리로 모임.
-            //   - 방식 B: 각 요소를 사전 매핑된 조각 중심으로 이동하되,
-            //             원본 designPiece 기준 상대 오프셋을 linearScale로 보존.
+            // ===== STEP 10 (D1 재설계, 2026-04-16): 조각별 개별 정렬 제거 =====
+            // 배경:
+            //   - 기존 Phase 2는 각 요소를 매칭 조각(basePiece) 중심으로 이동 →
+            //     사이즈 커질수록 조각 간격 벌어짐이 요소에 1:1 전가 → 아트보드 초과.
+            //   - 사용자 D1 채택: 요소는 제자리에서 스케일만, 조각별 정렬 전면 skip.
             //
-            // 안전장치 3가지:
-            //   (S1) designPieces/basePieces 수 불일치 → 전체 중심 폴백 + 경고
-            //   (S2) paste된 요소 수 != 사전 기록한 elementCountAtCopy → 폴백 + 경고
-            //   (S3) elementPieceIndex[i]가 -1 또는 basePieces 범위 밖 → 해당 요소만 스킵
+            // USE_D1_MODE = true  → D1 모드 (기본): 조각별 이동 없음, 중심 복원 안전망만
+            // USE_D1_MODE = false → 레거시 Phase 2 (조각별 개별 정렬, 롤백 대비 보존)
+            var USE_D1_MODE = true;
+
+            if (USE_D1_MODE) {
+                // === D1 모드: 조각별 정렬 건너뜀 ===
+                // STEP 9의 Transformation.CENTER 스케일로 이미 요소가 원위치에 크기만 바뀐 상태.
+                // 그룹 해제도 불필요 (폴백 조건 계산도 생략).
+                $.writeln("[grading.jsx] [STEP 10 D1] 조각별 정렬 skip — 요소 중심점 기준 스케일만 유지");
+                writeLog("STEP 10 D1 모드: 조각별 정렬 건너뜀, 요소 중심점 기준 스케일만 유지");
+
+                // 그룹 해제 (이후 bounds/translate 편의를 위해 layerDesign 직속으로 분리)
+                // 왜 해제하나:
+                //   - pastedGroup이 유지되면 레이어 통합 시 불필요한 그룹 래핑이 남을 수 있음.
+                //   - 개별 아이템으로 분리해두면 STEP 11(merge)에서도 깔끔하게 처리됨.
+                var d1Items = [];
+                if (pastedGroup) {
+                    while (pastedGroup.pageItems.length > 0) {
+                        var d1Child = pastedGroup.pageItems[0];
+                        d1Child.move(layerDesign, ElementPlacement.PLACEATEND);
+                        d1Items.push(d1Child);
+                    }
+                    try { pastedGroup.remove(); } catch (eD1Rg) { /* 무시 */ }
+                    pastedGroup = null;
+                }
+
+                // D1 안전망: 요소 전체 중심 vs 아트보드 중심 오차 50pt 초과 시 translate 복원
+                // 왜 필요한가:
+                //   - 기준 AI의 요소가 이미 몸판에서 크게 벗어나 있으면 scale 후 더 벗어남.
+                //   - 오차 50pt 이하면 무시 (디자이너 의도된 미세 오프셋 존중).
+                if (d1Items.length > 0) {
+                    try {
+                        var abRect = baseDoc.artboards[0].artboardRect; // [l, t, r, b]
+                        var abCx = (abRect[0] + abRect[2]) / 2;
+                        var abCy = (abRect[1] + abRect[3]) / 2;
+
+                        // 요소 전체 합집합 bounds
+                        var d1MinL = Infinity, d1MaxT = -Infinity, d1MaxR = -Infinity, d1MinB = Infinity;
+                        for (var d1i = 0; d1i < d1Items.length; d1i++) {
+                            var d1b = d1Items[d1i].geometricBounds;
+                            if (d1b[0] < d1MinL) d1MinL = d1b[0];
+                            if (d1b[1] > d1MaxT) d1MaxT = d1b[1];
+                            if (d1b[2] > d1MaxR) d1MaxR = d1b[2];
+                            if (d1b[3] < d1MinB) d1MinB = d1b[3];
+                        }
+                        var elemCx = (d1MinL + d1MaxR) / 2;
+                        var elemCy = (d1MinB + d1MaxT) / 2;
+
+                        var ddx = abCx - elemCx;
+                        var ddy = abCy - elemCy;
+
+                        writeLog("STEP 10 D1 최종 요소 전체 bounds=["
+                            + d1MinL.toFixed(1) + "," + d1MaxT.toFixed(1)
+                            + "," + d1MaxR.toFixed(1) + "," + d1MinB.toFixed(1) + "]"
+                            + " size=" + (d1MaxR - d1MinL).toFixed(1) + "x" + (d1MaxT - d1MinB).toFixed(1));
+
+                        if (Math.abs(ddx) > 50 || Math.abs(ddy) > 50) {
+                            for (var d1pi = 0; d1pi < d1Items.length; d1pi++) {
+                                d1Items[d1pi].translate(ddx, ddy);
+                            }
+                            writeLog("STEP 10 D1 중심 복원: dx=" + ddx.toFixed(1) + ", dy=" + ddy.toFixed(1));
+                            $.writeln("[grading.jsx] [STEP 10 D1] 중심 복원 translate: dx=" + ddx.toFixed(1) + ", dy=" + ddy.toFixed(1));
+                        } else {
+                            writeLog("STEP 10 D1 중심 복원 불필요 (오차 50pt 미만, dx=" + ddx.toFixed(1) + ", dy=" + ddy.toFixed(1) + ")");
+                        }
+                    } catch (eD1Safety) {
+                        writeLog("[WARN] STEP 10 D1 중심 복원 실패: " + eD1Safety);
+                    }
+                } else {
+                    writeLog("STEP 10 D1: 요소 없음 (d1Items=0)");
+                }
+            } else {
+            // === 레거시 Phase 2 경로 (USE_D1_MODE=false 일 때만 실행, 롤백 대비 보존) ===
             var useFallback = false;
             var fallbackReason = "";
 
@@ -1838,6 +1920,7 @@ function main() {
                     }
                 } catch (eBoundsLog) { /* 무시 */ }
             }
+            } // end of else (USE_D1_MODE=false 레거시 Phase 2 블록)
         } else {
             $.writeln("[grading.jsx] 경고: 붙여넣은 요소가 없음 — 디자인 파일 확인 필요");
             // [DEBUG LOG] S 사이즈 증상 — paste 후 선택된 요소 0개
