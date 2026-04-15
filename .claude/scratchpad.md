@@ -67,6 +67,121 @@ grader/
 
 ## 구현 기록 (developer)
 
+### [2026-04-15] 작업 흐름 재설계 Phase 4 (OrderGenerate 통합) — 계획 제안
+
+#### 기존 분석
+- **SizeSelect.tsx (518줄)**: 프리셋/디자인 select + 주문서 업로드(`run_python parse_order`) + 사이즈 체크박스 그리드 + baseSize 드롭다운. `saveGenerationRequest`로 sessionStorage에 저장 후 `/generate` 이동.
+- **FileGenerate.tsx (663줄)**: `loadGenerationRequest` → `loadPresets`/`loadDesigns` → `handleStart`:
+  - `$APPDATA/outputs/{timestamp}/` 생성
+  - Illustrator 존재 확인 (`find_illustrator_exe`)
+  - 있으면 `handleStartIllustrator` (각 사이즈마다 `resolveSvgContent` → `write_file_absolute`로 temp SVG → config.json 기록 → `run_illustrator_script`)
+  - 없으면 `handleStartPythonFallback` (calc_scale + generate_graded PDF)
+- **grading.jsx**: config에 `designAiPath` 우선, `designPdfPath` 폴백. `resolveDesignFile()` 이미 분기 처리 중. 따로 baseSize 안 씀(SVG 치수로 자체 계산).
+- **WorkSession 타입**: `workFolder`, `baseAiPath`, `selectedPresetId?`, `createdAt`만 있음. 주문서 경로 / baseSize 필드 없음.
+
+#### 변경 계획
+| 파일 | 변경 | 예상 라인 |
+|------|------|----------|
+| `src/pages/OrderGenerate.tsx` | 신규 (SizeSelect + FileGenerate 통합, Illustrator 전용) | ~450 |
+| `src/main.tsx` | `/generate` → OrderGenerate로 교체, import 변경 | +2/-2 |
+| `src/App.css` | (기존 `.size-section`, `.gen-result` 등 재활용, 신규 스타일 최소) | 선택 |
+
+**유지 (이번 세션 건드리지 않음)**:
+- `src/pages/FileGenerate.tsx` / `SizeSelect.tsx` — Phase 5에서 삭제 (지금은 import만 제거)
+- `src/stores/designStore.ts`, `generationStore.ts` — Phase 5에서 삭제
+- `src/types/session.ts` — 주문서 경로는 OrderGenerate 내부 state로만, session 스키마 수정 불필요
+- `grading.jsx`, `pdf_handler.py`, `order_parser.py` — 수정 없음
+
+#### 세부 설계
+
+**세션 가드 (페이지 진입 시 useEffect)**:
+```
+const s = loadWorkSession();
+if (!s?.workFolder || !s?.baseAiPath) { navigate("/work"); return; }
+if (!s.selectedPresetId) { navigate("/pattern"); return; }
+```
+
+**상태 (useState)**:
+- `session: WorkSession` (로드된 세션)
+- `preset: PatternPreset | null` (selectedPresetId로 조회)
+- `baseAiName: string` (baseAiPath에서 파일명 추출 + 확장자 제거)
+- `selectedSizes: Set<string>` (Q7: 수동 체크 허용)
+- `sizeQuantities: Map<string, number>` (주문서에서 추출한 수량, 옵션)
+- `orderResult: OrderParseResult | null` (주문서 메타)
+- `orderLoading: boolean`
+- `baseSize: string` (디자인 기준 사이즈, 기본 "L")
+- `results: GenerationResult[]`
+- `generating: boolean`
+- `globalError: string`
+
+**UI 섹션 구성**:
+1. **작업 요약 카드** (세션 정보 3줄):
+   - 🎨 기준 AI: `{baseAiName.ai}`
+   - 📁 작업 폴더: `{workFolder}`
+   - ✅ 선택 패턴: `{preset.name}` (조각 N개, 사이즈 M개)
+2. **주문서 (선택)** — `handleExcelUpload` (SizeSelect 로직 그대로 이식)
+3. **사이즈 선택** — `.size-grid` 체크박스 (프리셋 등록 사이즈만 활성화). 주문서 업로드 시 자동 체크
+4. **기준 사이즈 드롭다운** (baseSize 선택, 프리셋 등록 사이즈 중)
+5. **생성 시작 버튼** + 진행 상태
+6. **결과 목록** (`.gen-result-list` 재활용) + "작업 폴더 열기" 버튼
+
+**핵심 차이 (FileGenerate 대비)**:
+| 항목 | 기존 | 신규 OrderGenerate |
+|------|------|-------------------|
+| 입력 | GenerationRequest + DesignFile | WorkSession + preset |
+| 출력 폴더 | `$APPDATA/outputs/{timestamp}/` | **`session.workFolder`** (바로 저장) |
+| 출력 파일명 | `{sanitize(design.name)}_{size}.eps` | **`{sanitize(baseAiName)}_{size}.eps`** (Q6) |
+| config | `designAiPath=storedPath` or `designPdfPath` | **항상 `designAiPath=session.baseAiPath`** |
+| Python 폴백 | `handleStartPythonFallback` 존재 | **제거** (Q5) |
+| Illustrator 미설치 | Python으로 대체 | **에러 다이얼로그**: "Illustrator 설치 필요" |
+
+**출력 파일명 규칙 (Q6)**:
+```
+baseAiPath = "G:\...\V넥\농구_V넥_XL.ai"
+baseAiName = "농구_V넥_XL"   // 확장자 제거
+out = `{session.workFolder}\\{sanitizeFileName(baseAiName)}_{size}.eps`
+```
+이미 파일 있으면 덮어쓰기 (Phase 4는 경고 없음, Phase 5에서 다이얼로그 추가).
+
+**config.json 포맷 (grading.jsx 호환)**:
+```json
+{
+  "patternSvgPath": "{scriptsDir}\\temp_pattern_{size}.svg",
+  "outputPath": "{workFolder}\\{baseAiName}_{size}.eps",
+  "resultJsonPath": "{scriptsDir}\\result.json",
+  "patternLineColor": "auto",
+  "designAiPath": "{session.baseAiPath}"
+}
+```
+→ grading.jsx는 이미 `designAiPath` 우선 처리. 수정 없음.
+
+**Illustrator 없을 때 처리**:
+```
+if (!aiExePath) {
+  setGlobalError("Adobe Illustrator가 설치되지 않았거나 찾을 수 없습니다. (Q5: Python 폴백 미지원)");
+  setGenerating(false);
+  return;
+}
+```
+
+#### 위험/고려
+- **세션 가드**: workFolder/baseAiPath 없을 때 `/work`로, selectedPresetId 없을 때 `/pattern`으로 분기. useEffect 1회 실행.
+- **기존 FileGenerate 삭제 시점**: Phase 5. 이번 세션은 main.tsx import만 교체 (파일 존치). 동시에 돌리지 않도록 `/generate` 라우트만 새 컴포넌트로.
+- **generationStore 참조**: OrderGenerate는 generationStore를 쓰지 않음 (session에서 직접 읽기). 기존 FileGenerate/SizeSelect는 남아있지만 라우트 연결이 끊어지므로 동작 안 함.
+- **baseSize**: WorkSession에 저장 안 하고 페이지 로컬 상태로만 (기본 "L"). Phase 5에서 session 확장 검토.
+- **주문서 경로 세션 저장**: 계획서 section 3.1엔 `orderFilePath?` 필드 있지만 이번 MVP에선 불필요(세션 재진입 시 다시 업로드해도 OK). 스킵.
+- **에러 복원력**: 한 사이즈 실패해도 다음 사이즈 진행 (FileGenerate 패턴 유지).
+- **z-index/CSS**: 기존 `.size-section`, `.size-grid`, `.size-cell`, `.gen-result-list`, `.size-footer` 그대로 재활용. 신규 CSS 0 또는 최소.
+
+#### 구현 단계 (사용자 승인 후)
+1. `src/pages/OrderGenerate.tsx` 신규 작성 (~450줄)
+2. `src/main.tsx` import 교체 (FileGenerate → OrderGenerate)
+3. `npx tsc --noEmit` 검증
+4. `npm run build` 검증
+5. 실제 Illustrator 실행 테스트는 tester가 수동
+
+---
+
 📝 구현한 기능: Phase 3 즐겨찾기 (⭐ 토글 + 필터, 가상 폴더 제외)
 
 | 파일 경로 | 변경 내용 | 신규/수정 |
@@ -100,6 +215,61 @@ grader/
 
 검증: `npx tsc --noEmit` PASS / `npm run build` PASS (dist 303KB gzip 94KB)
 
+### [2026-04-15] Phase 4 OrderGenerate 통합 (구현)
+
+📝 구현한 기능: SizeSelect + FileGenerate → OrderGenerate 한 페이지 통합 (Illustrator 전용)
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| `src/pages/OrderGenerate.tsx` | 신규 작성. 세션 가드(workFolder/baseAiPath/selectedPresetId) → 프리셋 로드 → 사이즈 선택(엑셀 주문서 업로드 옵션) → baseSize 드롭다운 → Illustrator 호출 → 결과 목록 → "작업 폴더 열기" / "새 작업 시작". 출력: `{workFolder}\{baseAiName}_{size}.eps`. config.json에 `designAiPath=session.baseAiPath` 고정. ~530줄. | 신규 |
+| `src/main.tsx` | import FileGenerate → OrderGenerate 교체, `/generate` 라우트 엘리먼트 교체, 주석 정리 | 수정 |
+
+핵심 로직 요약:
+- **세션 가드**: `useEffect` 1회. workFolder/baseAiPath 없으면 /work, selectedPresetId 없으면 /pattern, 프리셋이 삭제돼 있으면 /pattern. 로드 완료까지 `loadingInit`로 placeholder.
+- **출력 규칙**: 구 FileGenerate는 AppData/outputs/{timestamp} 밑에 저장했지만, 신규는 `session.workFolder` 루트에 바로 저장. 파일명은 `getFileBaseName(baseAiPath) → sanitizeFileName → {base}_{size}.eps`.
+- **config.json**: grading.jsx 호환 포맷 유지. `designAiPath`만 사용(PDF 분기 제거). `patternLineColor: "auto"` 그대로.
+- **엔진**: Illustrator 전용. `find_illustrator_exe` 실패 시 한국어 에러 다이얼로그 후 종료. Python 폴백 로직 포팅하지 않음.
+- **주문서**: 선택 사항. 업로드 안 해도 수동 체크만으로 진행 가능. SizeSelect의 `handleExcelUpload` 로직 그대로 이식.
+- **baseSize**: 페이지 로컬 state. 기본 "L", 프리셋에 "L" 없으면 첫 번째 사이즈. 세션 스키마 수정 X.
+- **"새 작업 시작"**: 결과 화면에만 노출. `clearWorkSession() → navigate("/work")`.
+- **에러 복원력**: 한 사이즈 실패해도 다음 사이즈 계속 진행(FileGenerate 동일 패턴).
+
+💡 tester 참고:
+- **테스트 전 준비**:
+  1. Adobe Illustrator 설치된 환경 필요 (미설치 시 에러 메시지만 확인 가능)
+  2. /work에서 작업 폴더 + AI 파일 선택 → /pattern에서 프리셋 선택 → /generate 진입
+- **테스트 방법**:
+  1. 세션 가드: 브라우저 새로고침/URL 직접 입력 시 /work로 리다이렉트되는지
+  2. 작업 요약 카드에 "기준 AI / 작업 폴더 / 선택 패턴" 3줄 정확히 표시
+  3. 엑셀 주문서 없이 체크박스만으로 "파일 생성 시작" 가능
+  4. 엑셀 주문서 업로드 → 사이즈 자동 체크 + 수량 뱃지 표시
+  5. 기준 사이즈 드롭다운 → 프리셋 등록 사이즈만 옵션
+  6. 실행 중에는 모든 버튼/체크박스 disabled
+  7. 생성 완료 → 작업 폴더에 `{baseAiName}_{size}.eps` 파일들이 존재
+  8. "작업 폴더 열기" 버튼 → OS 파일 탐색기로 session.workFolder 오픈
+  9. "새 작업 시작" 버튼 → 세션 초기화 + /work 진입
+- **정상 동작**:
+  - Illustrator 미설치 시: "Adobe Illustrator가 설치되지 않았거나 찾을 수 없습니다. 설치 후 재시도해주세요." 다이얼로그만 표시 후 멈춤
+  - Drive 프리셋 사용 시에도 svgPathBySize 경유해서 정상 생성 (resolveSvgContent 통합 경로)
+  - 한 사이즈 실패해도 나머지 사이즈는 계속 진행
+- **주의할 입력**:
+  - **반드시 실제 Illustrator 실행 테스트 필요** (자동화 불가)
+  - 프리셋이 Phase 이후 삭제된 경우: /pattern으로 리다이렉트되는지
+  - 작업 폴더가 Drive 공유 드라이브인 경우 쓰기 권한 확인
+  - baseAiPath에 한글/공백/특수문자 포함되어도 sanitizeFileName이 치환
+
+⚠️ reviewer 참고:
+- **기존 FileGenerate/SizeSelect/designStore/generationStore는 파일은 남아있지만 라우트 연결이 끊어져 동작하지 않음** (Phase 5에서 삭제 예정). `/size` 리다이렉트가 `/generate`로 가므로 구 SizeSelect도 렌더되지 않음.
+- grading.jsx는 수정 없음. 기존 `designAiPath` 우선 분기가 이미 있어 재활용만 함.
+- 세션 스키마(`WorkSession`)는 수정 X (baseSize/주문서경로 모두 페이지 로컬로만). Phase 5에서 필요 시 확장 검토.
+- 결과 화면에 `gen-result__path` 클래스 사용 — 기존 CSS에 없으면 code 태그 기본 스타일로 표시됨. 문제 있으면 CSS 추가 필요.
+- `outputDir`는 session.workFolder 그대로. "폴더 열기"는 openPath 그대로 재활용.
+- Python 폴백을 의도적으로 뺐기 때문에, 미설치 환경에서는 테스트 불가 — 이건 Phase 4 요구사항 그대로.
+
+검증: `npx tsc --noEmit` PASS / `npm run build` PASS (dist 304KB gzip 94KB)
+
+---
+
 ## 테스트 결과 (tester)
 (Phase 3 구현 후 검증)
 
@@ -124,3 +294,4 @@ grader/
 | 2026-04-15 | developer | DRIVE 뱃지 제거 + 조각 카운팅 개선 (M 명령어) | 커밋 b01c974 |
 | 2026-04-15 | pm | 11개 커밋 push + scratchpad 정리 + Phase 3 착수 | 완료 |
 | 2026-04-15 | developer | Phase 3 즐겨찾기 (favoritesStore + ⭐ 토글 + 필터) | tsc/build PASS |
+| 2026-04-15 | developer | Phase 4 OrderGenerate 통합 (SizeSelect+FileGenerate → 1페이지) | tsc/build PASS |
