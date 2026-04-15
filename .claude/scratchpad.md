@@ -1,32 +1,29 @@
 # 작업 스크래치패드
 
 ## 현재 작업
-- **요청**: Drive 연동을 "경량 자동 동기화" 방식(옵션 4)으로 리팩터 — 가져오기 버튼 제거, 자동 스캔/병합
-- **상태**: ✅ developer 구현 완료 (tsc/build PASS) → tester 검증 대기
-- **현재 담당**: tester
-- **사용자 결정 (A-B-B-A-B)**:
-  - Q1=자동 동기화 (패턴관리 진입 시)
-  - Q2=파일 사라지면 카드 유지 + "파일 없음" 배지
-  - Q3=경고는 로그만, 설정에서 최근 경고 보기
-  - Q4=meta.json 유지 (안정 식별자)
-  - Q5=옵션 4 채택
+- **요청**: 작업 흐름 재설계 Phase 3 — 즐겨찾기 (⭐ 토글 + favorites.json + 필터)
+- **상태**: 🔨 developer 착수 예정
+- **현재 담당**: developer
+- **상세 계획**: `PLAN-WORKFLOW-REDESIGN.md` (865줄)
+- **사용자 결정**: A-A-A-A-A-A-A-B (권장안, Q4=A favorites.json 로컬)
 
-### 🔜 진행 순서
-1. 🔨 Phase A (1일): 가져오기 버튼 즉시 자동 실행 + 경고 alert 제거 + 앱 시작/페이지 진입 자동 동기화
-2. 🔨 Phase B (1일): DriveImportModal 파일 삭제 + mergeDriveScanResult 전용 함수 + 쿨다운
-3. 🧪 실측 + 검증
-4. ✅ 커밋 → 푸시
-5. (Phase C는 FS watcher + "파일 없음" 배지, Phase 2에서)
+### 🔜 남은 Phase
+- **Phase 3 (1~2일, 진행 중)**: 즐겨찾기
+- Phase 4 (2~3일): OrderGenerate 통합 (MVP 완료)
+- Phase 5 (2~3일): PDF 파이프라인 제거 (MVP 후)
+- Phase 6 (1일): 문서 정리
 
 ## 진행 현황표
 | 단계 | 내용 | 상태 |
 |------|------|------|
-| 0~6 | 기획/세팅/프리셋/디자인/사이즈/CMYK/통합테스트 | ✅ 완료 |
-| 7 | Illustrator ExtendScript + APCA | ✅ 완료 |
-| 8 | 설치형 배포 준비 | ⏸ 보류 (eda27b9) |
-| 9 | Drive 연동 Phase 1 (가져오기 방식) | ✅ 커밋 bd0f752~4367af0 |
-| 10 | Drive 연동 옵션 4 (자동 동기화 리팩터) | 🔨 착수 |
-| 11 | Drive 연동 Phase 2 (양방향/watcher/삭제 감지) | ⏳ 대기 |
+| 0~7 | 기본 기능(패턴/디자인/사이즈/CMYK/Illustrator/APCA) | ✅ 완료 |
+| 8 | 설치형 배포 준비 | ⏸ 보류 (커밋 eda27b9) |
+| 9 | Drive 연동 Phase 1 → 옵션 4 (자동 동기화) | ✅ 커밋 8ec96a3 외 |
+| 10 | 작업 흐름 Phase 1 (WorkSetup + 세션) | ✅ 커밋 3efa370, ad3d073 |
+| 11 | Phase 2 (패턴 선택 모드) | ✅ 커밋 3e5a069 |
+| 11-Plus | 카드 간소화 + 조각 카운팅 + DRIVE 뱃지 제거 | ✅ 커밋 bc20e24, b01c974 |
+| 12 | Phase 3 (즐겨찾기) | 🔨 착수 |
+| 13 | Phase 4 (OrderGenerate 통합) | ⏳ 대기 |
 
 ## 프로젝트 핵심 정보
 
@@ -39,377 +36,91 @@
 ### 주요 파일
 ```
 grader/
-├── src/pages/ (PatternManage, DesignUpload, SizeSelect, FileGenerate, Settings)
-├── src/components/ (Sidebar, CategoryTree, DriveImportModal)
+├── src/pages/ (WorkSetup, PatternManage, DesignUpload, SizeSelect, FileGenerate, Settings)
+├── src/components/ (Sidebar, CategoryTree)
 ├── src/services/ (driveSync, svgResolver)
-├── src/stores/ (presetStore, designStore, categoryStore, generationStore, svgCacheStore, settingsStore)
-├── src/types/ (pattern, design, generation, order)
-├── src-tauri/ (Rust: run_python + Illustrator 커맨드 + capabilities)
-├── python-engine/ (PDF 분석)
-├── illustrator-scripts/grading.jsx (ES3, 1610줄)
-└── REPORT*.md, PLAN-GDRIVE-SYNC.md
+├── src/stores/ (sessionStore, presetStore, categoryStore, designStore, generationStore, svgCacheStore, settingsStore)
+├── src/types/ (pattern, design, generation, order, session)
+├── src-tauri/ (Rust + capabilities)
+├── python-engine/ (PDF 분석 + 주문서 파서)
+├── illustrator-scripts/grading.jsx (ES3, ~1610줄)
+└── REPORT*.md, PLAN-GDRIVE-SYNC.md, PLAN-WORKFLOW-REDESIGN.md
 ```
 
 ### 데이터 저장
-- `$APPDATA/com.grader.app/` 아래 presets.json / categories.json / designs.json / settings.json + designs/*.pdf
-- Drive: `G:\공유 드라이브\디자인\00. 2026 커스텀용 패턴 SVG`
-- Drive 스캔: 최대 깊이 20, 파일명 `{패턴명}_{사이즈}.svg` (구분자 `[\s_\-]+` 허용)
+- `$APPDATA/com.grader.app/` presets.json / categories.json / settings.json
+- Drive: `G:\공유 드라이브\디자인\00. 2026 커스텀용 패턴 SVG` (자동 동기화 60초 쿨다운)
+- 세션: sessionStorage key `grader.session` (workFolder, baseAiPath, selectedPresetId)
+- (Phase 3 신규) `$APPDATA/com.grader.app/favorites.json`: preset stableId 배열
 
 ## 기획설계 (planner-architect)
 
-### [2026-04-15] 작업 흐름 재설계 계획
+### 상세 계획: `PLAN-WORKFLOW-REDESIGN.md`
+- Phase 1~6 전체 계획 (MVP 5~7일)
+- 사용자 결정 Q1~Q8 확정 (권장안 A-A-A-A-A-A-A-B)
 
-**산출물**: `PLAN-WORKFLOW-REDESIGN.md` (500줄+)
-**핵심**: 4단계(프리셋 중심) → 3단계(작업 중심) 재설계 — `/work`(작업선택) → `/pattern`(패턴) → `/generate`(주문서+생성)
-**주요 변경**: (1) DesignUpload 삭제 + designs.json 폐기 + 1회성 세션(sessionStorage), (2) PDF→AI 전용(Illustrator 필수), (3) 출력을 `session.workFolder/grader-output/`로, (4) SizeSelect+FileGenerate→OrderGenerate 통합, (5) 즐겨찾기 favorites.json 신규, (6) Python 엔진 parse_order 전용으로 축소
-**Phase**: 1=뼈대(2h) / 2=패턴선택 / 3=즐겨찾기 / 4=OrderGenerate / 5=PDF제거 / 6=문서. 총 8~12일, MVP(1~4) 5~7일
-**사용자 의사결정 8개 대기**: Q1(PDF완전제거), Q2(AI미리보기), Q3(designs.json처리), Q4(즐겨찾기저장), Q5(Illustrator필수), Q6(파일명규칙), Q7(수동수정허용), Q8(MVP범위)
-
-### [2026-04-15] Drive 폴더 직접 표시 방식 재검토 → 옵션 4 채택
-
-**결론**: 사용자 속뜻(가져오기 버튼 귀찮음 + 경고 부담)을 충족하되, 그레이딩 호환성 유지.
-
-**기각된 대안**:
-- 옵션 2 (파일 그대로 표시): 사이즈 그룹핑 상실 → 그레이딩 붕괴
-- 옵션 3 (실시간 메모리): 치수 데이터 보존 필요 → 샛길 복잡도 증가
-
-**옵션 4 변경 범위 (예상 -450줄/+190줄 = 순 -260줄)**:
-- DriveImportModal.tsx 파일 삭제
-- PatternManage 진입 시 자동 스캔 + 쿨다운 60초
-- 경고 alert 제거 (콘솔 로그)
-- mergeDriveScanResult() 전용 함수 (치수 보존 + svgPathBySize 갱신)
-
-**치수 보존 전략**: stableId 매칭 시 기존 presets.json의 사용자 입력 치수 **덮어쓰지 않음**
+### Phase 3 요구사항 (이번 세션)
+- `favorites.json` 신규 스토어 (로컬, Drive 동기화 X)
+- 프리셋 카드에 ⭐ 토글
+- 상단에 "⭐ 즐겨찾기만 보기" 필터
+- 즐겨찾기 가상 폴더 (카테고리 트리 최상단)
 
 ## 구현 기록 (developer)
 
-### [2026-04-15] Drive 연동 옵션 4 — 자동 동기화 리팩터
-
-📝 구현한 기능: Drive 가져오기 버튼/모달을 제거하고, PatternManage 진입 시 자동으로 스캔·병합하는 경량 동기화.
+📝 구현한 기능: Phase 3 즐겨찾기 (⭐ 토글 + 필터, 가상 폴더 제외)
 
 | 파일 경로 | 변경 내용 | 신규/수정 |
 |----------|----------|----------|
-| src/services/driveSync.ts | `mergeDriveScanResult()` 함수 + `MergeResult` 타입 추가 (+180줄) | 수정 |
-| src/pages/PatternManage.tsx | DriveImportModal 제거, `runAutoSync` useCallback + 쿨다운 useRef + 자동 트리거 useEffect 추가, 가져오기 버튼 삭제 | 수정 |
-| src/components/DriveImportModal.tsx | 파일 전체 삭제 (-388줄) | 삭제 |
-
-**핵심 구현 포인트**:
-- **치수 보존 전략**: `mergeDriveScanResult`에서 stableId 매칭 시 `{...existing, pieces: updatedPieces, driveFolder, updatedAt}` 구조로 기존 preset을 유지. `sizes`, `svgData`, `svgBySize`, `name`, `categoryId`는 spread로 이월되어 **덮어쓰지 않음**. 오직 `svgPathBySize`만 최신 스캔 결과로 교체.
-- **파일 사라져도 카드 유지**: 이번 스캔에서 매칭되지 않은 기존 프리셋은 `updatedStableIds` 세트를 기준으로 필터링해서 그대로 `mergedPresets`에 포함 (Q2-B 사용자 결정).
-- **쿨다운 60초**: `useRef<number>(0)`로 `lastAutoScanRef` 보유, `Date.now() - lastAutoScanRef.current < 60000`이면 스킵 + console.info. 중복 실행 방지용 `autoScanInFlightRef` 별도.
-- **경고 alert 제거**: 모든 경고/완료 알림은 `console.info/warn`만 사용 (Q3-B).
-- **useEffect 의존성**: `[isLoadSuccess, driveSyncEnabled, drivePatternRoot]` 3개만. presets/categories를 deps에 넣으면 동기화 후 presets 갱신 → useEffect 재실행 → 무한 루프 위험이 있어 의도적으로 제외 (쿨다운이 실제 스캔은 막지만 useEffect 재실행 자체도 피함).
-
-**검증 결과**:
-- `npx tsc --noEmit` PASS (에러 0)
-- `npm run build` PASS (vite 780ms, 318.70 kB)
+| `src/stores/favoritesStore.ts` | favorites.json 로드/저장 (presetStore 패턴: LoadResult, .backup.json, 중복 제거). `getFavoriteKey(preset)` 헬퍼로 stableId/id 폴백 | 신규 |
+| `src/pages/PatternManage.tsx` | `favoriteKeys`(Set)/`showFavoritesOnly` state, 로드 useEffect, `handleToggleFavorite`(낙관적 업데이트+롤백+stopPropagation), `filteredPresets`에 즐겨찾기 필터 추가, 툴바에 "⭐ 즐겨찾기만 보기" pill 버튼 + 개수 뱃지, 카드 우상단 ⭐ 토글 버튼 | 수정 |
+| `src/App.css` | `.preset-card__check` 우상단→좌상단 이동, `.preset-card__fav-toggle`(+`--active`) 신규, `.pattern-toolbar`+`.pattern-toolbar__fav-filter`(+`--active`)+`.pattern-toolbar__fav-icon`+`.pattern-toolbar__fav-count` 신규 | 수정 |
 
 💡 tester 참고:
-- 테스트 방법:
-  1. Settings에서 driveSyncEnabled=true + drivePatternRoot 설정 후 PatternManage 진입 → 자동 스캔 확인 (개발자 도구 콘솔에 `[Drive 자동 동기화] 스캔 시작:` 로그)
-  2. 이미 사이즈 치수를 입력해둔 Drive 프리셋이 있는 상태에서 PatternManage 재진입 → 치수 값이 유지되는지 확인
-  3. 60초 내 재진입 → `[Drive 자동 동기화] 쿨다운 중 (N초 남음) — 스킵` 로그
-  4. Drive 파일을 임의로 삭제 후 60초 경과 후 재진입 → 카드는 남아있지만 svgPathBySize에서 해당 사이즈가 빠졌는지 확인
-- 정상 동작:
-  - 가져오기 버튼 화면에서 사라짐
-  - 신규 프리셋만 있으면 `[Drive 자동 동기화] 완료 — 신규 N, 갱신 0, 카테고리 M` 로그
-  - 기존 프리셋 경로만 갱신되면 `신규 0, 갱신 N` 로그
-- 주의할 입력:
-  - driveSyncEnabled=false인 상태 → runAutoSync가 조기 return (스캔 안 함)
-  - drivePatternRoot가 undefined → 조기 return
+- **테스트 방법**:
+  1. 패턴 페이지 진입 → 카드 우상단에 빈 별(☆) 표시 확인
+  2. 별 클릭 → 채워진 별(★, 앰버색)로 변경 + `$APPDATA/com.grader.app/favorites.json`에 stableId/id 저장 확인
+  3. 툴바의 "⭐ 즐겨찾기만 보기" 클릭 → ★ 표시된 카드만 노출
+  4. 즐겨찾기 개수 뱃지가 ★ 총개수와 일치
+  5. **선택 모드(워크세션 있음)**: 카드 클릭 시 좌상단 ✓ / 우상단 ★ 동시 노출되어도 겹치지 않음
+  6. ★ 버튼 클릭 시 카드 선택이 같이 일어나지 않음 (stopPropagation 검증)
+- **정상 동작**:
+  - 앱 재시작 후에도 즐겨찾기 유지
+  - Drive 프리셋은 stableId 기반이라 Drive 폴더명이 바뀌어도 즐겨찾기 유지
+  - 저장 실패 시 UI 롤백 + alert
+- **주의할 입력**:
+  - favorites.json 수동 손상(배열이 아님) → 로드 실패 시 빈 Set + 경고만 찍고 앱 정상 동작
+  - 같은 키를 중복 저장 시도 → saveFavorites 내부 Set으로 자동 중복 제거
+  - "전체 해제"(빈 배열 저장)는 정상 허용 (presetStore와 규칙 다름 — favorites는 비어있는 것도 정상)
 
 ⚠️ reviewer 참고:
-- `mergeDriveScanResult`의 "미매칭 기존 프리셋 보존" 로직(driveSync.ts 안쪽 for 루프). `updatedStableIds`가 Set이므로 O(1)이고, stableId 없는 로컬 업로드 프리셋도 그대로 유지.
-- useEffect deps에 `runAutoSync`를 넣지 않은 설계 결정(의존성 경고는 eslint-disable로 처리). 무한 루프 방지 목적.
-- DriveImportModal.tsx 삭제했으나 관련 CSS 클래스(`.drive-import-modal*`)는 index.css에 그대로 남아있음(다른 페이지에서 쓰지 않아 dead code). 정리는 reviewer 판단.
+- ✓(__check)는 `pointer-events: none`인데 ★(__fav-toggle)는 `z-index: 3`로 위에 있음 → 별이 선택 체크를 가리지 않도록 **좌/우로 위치 자체를 분리**함
+- 가상 폴더(즐겨찾기 섹션을 CategoryTree 최상단에 추가)는 계획에서 명시적으로 **제외** — Phase 3-후속으로 보류
+- Drive 동기화 대상 X: favorites.json은 로컬 개인 취향이라 Drive에 올리지 않음 (사용자 결정 Q4=A)
+- `handleToggleFavorite`는 `favoriteKeys` deps로 useCallback 되어 있어 Set 참조가 바뀌면 새 함수 생성 — 낙관적 업데이트 시점에 최신 Set을 참조하기 위함
 
-### [2026-04-15] 패턴 카드 간소화 + 조각 카운팅
-
-📝 구현한 기능: 패턴관리 카드 UI를 "패턴명/조각수/사이즈범위"만 남긴 1/3 높이 2열 그리드로 간소화. 조각 수는 SVG 실제 내용(path/polyline/polygon)을 파싱해서 표시. "+ 새 프리셋 추가" 버튼, 미리보기, 경로, 생성일, 편집/삭제 버튼 모두 제거.
-
-| 파일 경로 | 변경 내용 | 신규/수정 |
-|----------|----------|----------|
-| src/services/svgResolver.ts | `countSvgPieces(svgContent)` 추가 — DOMParser로 <path>/<polyline>/<polygon> 카운팅 (+38줄) | 수정 |
-| src/types/pattern.ts | `getSizeRangeText(sizes)` 헬퍼 추가 — SIZE_LIST 순서 정렬 후 "최소 ~ 최대" (+31줄) | 수정 |
-| src/pages/PatternManage.tsx | 카드 JSX 간소화 + PresetCardPieceCount 서브컴포넌트 + 추가/편집/삭제 핸들러 제거 (-80줄) | 수정 |
-| src/App.css | `.preset-grid` 2열 고정 + `.preset-card` padding 축소 + `.preset-card__title-row/__meta-row` 추가 (±32줄) | 수정 |
-
-**핵심 구현 포인트**:
-- **조각 수(실제 카운팅)**: `src/services/svgResolver.ts`에 `countSvgPieces` 추가. `DOMParser`로 SVG를 image/svg+xml로 파싱 후 `querySelectorAll("path, polyline, polygon").length` 반환. `<g>` 그룹 내부도 재귀 탐색됨. parsererror/예외 시 0.
-- **비동기 로드 전략**: `PresetCardPieceCount` 소컴포넌트를 PatternManage 외부에 선언. useState 초기값을 **동기 계산**으로 시도(Local/svgData 인라인 있으면 즉시 결과, 없으면 null). useEffect가 null일 때만 `svgCacheStore.getSvg(firstPath)`로 Drive 경로를 읽어 `countSvgPieces` 반영. 언마운트 가드(`cancelled`)로 race 방지. deps는 `preset.id`만.
-- **사이즈 범위**: `getSizeRangeText(sizes)` — SIZE_LIST 인덱스 기준 정렬 후 `${sorted[0]} ~ ${sorted[last]}`. 길이 0/1은 각각 빈 문자열/단일. 카드에선 `getPresetSizeKeys(preset)`로 프리셋 전체 piece의 사이즈 키 합집합을 만든 뒤 넘김.
-- **제거 범위**:
-  - "+ 새 프리셋 추가" 버튼 JSX + `.preset-actions` 래퍼 → 빈 힌트 문구만 "자동 동기화" 안내로 교체
-  - 카드 내부: 미리보기(`preset-card__preview`), 경로(`preset-card__category`), 생성일(`preset-card__date`), 조각별 상세(`preset-card__pieces`), 편집/삭제 버튼(`preset-card__actions`)
-  - 핸들러 제거: `handleCreate/handleEdit/handleDelete`, `isDrivePreset/isDriveCategoryById/showDriveReadonlyToast` (호출부 전부 소멸)
-  - `setEditingId`는 미사용 → `const [editingId]` 읽기 전용으로 변경
-- **편집 폼 JSX 자체는 유지**: 지시서 "폼은 남겨둘 수 있음" 반영. 진입 경로가 없어 실제론 dead code지만 `mode === "edit" | "create"` 분기 + setter 사용처가 JSX 내부에 있어 TS `noUnusedLocals` 통과.
-- **CSS 그리드**: `grid-template-columns: repeat(2, 1fr); gap: 12px` 고정 2열. 768px 미만은 1열. 카드 `padding: 12px 16px`로 축소. `.preset-card__preview/__date/__category` 등 CSS는 dead code로 남김(리뷰어 판단).
-
-**검증 결과**:
-- `npx tsc --noEmit` PASS (에러 0)
-- `npm run build` PASS (vite 771ms, 301.26 kB / gzip 93.54 kB)
-
-💡 tester 참고:
-- 테스트 방법:
-  1. 패턴관리 진입 → 카드가 한 행에 2개씩 배치되는지 확인
-  2. 각 카드에 "패턴명(+DRIVE 뱃지) / 조각 N개 / 5XS ~ 5XL" 3개만 보이는지 확인
-  3. Drive 프리셋: 개발자도구 네트워크/IO를 보지 않고도 "조각 …개"→"조각 N개"로 0.5~2초 내 갱신되는지 확인
-  4. 한 SVG 내부에 path가 여러 개인 파일(앞판+뒷판 통합 등) → 실제 개수가 표시되는지 확인
-  5. 단일 path만 있는 SVG → "조각 1개"
-  6. 상단 브레드크럼 유지(전체/미분류/카테고리 경로 표시) 확인
-  7. 선택 모드 진입(/work에서 패턴 선택으로) → 카드 체크 배지 + 하이라이트 + "다음" 버튼 정상
-  8. "+ 새 프리셋 추가" 버튼이 화면에서 사라졌는지 확인
-- 정상 동작:
-  - 카드 높이가 예전의 1/3 수준
-  - DRIVE 뱃지는 Drive 출처 프리셋에만 표시
-  - 사이즈 범위가 없는 프리셋(사이즈 미등록)은 오른쪽 메타가 빈 문자열
-- 주의할 입력:
-  - 파싱 실패 SVG(깨진 파일 등) → "조각 0개"로 표시, 앱 흐름 영향 없음
-  - Drive 파일 사라짐 + `getSvg` 실패 → "조각 0개" fallback
-
-⚠️ reviewer 참고:
-- `PresetCardPieceCount`의 초기값 동기 계산(useState initializer): 첫 piece의 `svgBySize` 또는 `svgData`에서 즉시 계산 시도하여 깜빡임을 줄였음. Drive 프리셋만 null → 비동기 진입.
-- useEffect deps가 `preset.id`만 → preset 객체 참조 변경은 무시. 카운트가 "한 번 정해지면 유지"되는 디자인(파일 내용이 바뀌어도 카드에서 재계산 안 함). 옵션 4 자동 동기화에서 `svgCacheStore.invalidate` 호출되면 재렌더 트리거되지 않는 점 인지 필요 — 필요 시 deps에 `preset.updatedAt` 추가 고려.
-- 편집 폼 JSX 전체(약 800줄)는 dead code로 잔존. 용량 부담이 있으면 다음 커밋에서 제거 가능. (지시서 "남겨둬도 됨" 반영)
-- CSS `.preset-card__preview/__actions/__date/__pieces/__category/__header/__body/__info` 등은 dead selector. 다음 정리 커밋에서 제거 권장.
+검증: `npx tsc --noEmit` PASS / `npm run build` PASS (dist 303KB gzip 94KB)
 
 ## 테스트 결과 (tester)
-
-### [2026-04-15] 옵션 4 정적 검증
-
-| 항목 | 결과 |
-|------|------|
-| tsc --noEmit | PASS |
-| vite build | PASS (779ms, 318.70 kB) |
-| 치수 보존 (sizes/svgBySize/svgData 무변경) | PASS |
-| 파일 사라진 프리셋 보존 | PASS |
-| 쿨다운 60초 + autoScanInFlight | PASS |
-| useEffect 무한 루프 방지 | PASS |
-| 기존 Drive 프리셋 svgPathBySize만 갱신 | PASS |
-| Local 프리셋 무영향 | PASS |
-| 경고 alert 제거 | PASS |
-| DriveImportModal import 완전 제거 | PASS |
-| 가져오기 버튼 JSX 제거 | PASS |
-
-종합: 11/11 통과 — **커밋 가능**
-
-**근거 요약**:
-- driveSync.ts L618-639: `{...existing, pieces: updatedPieces, driveFolder, updatedAt}` — sizes/svgData/svgBySize/name/categoryId는 spread로만 이월(덮어쓰기 없음).
-- driveSync.ts L676-679: `updatedStableIds` Set 제외 로직으로 미매칭 기존 프리셋 및 stableId 없는 로컬 프리셋 모두 보존.
-- driveSync.ts L621: `piece.svgSource === "drive" || !piece.svgSource` + idx===0 가드 — Local 전용 피스는 건드리지 않음.
-- PatternManage.tsx L134-136: `lastAutoScanRef`, `autoScanInFlightRef` 2종 방호.
-- PatternManage.tsx L249-258: 60초 쿨다운 + 남은 시간 콘솔 로깅.
-- PatternManage.tsx L261-262: in-flight 재진입 차단.
-- PatternManage.tsx L340-343: deps=[isLoadSuccess, driveSyncEnabled, drivePatternRoot] + eslint-disable — presets/categories 자체가 deps에 없어 자동 동기화로 인한 재진입 폭주 원천 차단.
-- runAutoSync 경로에서는 console.info/warn만 사용 (alert 0).
-- src/components/ 에 DriveImportModal.tsx 파일 존재하지 않음(삭제 확인). src/ 내 활성 import 0건.
-- PatternManage.tsx L868·L997: "제거됨" 주석만 남고 JSX 실체 없음.
-
-**치명 아닌 관찰 사항**:
-1. App.css L1726-1854 `.drive-import-modal*` CSS dead code 잔류 (reviewer도 동일 지적).
-2. Settings.tsx L306 메시지 `"활성 (PatternManage에 가져오기 버튼 표시)"` — 이제 버튼이 없으므로 "페이지 진입 시 자동 동기화" 등으로 수정 권장.
+(Phase 3 구현 후 검증)
 
 ## 리뷰 결과 (reviewer)
-
-### [2026-04-15] 옵션 4 리뷰
-
-#### 종합 평가
-자동 동기화 리팩터는 **커밋 가능** 수준. 치수 보존 전략(sp.svgPathBySize만 교체 + 기존 sizes/svgData 이월)이 의도대로 구현되어 있고, 쿨다운·중복실행·무한루프 방지가 3중으로 안전하게 감싸져 있음. 치명 이슈 없음. DriveImportModal 참조는 완전히 제거되어 데드코드도 깨끗하게 정리됨. UX 피드백(동기화 진행 표시)과 CSS 잔존은 후속 개선 사항으로만 남김.
-
-#### 강점
-- **설계**: `mergeDriveScanResult`가 순수 함수로 분리되어 테스트·추론이 쉬움. `{...existing, pieces: updatedPieces, driveFolder, updatedAt}` 스프레드 순서도 올바름(나중 프로퍼티가 덮어쓰므로 `driveFolder/updatedAt`는 의도적 갱신, `sizes/name/categoryId`는 자동 이월).
-- **치수 보존**: `piece.svgPathBySize`만 교체, `svgData/svgBySize/width/height`는 그대로. 게다가 `svgSource !== "drive"`인 local 피스는 map에서 원본 그대로 return(driveSync.ts:628) → 사용자 업로드 보호 완벽.
-- **카테고리 매핑**: `parentId + name` 조합 중복 체크 + 깊이 오름차순 처리 → 계층 구조 안전.
-- **미매칭 프리셋 보존**: Set 기반 O(1) 필터링으로 stableId 없는 local 프리셋도 자동 유지(driveSync.ts:676-679). Q2-B 결정 정확히 구현.
-- **에러 방어**: scanResult.success=false, 카테고리 저장 실패, 프리셋 저장 실패, 예외 모두 console.warn으로 조용히 스킵. 실패 시 `lastAutoScanRef` 갱신 안 함 → 재시도 가능.
-- **쿨다운 구현**: useRef 선택 적절(리렌더 방지), `autoScanInFlightRef`로 await 사이 재진입 race 차단.
-- **useEffect 의존성**: `[isLoadSuccess, driveSyncEnabled, drivePatternRoot]` 3개 + eslint-disable 주석 + 장황한 주석까지 달아둠. Settings 토글 on/off는 정상 재실행됨.
-- **롤백 용이성**: `scanDriveRoot`/`ScanResult`는 유지되어 있고 삭제분은 UI(Modal)뿐이라, 버튼 방식 복구 시 mergeDriveScanResult 무시 + Modal 복구만 하면 됨.
-
-#### 치명 이슈
-없음.
-
-#### 개선 제안 (배포 후 고려, 우선순위 낮음)
-| 우선순위 | 파일:라인 | 제안 |
-|---------|----------|------|
-| 낮음 | src/App.css:1728-1783 | `.drive-import-modal*` CSS 잔존(56줄). dead code이므로 다음 커밋에서 함께 제거하면 깔끔. 렌더에는 영향 없음. |
-| 낮음 | PatternManage.tsx:240-330 | UX 피드백 부재 — 사용자는 콘솔을 안 볼 것이므로 "동기화되고 있음"을 인지하기 어려움. Phase 2에서 상태바나 토스트(예: "동기화 중… / 완료 신규 N 갱신 M") 추가 검토. 지금은 조용히 돌아가는 게 오히려 사용자 결정(A-B-B-A-B)에 부합. |
-| 낮음 | PatternManage.tsx:324-330 | `runAutoSync` deps에 `presets/categories`가 있어 매 상태 변경 시 함수 레퍼런스는 재생성됨. useEffect는 이를 deps에 넣지 않아 문제 없지만, 향후 runAutoSync를 다른 곳에서 호출한다면 stale closure를 조심해야 함(현재 호출처가 useEffect 하나뿐이라 OK). |
-| 낮음 | driveSync.ts:618-629 | `piece.svgSource`가 undefined인 기존(Phase 1 초기) 프리셋도 `svgSource === "drive"`로 승격됨. 이게 의도라면 OK(대부분 Drive 출처일 것이므로), 아니면 undefined는 건너뛰도록 명시적 분기 권장. 주석 근거 있으니 현재는 문제 없음. |
-| 낮음 | driveSync.ts:558-565 | 동일 부모 아래 대소문자만 다른 카테고리 이름("Shirts" vs "shirts")은 다른 것으로 취급됨. Windows 파일시스템은 대소문자 무시라 실제 충돌 가능. 실측에서 문제 없으면 유지. |
-
-결론: **커밋 가능**
+(Phase 3 구현 후)
 
 ## 수정 요청
 | 요청자 | 대상 파일 | 문제 설명 | 상태 |
 |--------|----------|----------|------|
-| reviewer | src/App.css:1728-1783 | `.drive-import-modal*` CSS 잔존(56줄, dead code) — 다음 커밋에서 함께 제거 권장 | 제안 |
-| tester | src/pages/Settings.tsx L306 | driveSyncEnabled 활성 안내 문구가 "PatternManage에 가져오기 버튼 표시"로 남아있음 — 버튼 제거됐으므로 "페이지 진입 시 자동 동기화" 등으로 수정 권장 (치명 아님) | 제안 |
-
-### [2026-04-15] 트리 더블클릭 토글 + 앱 내 rename 제거 + Drive 읽기 전용
-
-📝 구현한 기능: CategoryTree 더블클릭이 펼침/접힘 토글로 변경, 앱 내 카테고리 rename 기능 전체 제거, Drive 출처 카테고리/프리셋의 편집·삭제·하위추가 UI를 비활성화 + 읽기 전용 토스트 안내.
-
-| 파일 경로 | 변경 내용 | 신규/수정 |
-|----------|----------|----------|
-| src/types/pattern.ts | `PatternCategory.source?: "local" \| "drive"` 필드 추가 | 수정 |
-| src/services/driveSync.ts | mergeDriveScanResult 신규 카테고리에 `source: "drive"` 지정 | 수정 |
-| src/components/CategoryTree.tsx | rename state/UI/handler 전체 제거, 더블클릭=토글, Drive 카테고리 +/× 비활성화 + 토스트, onRenameCategory prop 제거 | 수정 |
-| src/pages/PatternManage.tsx | handleRenameCategory 제거, isDrivePreset/isDriveCategoryById/showDriveReadonlyToast 헬퍼 추가, "+ 새 프리셋 추가"·편집·삭제 버튼 Drive 시 비활성화 | 수정 |
-
-**핵심 구현 포인트**:
-- **rename UI 완전 제거**: CategoryTree에서 `editing`, `editName`, `inputRef`, `useEffect`(focus), `commitRename`, `<input>` 분기 모두 삭제. `useState`만 import (`useRef`, `useEffect` 제거).
-- **더블클릭 토글**: `onDoubleClick` → `toggleExpanded()` (자식 있을 때만). 화살표 토글과 동일한 동작이 행 더블클릭에서도 작동.
-- **isDriveCategory(컴포넌트 내부)**: `category.source === "drive"`로 단순 판정. 자식 prefix 검사는 driveSync가 이미 source 필드를 부여하므로 불필요.
-- **토스트 fallback**: 토스트 시스템 부재 → `alert("이 항목은 Google Drive에서만 수정할 수 있습니다.")`로 통일. CategoryTree 내부와 PatternManage 모두 동일 문구.
-- **PatternManage 헬퍼**: `isDrivePreset(preset)` = `pieces.some(p => p.svgSource === "drive")`. `isDriveCategoryById(id)` = `categories.find(...).source === "drive"`.
-- **+ 새 프리셋 추가**: `selectedCategory.type === "category" && isDriveCategoryById(id)`일 때만 비활성화. 전체/미분류는 영향 없음.
-- **편집/삭제 버튼**: `disabled` 속성 + onClick 가드(이중 안전망). title에 비활성화 사유 표시.
-- **루트 카테고리 추가 버튼**: 항상 활성화 유지 (사용자가 만드는 Local 루트는 source=undefined → local).
-
-**검증 결과**:
-- `npx tsc --noEmit` PASS (에러 0)
-- `npm run build` PASS (vite 805ms, 319.07 kB)
-
-💡 tester 참고:
-- 테스트 방법:
-  1. 카테고리 더블클릭 → 펼침/접힘 토글 동작 확인 (이전엔 입력창 진입했음)
-  2. Drive 동기화 후 생성된 카테고리에 마우스 올리기 → +/× 버튼이 disabled 상태로 표시
-  3. Drive 카테고리의 +/× 클릭 → "이 항목은 Google Drive에서만 수정할 수 있습니다." alert
-  4. Drive 카테고리 선택 → "+ 새 프리셋 추가" 버튼 disabled
-  5. Drive 프리셋 카드의 편집/삭제 버튼 disabled, 클릭 시 동일 alert
-  6. Local 카테고리/프리셋은 모두 정상 동작 (편집/삭제/추가 다 가능)
-- 정상 동작:
-  - Local 카테고리: 더블클릭=토글, +/× 정상 동작
-  - Drive 카테고리: 더블클릭=토글, +/× 비활성화 + 토스트
-  - 루트 "+ 카테고리" 버튼은 항상 활성화 (Local 루트 추가는 가능)
-- 주의할 입력:
-  - 기존 categories.json에 source 필드가 없는 데이터 → undefined → "local"로 간주(정상)
-  - Drive 동기화 전에 만들어진 Local 카테고리에 같은 이름의 Drive 폴더가 매칭될 경우, mergeDriveScanResult가 기존 카테고리 ID를 재사용하므로 그 카테고리는 source가 안 바뀜(Local로 유지됨). 의도 여부는 reviewer 판단.
-
-⚠️ reviewer 참고:
-- **알려진 한계**: mergeDriveScanResult가 "기존 카테고리 재사용 시 source를 drive로 승격"하지 않음. 기존 Local 카테고리("농구") 아래 Drive 폴더가 같은 이름이면, 그 카테고리는 Local로 남아 사용자가 rename/삭제 가능. 의도된 동작인지 결정 필요.
-- **alert 사용**: 토스트 라이브러리 도입 비용 대비 alert가 가장 단순. 향후 Phase에서 toast UX 도입 시 한 곳(showDriveReadonlyToast 함수)만 교체.
-- **CategoryTree IIFE 패턴**: PatternManage에서 `(() => { ... })()`로 buttons 분기를 감쌌음. 가독성 vs JSX 외부 함수 추출 트레이드오프 — 현재는 작아서 인라인 유지.
-
-### [2026-04-15] Phase 1 뼈대 — 3단계 워크플로우 (/work → /pattern → /generate)
-
-📝 구현한 기능: 작업 흐름 재설계(PLAN-WORKFLOW-REDESIGN.md)의 Phase 1 "뼈대". 1단계 "작업 선택" 페이지(WorkSetup) 신규 + 세션(sessionStorage) 기반 WorkSession 타입/스토어 신규 + 사이드바/라우팅을 3단계 구조로 전환.
-
-| 파일 경로 | 변경 내용 | 신규/수정 |
-|----------|----------|----------|
-| src/types/session.ts | WorkSession 인터페이스 신규 (workFolder, baseAiPath, selectedPresetId?, createdAt) | 신규 |
-| src/stores/sessionStore.ts | load/save/update/clearWorkSession 4함수 + STORAGE_KEY="grader.session" | 신규 |
-| src/pages/WorkSetup.tsx | 폴더 선택 + AI 파일 선택(.ai 필터 + stat 파일크기 표시) + "다음: 패턴 선택" 버튼 | 신규 |
-| src/App.css | `.work-section/.work-label/.work-input-row/.work-input/.work-hint` 스타일(+50줄) | 수정 |
-| src/components/Sidebar.tsx | navItems를 3항목으로 축소(작업선택/패턴/파일생성), icon=📁/✂/📄 | 수정 |
-| src/main.tsx | /work 라우트 추가, 루트→/work 리다이렉트, DesignUpload/SizeSelect import 제거, /design→/work /size→/generate 리다이렉트, /generate는 FileGenerate 유지 | 수정 |
-
-**핵심 구현 포인트**:
-- **세션 저장소**: `sessionStorage` 사용. 앱 재시작 시 초기화되는 "1회성 작업" 시맨틱에 부합. SSR/프라이빗 모드 대비 try/catch로 감쌈.
-- **stat 권한 처리**: `@tauri-apps/plugin-fs`의 `stat`은 `fs:allow-stat` 권한이 capabilities/default.json에 없음. WorkSetup에서 `try { stat(...) } catch {}`로 감싸 실패 시 파일 크기 표시만 생략(기능상 영향 없음). 권한 추가는 추후 필요 시 진행.
-- **/generate 라우트**: Phase 1에서는 OrderGenerate가 아직 없으므로 **기존 FileGenerate 유지**. Phase 4에서 OrderGenerate로 교체 예정. 이 설계 덕에 Phase 1만 돌려도 사이드바 3단계 모두 클릭 가능(단, /pattern→/generate 전환 흐름은 Phase 4 전엔 구/신 하이브리드).
-- **하위 호환 리다이렉트**: `/design → /work`, `/size → /generate`. 북마크/딥링크 안전망.
-- **DesignUpload/SizeSelect 파일**: 삭제하지 않고 유지(Phase 5에서 제거 예정). 현재 미사용이지만 FileGenerate가 generationStore를 통해 SizeSelect와 간접 연결되어 있어 `/generate` 흐름 유지용.
-- **세션 복원**: WorkSetup 진입 시 `loadWorkSession()`으로 기존 값 복원. /pattern에서 뒤로 왔을 때 빈 폼이 아님.
-- **Sidebar 아이콘**: 📁(폴더) / ✂(가위=패턴) / 📄(문서=생성). 이모지 기반으로 빠르게 구성(Phase 2+에서 Material Symbols로 통일 검토).
-
-**검증 결과**:
-- `npx tsc --noEmit` PASS (에러 0)
-- `npm run build` PASS (tsc + vite 776ms, 301.18 kB — 기존 318.70 kB에서 -17.52 kB 감소: DesignUpload import 제거 효과)
-
-💡 tester 참고:
-- 테스트 방법:
-  1. 앱 실행 → 루트(/) 접속 시 /work로 자동 이동되는지 확인
-  2. 사이드바가 "1 작업 선택 / 2 패턴 / 3 파일 생성" 3단계로 표시되는지
-  3. /work에서 "📁 찾기" 클릭 → 폴더 선택 다이얼로그 열림 → 선택 시 경로 표시
-  4. /work에서 "🎨 찾기" 클릭 → AI 파일 다이얼로그(.ai만 필터) → 선택 시 경로 + (권한 있으면) 크기 표시
-  5. 두 값 채우기 전에는 "다음" 버튼 disabled, 둘 다 채우면 활성화
-  6. "다음" 클릭 → /pattern으로 이동, 개발자 콘솔에서 `sessionStorage.getItem("grader.session")` 확인
-  7. /pattern에서 /work로 돌아오면 기존 선택값이 복원되는지
-  8. /design 딥링크 접속 → /work로 리다이렉트, /size 접속 → /generate로 리다이렉트
-- 정상 동작:
-  - sessionStorage에 `{workFolder, baseAiPath, createdAt}` JSON 저장
-  - 앱 재시작(창 닫고 다시 열기) 시 세션 휘발(sessionStorage 특성) → /work 빈 폼
-  - PatternManage는 기존 동작 그대로(세션을 아직 사용하지 않음, Phase 2에서 연동)
-- 주의할 입력:
-  - `.ai` 확장자가 아닌 파일은 다이얼로그에서 보이지 않음(필터 적용). 사용자가 강제로 다른 파일 선택해도 Tauri가 막음.
-  - 폴더/파일 선택을 취소(ESC)해도 에러 나지 않아야 함(open()이 null 반환).
-  - sessionStorage 용량 한계(5~10MB)는 이 데이터 크기에선 무의미하지만, 향후 확장 시 유의.
-
-⚠️ reviewer 참고:
-- **stat 권한 미추가**: 의도적. 기능에 필수가 아니고, capabilities 변경은 rebuild가 필요해 뼈대 단계에선 부담. 필요 시 `fs:allow-stat` + `allow: [{path: "C:/Users/**"}, ...]` 추가.
-- **DesignUpload/SizeSelect 페이지 존속**: 사용되지 않으나 파일 자체는 유지. Phase 5에서 제거하며 동시에 generationStore/designStore/DesignUpload.tsx/SizeSelect.tsx 정리 예정. TypeScript 컴파일에서 unused import는 main.tsx에서 이미 제거되어 문제 없음.
-- **FileGenerate 연결**: /generate가 FileGenerate를 계속 가리키고 있어, SizeSelect 없이 /generate로 직접 들어가면 generationStore가 비어있어 FileGenerate가 되돌려 보내려 할 것(L130). 이는 Phase 4까지의 임시 상태이고, OrderGenerate 구현 시 해결됨.
-- **Sidebar의 /work 노출**: step 1이라 사용자가 어느 단계에서든 클릭해 돌아갈 수 있음. 세션이 있으면 WorkSetup이 복원되므로 안전.
-- **이모지 아이콘**: 계획서의 `📁 🎨` 이모지를 따름. 추후 Material Symbols로 교체 가능성 있음.
-- **Phase 1 범위**: "뼈대"이므로 실제 그레이딩 흐름(세션→패턴선택→주문서생성)은 아직 미연결. Phase 2+에서 PatternManage가 session.selectedPresetId를 설정하고, Phase 4에서 OrderGenerate가 session을 소비.
-
-### [2026-04-15] Phase 2 — 패턴 선택 모드 + "다음" 버튼
-
-📝 구현한 기능: PatternManage를 "선택 모드 / 관리 모드" 이중 페이지로 전환. 세션이 있으면 카드 클릭으로 프리셋 선택 → 세션에 selectedPresetId 저장 → "다음: 파일 생성" 버튼으로 /generate 이동. 세션 없으면 기존 관리 UI 그대로 유지.
-
-| 파일 경로 | 변경 내용 | 신규/수정 |
-|----------|----------|----------|
-| src/pages/PatternManage.tsx | useNavigate import, session/selectedPresetId state, 세션 로드 useEffect, handleSelectPreset/handleNextToGenerate 추가, 타이틀/설명 분기, 카드 클릭/키보드/aria 속성 + 선택 체크 아이콘, 편집/삭제 stopPropagation, size-footer "다음" 버튼 | 수정 |
-| src/App.css | .preset-card position:relative + border:2px transparent, .preset-card--selectable(cursor/focus), .preset-card--selected(테두리+그림자), .preset-card__check(우상단 원형 배지) | 수정 |
-
-**핵심 구현 포인트**:
-- **세션 판정 3상태**: `session === null`(로드 전=로딩), `undefined`(세션 없음=관리 모드), `WorkSession`(선택 모드). 관리 모드 폴백 덕에 사이드바에서 "패턴" 직접 클릭해도 기존 동작 보존.
-- **진입 가드 완화**: 세션 없을 때 /work로 리다이렉트하지 않고 관리 모드로 폴백. 이유: 사용자가 작업 세션과 무관하게 프리셋을 정리·편집하는 흐름도 흔하기 때문.
-- **selectedPresetId 이중 보관**: React state(화면 하이라이트용) + sessionStorage(새로고침/뒤로가기 대비). 카드 클릭 즉시 `updateWorkSession({ selectedPresetId })` 호출로 동기화.
-- **접근성**: 선택 모드 카드에 `role="button"`, `tabIndex=0`, `aria-pressed`, Enter/Space 키 처리. 관리 모드에서는 이 속성들을 undefined로 둬 기존 경험을 건드리지 않음.
-- **이벤트 버블링 차단**: 편집/삭제 버튼 onClick에 `e.stopPropagation()` 추가. 버튼 누르면 카드 선택되는 이중 동작 방지.
-- **레이아웃 이동 방지**: `.preset-card` 기본에 `border: 2px solid transparent` → 선택 시 `border-color` 변경으로 크기 변화 없음.
-- **Drive 프리셋도 선택 가능**: SSOT 제약은 편집/삭제에만 적용. 그레이딩 대상 선택은 막을 이유 없어 허용.
-- **"다음" 버튼 UX**: selectedPresetId 없을 때 disabled + title 안내. WorkSetup과 동일한 `.size-footer` 클래스 재사용.
-
-**검증 결과**:
-- `npx tsc --noEmit` PASS (에러 0, EXIT 0)
-- `npm run build` PASS (vite 771ms, 302.55 kB — Phase 1 대비 +1.37 kB)
-
-💡 tester 참고:
-- 테스트 방법:
-  1. /work에서 AI 파일 선택 → "다음" → /pattern 진입 → 타이틀이 "패턴 선택"인지
-  2. 안내문 "그레이딩할 패턴 프리셋을 하나 선택한 뒤..." 표시 확인
-  3. 하단 고정 푸터에 "다음: 파일 생성 →" 버튼 노출, 초기엔 disabled
-  4. 임의 프리셋 카드 클릭 → 테두리 강조 + 우상단 원형 ✓ 배지 + 버튼 활성화
-  5. 다른 카드 클릭 → 선택이 새 카드로 이동
-  6. 선택 상태에서 편집/삭제 버튼 클릭 → 선택 상태 유지됨(버블링 차단 확인)
-  7. 새로고침 후 /pattern 재진입 → 이전에 선택한 카드가 자동 하이라이트
-  8. Tab 키로 카드 포커스 → Enter/Space로 선택 가능
-  9. "다음: 파일 생성" 클릭 → /generate 이동, sessionStorage `grader.session`에 selectedPresetId 기록
-  10. 사이드바에서 "패턴"만 클릭(세션 없는 시나리오 재현용: 콘솔에서 `sessionStorage.clear()` 후 새로고침) → 타이틀 "패턴 관리", "다음" 버튼 숨김, 카드 클릭 시 아무 반응 없음(기존 편집/삭제만 동작)
-- 정상 동작:
-  - 선택 모드: 카드 hover 시 cursor: pointer, 선택 시 파란 테두리 + ✓
-  - 관리 모드: 기존과 완전히 동일(cursor 변화 없음, 카드 클릭 무시)
-  - Drive 프리셋도 선택 가능(편집/삭제만 disabled 유지)
-- 주의할 입력:
-  - 세션에 selectedPresetId가 있는데 해당 프리셋이 삭제된 경우: 하이라이트 대상이 없어 표시 안 됨(무해). 사용자는 다시 선택하면 됨.
-  - 필터링된 카테고리로 이동 시 선택된 프리셋이 화면에서 사라질 수 있음 → 선택 자체는 유지(다른 카테고리 돌아오면 하이라이트 복귀).
-
-⚠️ reviewer 참고:
-- **세션 없을 때 리다이렉트 하지 않는 결정**: 계획서 범위엔 "진입 가드"가 있었지만 UX 관점에서 사이드바 직접 진입 시 관리 모드로 폴백하는 게 자연스러움. 엄격한 가드가 필요하면 `else navigate("/work")`로 한 줄 추가만 하면 됨.
-- **카드 클릭 가능 영역**: 카드 전체(header/body/preview/actions 영역 포함)가 클릭 핸들러를 탐. 편집/삭제 버튼은 stopPropagation으로 제외. preview SVG(dangerouslySetInnerHTML)도 클릭 시 카드로 버블링되어 정상 동작.
-- **.preset-card__check의 z-index:2**: preview 미리보기(기본 z-auto)보다 위에 떠야 함. 다른 요소들과 충돌 여지 낮음.
-- **ko 텍스트 중 따옴표**: `\u201C다음\u201D` 유니코드 이스케이프 사용 — JSX 문자열 내 중복 인용 혼동 회피.
-- **eslint-disable 미사용**: useEffect deps는 의존성 없는 mount-only effect라 `[]` 유지, 경고 없음.
 
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-04-15 | developer | Drive 연동 Phase 1 MVP (+2458줄, 15파일) | 커밋 bd0f752 |
-| 2026-04-15 | developer | Drive 깊이 5→20 완화 (실측 6레벨) | 커밋 341aba6 |
-| 2026-04-15 | developer | 파서 유연화(하이픈/공백) + 트리 폭 2배 | 커밋 51533f3 |
-| 2026-04-15 | developer | 카테고리 정렬 + 단일 SVG 버그 수정 (원인 C) | 커밋 e289673 |
-| 2026-04-15 | developer | 가져오기 버튼 활성화 + 트리 기본 접힘 + 빈 import 처리 | 커밋 4367af0 |
-| 2026-04-15 | planner-architect | Drive 폴더 직접 표시 재검토 (4개 옵션 비교, 옵션 4 권장 44점) | 완료 |
-| 2026-04-15 | pm | 10개 커밋 push + scratchpad 547→120줄 정리 | 완료 |
-| 2026-04-15 | developer | Drive 옵션 4 리팩터 (mergeDriveScanResult + 자동 동기화 + 모달 삭제) tsc/build PASS | 커밋 대기 |
-| 2026-04-15 | reviewer | Drive 옵션 4 리뷰 — 치명 이슈 없음, 커밋 가능 (CSS 잔존 개선만 후속) | 통과 |
-| 2026-04-15 | tester | Drive 옵션 4 정적 검증 11/11 통과 (tsc/build/치수 보존/쿨다운/무한루프 방지 확인) | 커밋 가능 |
-| 2026-04-15 | developer | 트리 더블클릭=토글 + rename 제거 + Drive 카테고리/프리셋 readonly UI (4파일, tsc/build PASS) | 커밋 대기 |
-| 2026-04-15 | planner-architect | 작업 흐름 재설계 상세 계획 PLAN-WORKFLOW-REDESIGN.md 작성 (4→3단계, PDF→AI, 1회성세션) | 완료 |
-| 2026-04-15 | developer | Phase 1 뼈대 — WorkSetup/session 타입·스토어 신규 + Sidebar/main 3단계 전환 (3신규+3수정, tsc/build PASS) | 커밋 대기 |
-| 2026-04-15 | developer | Phase 2 — 패턴 선택 모드 + 카드 클릭/체크/다음 버튼 + 관리 모드 폴백 (2파일 수정, tsc/build PASS) | 커밋 금지 |
+| 2026-04-15 | developer | Drive 연동 옵션 4 자동 동기화 리팩터 | 커밋 8ec96a3 |
+| 2026-04-15 | developer | 트리 더블클릭 + 앱 내 rename 제거 + Drive 읽기 전용 | 커밋 1b8fa4b |
+| 2026-04-15 | developer | 프리셋 카드 사이즈 5XS→5XL 정렬 | 커밋 849a6e5 |
+| 2026-04-15 | planner-architect | 작업 흐름 재설계 계획서 865줄 | 커밋 5cb0aaa |
+| 2026-04-15 | developer | Phase 1 WorkSetup + 세션 + 라우팅 | 커밋 3efa370 |
+| 2026-04-15 | developer | WorkSetup AI 파일 선택 하나로 폴더 자동 | 커밋 ad3d073 |
+| 2026-04-15 | developer | Phase 2 패턴 선택 모드 | 커밋 3e5a069 |
+| 2026-04-15 | developer | 카드 간소화 + 2열 그리드 + 조각 카운팅 | 커밋 bc20e24 |
+| 2026-04-15 | developer | DRIVE 뱃지 제거 + 조각 카운팅 개선 (M 명령어) | 커밋 b01c974 |
+| 2026-04-15 | pm | 11개 커밋 push + scratchpad 정리 + Phase 3 착수 | 완료 |
+| 2026-04-15 | developer | Phase 3 즐겨찾기 (favoritesStore + ⭐ 토글 + 필터) | tsc/build PASS |

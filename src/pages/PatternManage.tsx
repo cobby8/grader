@@ -23,6 +23,12 @@ import { SIZE_LIST, getSizeRangeText } from "../types/pattern";
 import { countSvgPieces } from "../services/svgResolver";
 import { getSvg } from "../stores/svgCacheStore";
 import { loadPresets, savePresets, generateId } from "../stores/presetStore";
+// 즐겨찾기 저장소 — Phase 3 신규 (⭐ 토글 + 필터)
+import {
+  loadFavorites,
+  saveFavorites,
+  getFavoriteKey,
+} from "../stores/favoritesStore";
 import {
   loadCategories,
   saveCategories,
@@ -201,6 +207,14 @@ function PatternManage() {
   // 카테고리 트리 선택 상태 (기본: 전체)
   const [selectedCategory, setSelectedCategory] = useState<SelectedCategory>({ type: "all" });
 
+  // === 즐겨찾기 상태 (Phase 3 신규) ===
+  // 왜 Set인가: "해당 프리셋이 즐겨찾기인가?"는 has()로 O(1) 조회가 필요하기 때문.
+  // 파일에는 배열로 저장되지만 런타임은 Set으로 관리하고 저장 직전에 배열로 변환한다.
+  // (자동차로 치면 "디스크=차고에 주차된 배열", "메모리=빠른 조회용 해시맵".)
+  const [favoriteKeys, setFavoriteKeys] = useState<Set<string>>(new Set());
+  // 즐겨찾기만 보기 필터 토글 (기본 OFF)
+  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+
   // 편집 폼 상태
   const [formName, setFormName] = useState("");                // 프리셋 이름
   const [formPieces, setFormPieces] = useState<PatternPiece[]>([]); // 패턴 조각 목록
@@ -265,6 +279,20 @@ function PatternManage() {
       // 세션 없음 = 관리 모드. 리다이렉트하지 않고 기존 동작 유지.
       setSession(undefined);
     }
+  }, []);
+
+  // === 즐겨찾기 로드 (페이지 진입 시 1회) ===
+  // 왜 별도 useEffect인가: favorites.json은 presets/categories와 독립이라 병렬 로드가
+  // 안전하고 빠르다. 실패해도 앱 동작에 치명적이지 않아 경고만 찍고 빈 Set을 유지한다.
+  useEffect(() => {
+    loadFavorites().then((result) => {
+      if (result.success) {
+        setFavoriteKeys(new Set(result.data));
+      } else {
+        // 실패해도 앱은 사용 가능해야 함 — 빈 Set으로 두고 경고만
+        console.warn("즐겨찾기 로드 실패:", result.error);
+      }
+    });
   }, []);
 
   // === 앱 시작 시 프리셋 + 카테고리 로드 ===
@@ -352,6 +380,34 @@ function PatternManage() {
       alert(`저장 실패: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [isLoadSuccess]);
+
+  // === 즐겨찾기 토글 (Phase 3 신규) ===
+  // 왜 이벤트를 인자로 받는가: 카드 onClick(선택 모드의 선택 동작)과 별 아이콘 클릭이
+  // 같은 영역에 겹치므로, stopPropagation으로 "카드 선택"이 동시에 일어나지 않게 막아야 한다.
+  // (엘리베이터 버튼을 누르면 층 표시등이 켜지지만, 그 버튼 눌렀다고 문 자체가 닫히지는 않아야 하는 것과 같다.)
+  const handleToggleFavorite = useCallback(
+    async (preset: PatternPreset, e: React.MouseEvent) => {
+      e.stopPropagation(); // 카드 클릭(선택) 전파 차단
+      const key = getFavoriteKey(preset);
+      // 낙관적 업데이트: 먼저 UI 반영 후 저장. 저장 실패 시 롤백.
+      const next = new Set(favoriteKeys);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      setFavoriteKeys(next);
+      try {
+        await saveFavorites(Array.from(next));
+      } catch (err) {
+        // 저장 실패 시 이전 상태로 롤백
+        console.error("즐겨찾기 저장 실패:", err);
+        setFavoriteKeys(favoriteKeys);
+        alert(`즐겨찾기 저장 실패: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [favoriteKeys]
+  );
 
   // === Drive 자동 동기화 (옵션 4) ===
   // 왜 useCallback + ref 조합인가:
@@ -487,16 +543,27 @@ function PatternManage() {
   // 카테고리와 동일하게 한국어 자연 정렬(numeric)로 통일한다.
   const filteredPresets = useMemo(() => {
     const filtered = presets.filter((p) => {
-      if (selectedCategory.type === "all") return true;
-      if (selectedCategory.type === "uncategorized") return !p.categoryId;
-      // 특정 카테고리 선택 시: 해당 카테고리 + 하위 카테고리의 프리셋 모두 표시
-      return getPresetBelongsToCategory(p, selectedCategory.id, categories);
+      // 1) 카테고리 필터
+      let categoryOk = true;
+      if (selectedCategory.type === "all") categoryOk = true;
+      else if (selectedCategory.type === "uncategorized") categoryOk = !p.categoryId;
+      else categoryOk = getPresetBelongsToCategory(p, selectedCategory.id, categories);
+      if (!categoryOk) return false;
+
+      // 2) 즐겨찾기 필터 (토글 ON일 때만 적용)
+      // 왜 여기서 필터링하는가: 카테고리 + 즐겨찾기 필터를 합쳐 한 번의 배열 순회로 처리하여
+      // 별도 useMemo 체인을 늘리지 않기 위해. (간단한 조건을 분리하기보다는 묶어두는 편이 가독성↑)
+      if (showFavoritesOnly) {
+        const key = getFavoriteKey(p);
+        if (!favoriteKeys.has(key)) return false;
+      }
+      return true;
     });
     // 원본 배열 불변성 유지를 위해 복사 후 정렬
     return [...filtered].sort((a, b) =>
       a.name.localeCompare(b.name, "ko", { numeric: true, sensitivity: "base" })
     );
-  }, [presets, categories, selectedCategory]);
+  }, [presets, categories, selectedCategory, showFavoritesOnly, favoriteKeys]);
 
   // === 빵가루 경로 계산 ===
   const breadcrumb =
@@ -1016,6 +1083,34 @@ function PatternManage() {
                 Drive 자동 동기화가 기본이 되면서 앱 내 수동 추가 경로는 가려둔다.
                 편집 폼(mode === "create" | "edit") 자체는 추후 재진입 경로를 열어둘 가능성을 위해 유지. */}
 
+            {/* 툴바 — 즐겨찾기 필터 토글 (Phase 3 신규)
+                왜 빵가루 바로 아래인가: 카테고리 컨텍스트를 본 직후 "이 카테고리 안에서
+                즐겨찾기만 보기"가 자연스러운 시선 흐름이기 때문. */}
+            <div className="pattern-toolbar">
+              <button
+                type="button"
+                className={
+                  "pattern-toolbar__fav-filter" +
+                  (showFavoritesOnly ? " pattern-toolbar__fav-filter--active" : "")
+                }
+                onClick={() => setShowFavoritesOnly((v) => !v)}
+                aria-pressed={showFavoritesOnly}
+                title={
+                  showFavoritesOnly
+                    ? "모든 프리셋 보기"
+                    : "즐겨찾기(★)한 프리셋만 보기"
+                }
+              >
+                {/* 별 아이콘은 CSS가 아닌 유니코드로 간단히 표현 */}
+                <span className="pattern-toolbar__fav-icon" aria-hidden="true">★</span>
+                {showFavoritesOnly ? "즐겨찾기만 보는 중" : "즐겨찾기만 보기"}
+                {/* 즐겨찾기 개수 뱃지 — 몇 개를 표시할지 미리 알려줌 */}
+                <span className="pattern-toolbar__fav-count">
+                  {favoriteKeys.size}
+                </span>
+              </button>
+            </div>
+
             {/* 프리셋이 없을 때 안내 */}
             {filteredPresets.length === 0 ? (
               <div className="page__placeholder">
@@ -1067,12 +1162,36 @@ function PatternManage() {
                     }
                     aria-pressed={isSelectMode ? isSelected : undefined}
                   >
-                    {/* 선택 체크 표시 — 선택 모드에서 선택된 카드에만 나타난다 */}
+                    {/* 선택 체크 표시 — 선택 모드에서 선택된 카드에만 나타난다 (좌상단) */}
                     {isSelected && (
                       <div className="preset-card__check" aria-hidden="true">
                         ✓
                       </div>
                     )}
+                    {/* ⭐ 즐겨찾기 토글 (우상단) — Phase 3 신규
+                        왜 항상 렌더링: 켜져있지 않아도 빈 별(outline)로 표시해
+                        "클릭하면 즐겨찾기가 된다"는 힌트를 준다.
+                        stopPropagation은 handleToggleFavorite 내부에서 처리. */}
+                    {(() => {
+                      const favKey = getFavoriteKey(preset);
+                      const isFav = favoriteKeys.has(favKey);
+                      return (
+                        <button
+                          type="button"
+                          className={
+                            "preset-card__fav-toggle" +
+                            (isFav ? " preset-card__fav-toggle--active" : "")
+                          }
+                          onClick={(e) => handleToggleFavorite(preset, e)}
+                          aria-label={isFav ? "즐겨찾기 해제" : "즐겨찾기 추가"}
+                          aria-pressed={isFav}
+                          title={isFav ? "즐겨찾기 해제" : "즐겨찾기 추가"}
+                        >
+                          {/* 유니코드 별 — 켜짐: ★(채움) / 꺼짐: ☆(테두리) */}
+                          {isFav ? "★" : "☆"}
+                        </button>
+                      );
+                    })()}
                     {/* 간소화된 카드 — 패턴명 / 조각 수(실제 SVG 파싱) / 사이즈 범위
                         Drive vs Local 구분은 사용자 요청으로 표시하지 않음 (UI 통일) */}
                     <div className="preset-card__title-row">
