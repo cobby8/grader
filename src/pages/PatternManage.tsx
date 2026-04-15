@@ -12,7 +12,7 @@
  * - (2026-04-08) 폴더 트리형 카테고리 분류 시스템 추가
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
@@ -287,13 +287,26 @@ function PatternManage() {
     }
   }
 
-  // === 현재 선택된 카테고리에 따라 프리셋 필터링 ===
-  const filteredPresets = presets.filter((p) => {
-    if (selectedCategory.type === "all") return true;
-    if (selectedCategory.type === "uncategorized") return !p.categoryId;
-    // 특정 카테고리 선택 시: 해당 카테고리 + 하위 카테고리의 프리셋 모두 표시
-    return getPresetBelongsToCategory(p, selectedCategory.id, categories);
-  });
+  // === 현재 선택된 카테고리에 따라 프리셋 필터링 + 이름순 정렬 ===
+  //
+  // 왜 useMemo인가: presets/categories/selectedCategory가 바뀔 때만 재계산되어
+  // 다른 state 변화(예: 드래그 오버, 폼 입력)로 인한 리렌더 때는 정렬 비용을 아낀다.
+  //
+  // 왜 이름순 정렬인가: 기존에는 presets 배열 삽입 순서(생성 시각)대로 보여서
+  // 사용자가 "농구유니폼_V넥_스탠다드_암홀X"를 찾으려면 화면을 훑어야 했다.
+  // 카테고리와 동일하게 한국어 자연 정렬(numeric)로 통일한다.
+  const filteredPresets = useMemo(() => {
+    const filtered = presets.filter((p) => {
+      if (selectedCategory.type === "all") return true;
+      if (selectedCategory.type === "uncategorized") return !p.categoryId;
+      // 특정 카테고리 선택 시: 해당 카테고리 + 하위 카테고리의 프리셋 모두 표시
+      return getPresetBelongsToCategory(p, selectedCategory.id, categories);
+    });
+    // 원본 배열 불변성 유지를 위해 복사 후 정렬
+    return [...filtered].sort((a, b) =>
+      a.name.localeCompare(b.name, "ko", { numeric: true, sensitivity: "base" })
+    );
+  }, [presets, categories, selectedCategory]);
 
   // === 빵가루 경로 계산 ===
   const breadcrumb =
@@ -673,19 +686,31 @@ function PatternManage() {
     persistCategories(updated);
   };
 
+  // === 조각이 실제로 보유한 사이즈 키 집합 계산 ===
+  //
+  // 왜 별도 헬퍼인가: Local 프리셋은 사이즈 데이터를 `svgBySize`(인라인 문자열)에,
+  // Drive 프리셋은 `svgPathBySize`(절대경로)에 저장한다. 두 출처 중 한 곳이라도
+  // 사이즈가 있으면 "등록된 사이즈"로 간주해야 한다. 기존 코드는 `svgBySize`만
+  // 확인하여 Drive 프리셋 편집 시 "단일 SVG"로 잘못 표시되는 버그가 있었다.
+  const getRegisteredSizeKeys = (piece: PatternPiece): string[] => {
+    const keys = new Set<string>();
+    if (piece.svgBySize) Object.keys(piece.svgBySize).forEach((k) => keys.add(k));
+    if (piece.svgPathBySize) Object.keys(piece.svgPathBySize).forEach((k) => keys.add(k));
+    return Array.from(keys);
+  };
+
   // === 사이즈 배지 텍스트 생성 ===
   const getSizeBadgeText = (piece: PatternPiece): string | null => {
-    if (!piece.svgBySize) return null;
-    const count = Object.keys(piece.svgBySize).length;
+    const count = getRegisteredSizeKeys(piece).length;
     if (count <= 1) return null;
     return `${count} 사이즈`;
   };
 
   // === 사이즈 목록 텍스트 생성 ===
   const getSizeListText = (piece: PatternPiece): string | null => {
-    if (!piece.svgBySize) return null;
-    const sizeKeys = Object.keys(piece.svgBySize);
+    const sizeKeys = getRegisteredSizeKeys(piece);
     if (sizeKeys.length <= 1) return null;
+    // SIZE_LIST에 정의된 순서대로 정렬 (5XS → 5XL 방향)
     const sorted = [...sizeKeys].sort((a, b) => {
       const idxA = SIZE_LIST.indexOf(a as typeof SIZE_LIST[number]);
       const idxB = SIZE_LIST.indexOf(b as typeof SIZE_LIST[number]);
@@ -845,8 +870,10 @@ function PatternManage() {
                       {preset.pieces.length > 0 && (
                         <div className="preset-card__pieces">
                           {preset.pieces.map((piece) => {
-                            // svgBySize가 있으면 등록된 사이즈 목록을 표시
-                            const sizeKeys = piece.svgBySize ? Object.keys(piece.svgBySize) : [];
+                            // Local(svgBySize) + Drive(svgPathBySize) 양쪽 합산해서 사이즈 집계
+                            // 왜: Drive 프리셋은 svgBySize가 비어 있고 svgPathBySize에만 값이
+                            // 들어있어서 기존 로직으로는 "1개 SVG"로 잘못 표시되었다.
+                            const sizeKeys = getRegisteredSizeKeys(piece);
                             return (
                               <div key={piece.id} className="preset-card__piece">
                                 <span className="preset-card__piece-name">{piece.name}</span>
@@ -1053,28 +1080,36 @@ function PatternManage() {
       {formPieces.length > 0 && (
         <div className="pattern-edit__svg-status">
           <h3>등록된 SVG 파일</h3>
-          {formPieces.map((piece) => (
-            <div key={piece.id} className="svg-status__piece">
-              <strong>{piece.name}</strong>
-              {piece.svgBySize ? (
-                <div className="svg-status__sizes">
-                  {SIZE_LIST.map((size) => (
-                    <span
-                      key={size}
-                      className={`svg-status__size ${piece.svgBySize?.[size] ? "svg-status__size--ok" : "svg-status__size--missing"}`}
-                    >
-                      {size} {piece.svgBySize?.[size] ? "\u2713" : ""}
-                    </span>
-                  ))}
-                  <div className="svg-status__count">
-                    {Object.keys(piece.svgBySize || {}).length} / {SIZE_LIST.length} 사이즈 등록
+          {formPieces.map((piece) => {
+            // Local(svgBySize 인라인) + Drive(svgPathBySize 경로) 어느 쪽이라도 해당 사이즈가 있으면 "등록됨"
+            // 왜 별도 함수 대신 인라인인가: 각 사이즈마다 boolean만 필요해서 헬퍼보다 단순하다.
+            const hasSize = (size: string): boolean =>
+              Boolean(piece.svgBySize?.[size]) || Boolean(piece.svgPathBySize?.[size]);
+            const registeredKeys = getRegisteredSizeKeys(piece);
+            const registeredCount = registeredKeys.length;
+            return (
+              <div key={piece.id} className="svg-status__piece">
+                <strong>{piece.name}</strong>
+                {registeredCount > 0 ? (
+                  <div className="svg-status__sizes">
+                    {SIZE_LIST.map((size) => (
+                      <span
+                        key={size}
+                        className={`svg-status__size ${hasSize(size) ? "svg-status__size--ok" : "svg-status__size--missing"}`}
+                      >
+                        {size} {hasSize(size) ? "\u2713" : ""}
+                      </span>
+                    ))}
+                    <div className="svg-status__count">
+                      {registeredCount} / {SIZE_LIST.length} 사이즈 등록
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <div>단일 SVG (사이즈별 파일 없음)</div>
-              )}
-            </div>
-          ))}
+                ) : (
+                  <div>단일 SVG (사이즈별 파일 없음)</div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 

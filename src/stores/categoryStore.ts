@@ -100,7 +100,17 @@ export async function saveCategories(categories: PatternCategory[]): Promise<voi
 
 /**
  * 특정 카테고리의 자식 카테고리들을 찾는다.
- * parentId가 일치하는 카테고리를 order 순으로 정렬하여 반환.
+ * parentId가 일치하는 카테고리를 "이름(한국어 자연 정렬)" 순으로 반환.
+ *
+ * 왜 order 기반이 아닌 이름 정렬인가:
+ *   order 값은 신규 카테고리가 추가될 때 max+1로 단순 부여되어 폴더
+ *   재배치/일괄 가져오기 시 사람 눈에 "뒤죽박죽"으로 보이는 문제가 있었다.
+ *   파일 탐색기처럼 이름 오름차순(가나다 + 숫자는 수치 비교)으로 정렬하면
+ *   "V넥 스탠다드-A"가 "V넥 스탠다드-B" 앞에 오고, "2XL"이 "10XL" 앞에 와서
+ *   사용자가 찾기 쉬워진다.
+ *
+ * order 필드는 데이터에 그대로 유지한다(legacy 호환 및 향후 사용자 드래그로
+ * 직접 순서를 덮어쓰는 기능이 들어올 여지를 위해). 지금은 정렬 기준으로만 쓰지 않는다.
  */
 export function getChildCategories(
   categories: PatternCategory[],
@@ -108,7 +118,11 @@ export function getChildCategories(
 ): PatternCategory[] {
   return categories
     .filter((c) => c.parentId === parentId)
-    .sort((a, b) => a.order - b.order);
+    .sort((a, b) =>
+      // numeric:true → "2XL"과 "10XL"을 문자가 아닌 숫자로 비교
+      // sensitivity:"base" → 대소문자/악센트 무시 (한글엔 영향 없지만 영문 혼용 안전)
+      a.name.localeCompare(b.name, "ko", { numeric: true, sensitivity: "base" })
+    );
 }
 
 /**

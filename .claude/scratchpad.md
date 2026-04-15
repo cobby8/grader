@@ -414,6 +414,55 @@ grader/
 
 **결론**: **치명 이슈(Drive 프리셋 파일 생성 실패) 해결 확인**. 회귀 없음. **커밋 가능**.
 
+### [2026-04-15] 카테고리/프리셋 이름 정렬 + "단일 SVG" 표시 버그 수정
+
+📝 구현한 기능:
+1. 카테고리 트리 정렬 기준을 `order` → "이름(한국어 자연 정렬)"로 변경
+2. PatternManage 프리셋 카드 목록을 이름 자연 정렬 (useMemo)
+3. Drive 출처 프리셋이 편집 화면/카드에서 "단일 SVG"로 잘못 표시되던 버그 수정
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| `src/stores/categoryStore.ts` | `getChildCategories` 정렬 기준 변경 (order → localeCompare "ko" numeric), order 필드는 데이터에 유지 | 수정 |
+| `src/pages/PatternManage.tsx` | useMemo import, filteredPresets useMemo + 이름 자연 정렬, getRegisteredSizeKeys 헬퍼 신규, getSizeBadgeText/getSizeListText 양쪽 필드 합산, 카드 표시 수정, 편집 폼 "등록된 SVG 파일" 섹션이 svgPathBySize도 체크 | 수정 |
+
+**원인 분석 결과: 원인 C (UI 표시 버그) 확정**
+- DriveImportModal.tsx는 **의도적으로** `svgBySize`를 비우고 `svgPathBySize`만 저장 (L181~192, JSON 비대화 방지 설계)
+- svgResolver.ts(B안)가 파일 생성 경로는 이미 흡수했지만, **표시 UI는 업데이트되지 않은 누락**
+- 결과: Drive 프리셋 13개 파일은 정상 저장/생성되지만 편집 화면에서만 "단일 SVG"로 표시됨
+- 사용자 스크린샷 `농구유니폼_V넥_스탠다드_암홀X` (13개 사이즈 파일) 검증 케이스와 100% 일치
+
+**수정 지점 4곳** (모두 `src/pages/PatternManage.tsx`):
+| 라인 | 수정 내용 |
+|------|----------|
+| L15 | useMemo import 추가 |
+| L291~304 | filteredPresets useMemo + 이름 자연 정렬 |
+| L688~705 | getRegisteredSizeKeys 헬퍼 신규 + getSizeBadgeText/getSizeListText 양쪽 필드 합산 |
+| L872~881 | 카드 표시 — getRegisteredSizeKeys 사용 |
+| L1083~1110 | 편집 폼 "등록된 SVG 파일" — registeredCount>0 조건 + hasSize()가 양쪽 필드 체크 |
+
+**회귀 점검**:
+- Local 프리셋(svgBySize만 있음): `getRegisteredSizeKeys`가 Set에 넣어 동일 결과 → 회귀 없음
+- 단일 SVG 케이스 (ungrouped 조각, svgBySize/svgPathBySize 둘 다 없음): registeredCount=0 → 기존처럼 "단일 SVG" 표시 유지
+- Drive 프리셋(svgPathBySize만 있음): **버그 수정 — 이제 "13/13 사이즈 등록" 표시됨**
+
+**검증**:
+- `npx tsc --noEmit`: ✅ PASS (EXIT=0)
+- `npx vite build`: ✅ PASS (72 modules, 823ms, index-D5FgKlHq.js 322.01 kB)
+
+💡 tester 참고:
+- 테스트 방법 A (정렬): PatternManage 진입 → 카테고리 트리/프리셋 카드가 가나다 순으로 정렬되어 표시되는지 확인. "V넥 스탠다드-A"가 "V넥 스탠다드-B" 앞에, 프리셋 이름 "농구유니폼_V넥_..."도 이름 순.
+- 테스트 방법 B (정렬 수치): 사이즈 포함 이름 "5XS"가 "10XS"보다 앞에 오는지 (numeric:true 동작).
+- 테스트 방법 C (버그 수정): Drive 가져오기로 등록된 프리셋 편집 클릭 → "등록된 SVG 파일" 섹션에 "13 / 13 사이즈 등록" 및 체크표시 표시 확인. "단일 SVG (사이즈별 파일 없음)" 문구 안 나와야 함.
+- 테스트 방법 D (카드 배지): 카드에서 Drive 프리셋의 조각이 "1개 SVG"가 아닌 "13사이즈: 5XS, 4XS, ..." 로 표시.
+- 회귀 점검: Local 프리셋(`svgBySize` 있는 것)도 기존처럼 사이즈 배지 정상 표시되어야 함.
+
+⚠️ reviewer 참고:
+- 특별히 봐줬으면 하는 부분:
+  (1) `getRegisteredSizeKeys`가 Set 경유로 중복 제거 — Local+Drive가 둘 다 있는 edge case(스캔 직후 개별 업로드 혼재)에서도 합집합 정상 동작
+  (2) useMemo deps: [presets, categories, selectedCategory] — selectedCategory 객체 참조가 매번 새로 만들어지면 캐시 무효 (원본 코드 구조 확인 필요할 수 있음. 다만 렌더마다 무효화돼도 filter+sort 비용은 수백 건 수준에서 무시 가능)
+  (3) categoryStore.ts의 `getNextOrder`는 여전히 order 필드 계산용으로 유지 — 드래그 순서 변경 기능이 들어올 때를 위한 하위 호환
+
 ## 수정 요청
 | 요청자 | 대상 파일 | 문제 설명 | 상태 |
 |--------|----------|----------|------|
@@ -436,3 +485,4 @@ grader/
 | 2026-04-15 | reviewer | Drive 연동 Phase 1 (1~7단계) 리뷰: 조건부 승인, 치명 1건(FileGenerate Drive 프리셋 가드) | 수정요청 1건 |
 | 2026-04-15 | developer | B안 치명 이슈 수정: svgResolver.ts 신규 + FileGenerate.tsx Illustrator 경로 통합 (+69줄/-11줄) | tsc/vite PASS |
 | 2026-04-15 | tester | B안 수정 재검증 (tsc/vite + 우선순위/교체지점/Drive·Local·Python 회귀) | 6/6 통과, 커밋 가능 |
+| 2026-04-15 | developer | 카테고리/프리셋 이름 자연 정렬 + "단일 SVG" 표시 버그 수정 (Drive 프리셋이 svgPathBySize만 체크 안 되던 UI 누락) | tsc/vite PASS |
