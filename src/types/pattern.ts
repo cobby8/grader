@@ -119,6 +119,37 @@ export const SIZE_LIST = [
 export type SizeName = (typeof SIZE_LIST)[number];
 
 /**
+ * 등록된 사이즈 목록을 "최소 ~ 최대" 형식 문자열로 변환한다.
+ *
+ * 왜 필요한가:
+ *   패턴 카드에 "5XS, 4XS, 3XS, ..., 5XL" 처럼 모든 사이즈를 나열하면
+ *   카드가 길어지고 한눈에 파악하기 어렵다. 범위만 표시하면 훨씬 깔끔하다.
+ *
+ * 비유:
+ *   의류 라벨의 "S-L" 표기 같은 것 — 중간이 빠져도 최소~최대만 보여준다.
+ *
+ * 규칙:
+ *   - 빈 배열 → "" (빈 문자열)
+ *   - 1개   → 해당 사이즈 그대로 (예: "L")
+ *   - 2개 이상 → SIZE_LIST 순서로 정렬 후 "최소 ~ 최대" (예: "5XS ~ 5XL")
+ *   - SIZE_LIST에 없는 사이즈는 뒤로 밀려난다 (idx=99 처리)
+ *
+ * @param sizes 등록된 사이즈 배열 (순서 무관)
+ * @returns 사이즈 범위 문자열
+ */
+export function getSizeRangeText(sizes: string[]): string {
+  if (!sizes.length) return "";
+  if (sizes.length === 1) return sizes[0];
+  // SIZE_LIST 인덱스 기준으로 정렬 (5XS → 5XL 방향)
+  const sorted = sizes.slice().sort((a, b) => {
+    const idxA = SIZE_LIST.indexOf(a as SizeName);
+    const idxB = SIZE_LIST.indexOf(b as SizeName);
+    return (idxA === -1 ? 99 : idxA) - (idxB === -1 ? 99 : idxB);
+  });
+  return `${sorted[0]} ~ ${sorted[sorted.length - 1]}`;
+}
+
+/**
  * 기준 아트보드 크기 (mm) — 회사 표준 디자인 PDF 아트보드
  *
  * 패턴 SVG의 아트보드가 이보다 작을 수 있으므로,

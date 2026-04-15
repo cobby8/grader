@@ -333,11 +333,19 @@ html, body, #root {
   margin-bottom: 20px;
 }
 
-/* --- 프리셋 카드 그리드 --- */
+/* --- 프리셋 카드 그리드 ---
+ * 사용자 요청(2026-04-15): 한 행에 2개씩 고정 2열 그리드.
+ * 좁은 화면(<=768px)에서는 1열로 자동 전환. */
 .preset-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+@media (max-width: 768px) {
+  .preset-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .preset-card {
@@ -350,6 +358,24 @@ html, body, #root {
   transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
   position: relative; /* __check 아이콘의 absolute 기준점 */
   border: 2px solid transparent; /* 선택 시 테두리로 전환되므로 레이아웃 이동 방지용 기본 투명 테두리 */
+  /* 간소화된 카드(2026-04-15): padding을 카드 자체에 주어 내부 섹션 간격을 줄임 */
+  padding: 12px 16px;
+}
+
+/* 간소화된 카드의 타이틀 줄 — 패턴명 + DRIVE 뱃지 */
+.preset-card__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+/* 간소화된 카드의 메타 줄 — 조각 수 + 사이즈 범위 */
+.preset-card__meta-row {
+  display: flex;
+  gap: 16px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
 }
 
 .preset-card:hover {

@@ -123,6 +123,57 @@ grader/
 - useEffect deps에 `runAutoSync`를 넣지 않은 설계 결정(의존성 경고는 eslint-disable로 처리). 무한 루프 방지 목적.
 - DriveImportModal.tsx 삭제했으나 관련 CSS 클래스(`.drive-import-modal*`)는 index.css에 그대로 남아있음(다른 페이지에서 쓰지 않아 dead code). 정리는 reviewer 판단.
 
+### [2026-04-15] 패턴 카드 간소화 + 조각 카운팅
+
+📝 구현한 기능: 패턴관리 카드 UI를 "패턴명/조각수/사이즈범위"만 남긴 1/3 높이 2열 그리드로 간소화. 조각 수는 SVG 실제 내용(path/polyline/polygon)을 파싱해서 표시. "+ 새 프리셋 추가" 버튼, 미리보기, 경로, 생성일, 편집/삭제 버튼 모두 제거.
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| src/services/svgResolver.ts | `countSvgPieces(svgContent)` 추가 — DOMParser로 <path>/<polyline>/<polygon> 카운팅 (+38줄) | 수정 |
+| src/types/pattern.ts | `getSizeRangeText(sizes)` 헬퍼 추가 — SIZE_LIST 순서 정렬 후 "최소 ~ 최대" (+31줄) | 수정 |
+| src/pages/PatternManage.tsx | 카드 JSX 간소화 + PresetCardPieceCount 서브컴포넌트 + 추가/편집/삭제 핸들러 제거 (-80줄) | 수정 |
+| src/App.css | `.preset-grid` 2열 고정 + `.preset-card` padding 축소 + `.preset-card__title-row/__meta-row` 추가 (±32줄) | 수정 |
+
+**핵심 구현 포인트**:
+- **조각 수(실제 카운팅)**: `src/services/svgResolver.ts`에 `countSvgPieces` 추가. `DOMParser`로 SVG를 image/svg+xml로 파싱 후 `querySelectorAll("path, polyline, polygon").length` 반환. `<g>` 그룹 내부도 재귀 탐색됨. parsererror/예외 시 0.
+- **비동기 로드 전략**: `PresetCardPieceCount` 소컴포넌트를 PatternManage 외부에 선언. useState 초기값을 **동기 계산**으로 시도(Local/svgData 인라인 있으면 즉시 결과, 없으면 null). useEffect가 null일 때만 `svgCacheStore.getSvg(firstPath)`로 Drive 경로를 읽어 `countSvgPieces` 반영. 언마운트 가드(`cancelled`)로 race 방지. deps는 `preset.id`만.
+- **사이즈 범위**: `getSizeRangeText(sizes)` — SIZE_LIST 인덱스 기준 정렬 후 `${sorted[0]} ~ ${sorted[last]}`. 길이 0/1은 각각 빈 문자열/단일. 카드에선 `getPresetSizeKeys(preset)`로 프리셋 전체 piece의 사이즈 키 합집합을 만든 뒤 넘김.
+- **제거 범위**:
+  - "+ 새 프리셋 추가" 버튼 JSX + `.preset-actions` 래퍼 → 빈 힌트 문구만 "자동 동기화" 안내로 교체
+  - 카드 내부: 미리보기(`preset-card__preview`), 경로(`preset-card__category`), 생성일(`preset-card__date`), 조각별 상세(`preset-card__pieces`), 편집/삭제 버튼(`preset-card__actions`)
+  - 핸들러 제거: `handleCreate/handleEdit/handleDelete`, `isDrivePreset/isDriveCategoryById/showDriveReadonlyToast` (호출부 전부 소멸)
+  - `setEditingId`는 미사용 → `const [editingId]` 읽기 전용으로 변경
+- **편집 폼 JSX 자체는 유지**: 지시서 "폼은 남겨둘 수 있음" 반영. 진입 경로가 없어 실제론 dead code지만 `mode === "edit" | "create"` 분기 + setter 사용처가 JSX 내부에 있어 TS `noUnusedLocals` 통과.
+- **CSS 그리드**: `grid-template-columns: repeat(2, 1fr); gap: 12px` 고정 2열. 768px 미만은 1열. 카드 `padding: 12px 16px`로 축소. `.preset-card__preview/__date/__category` 등 CSS는 dead code로 남김(리뷰어 판단).
+
+**검증 결과**:
+- `npx tsc --noEmit` PASS (에러 0)
+- `npm run build` PASS (vite 771ms, 301.26 kB / gzip 93.54 kB)
+
+💡 tester 참고:
+- 테스트 방법:
+  1. 패턴관리 진입 → 카드가 한 행에 2개씩 배치되는지 확인
+  2. 각 카드에 "패턴명(+DRIVE 뱃지) / 조각 N개 / 5XS ~ 5XL" 3개만 보이는지 확인
+  3. Drive 프리셋: 개발자도구 네트워크/IO를 보지 않고도 "조각 …개"→"조각 N개"로 0.5~2초 내 갱신되는지 확인
+  4. 한 SVG 내부에 path가 여러 개인 파일(앞판+뒷판 통합 등) → 실제 개수가 표시되는지 확인
+  5. 단일 path만 있는 SVG → "조각 1개"
+  6. 상단 브레드크럼 유지(전체/미분류/카테고리 경로 표시) 확인
+  7. 선택 모드 진입(/work에서 패턴 선택으로) → 카드 체크 배지 + 하이라이트 + "다음" 버튼 정상
+  8. "+ 새 프리셋 추가" 버튼이 화면에서 사라졌는지 확인
+- 정상 동작:
+  - 카드 높이가 예전의 1/3 수준
+  - DRIVE 뱃지는 Drive 출처 프리셋에만 표시
+  - 사이즈 범위가 없는 프리셋(사이즈 미등록)은 오른쪽 메타가 빈 문자열
+- 주의할 입력:
+  - 파싱 실패 SVG(깨진 파일 등) → "조각 0개"로 표시, 앱 흐름 영향 없음
+  - Drive 파일 사라짐 + `getSvg` 실패 → "조각 0개" fallback
+
+⚠️ reviewer 참고:
+- `PresetCardPieceCount`의 초기값 동기 계산(useState initializer): 첫 piece의 `svgBySize` 또는 `svgData`에서 즉시 계산 시도하여 깜빡임을 줄였음. Drive 프리셋만 null → 비동기 진입.
+- useEffect deps가 `preset.id`만 → preset 객체 참조 변경은 무시. 카운트가 "한 번 정해지면 유지"되는 디자인(파일 내용이 바뀌어도 카드에서 재계산 안 함). 옵션 4 자동 동기화에서 `svgCacheStore.invalidate` 호출되면 재렌더 트리거되지 않는 점 인지 필요 — 필요 시 deps에 `preset.updatedAt` 추가 고려.
+- 편집 폼 JSX 전체(약 800줄)는 dead code로 잔존. 용량 부담이 있으면 다음 커밋에서 제거 가능. (지시서 "남겨둬도 됨" 반영)
+- CSS `.preset-card__preview/__actions/__date/__pieces/__category/__header/__body/__info` 등은 dead selector. 다음 정리 커밋에서 제거 권장.
+
 ## 테스트 결과 (tester)
 
 ### [2026-04-15] 옵션 4 정적 검증

@@ -66,3 +66,41 @@ export function resolveSvgContentSync(
 ): string | undefined {
   return piece.svgBySize?.[size];
 }
+
+/**
+ * SVG 문자열 안의 "조각 수"(도형 개수)를 센다.
+ *
+ * 왜 필요한가:
+ *   패턴 카드 UI에 "조각 N개"를 실제 SVG 내용 기반으로 표시하기 위함.
+ *   기존에는 PatternPiece 배열 길이(= 등록된 조각 수)로 표시했으나, 실제로는
+ *   하나의 SVG 파일 안에 앞판/뒷판 등 여러 개의 path가 들어있는 경우가 많다.
+ *
+ * 비유:
+ *   옷 패턴 한 장(SVG 파일)에 그려진 "재단선 조각"이 몇 개인지 센다.
+ *   — 재단선 = <path>, <polyline>, <polygon> 태그.
+ *
+ * 구현:
+ *   - DOMParser로 SVG XML을 파싱하고, <path>/<polyline>/<polygon> 태그 합계 반환.
+ *   - `<g>` 그룹 안의 path도 querySelectorAll이 재귀 탐색하므로 포함됨.
+ *   - 파싱 실패 또는 빈 문자열이면 0 반환.
+ *
+ * @param svgContent SVG 파일 내용(문자열)
+ * @returns 조각 수 (0 이상 정수)
+ */
+export function countSvgPieces(svgContent: string): number {
+  if (!svgContent) return 0;
+  try {
+    const parser = new DOMParser();
+    // image/svg+xml 파서로 정확히 해석 (text/html은 태그 대소문자 잃음)
+    const doc = parser.parseFromString(svgContent, "image/svg+xml");
+    // 파싱 에러 검사 — DOMParser는 실패해도 예외를 안 던지고 <parsererror> 삽입
+    const parserError = doc.querySelector("parsererror");
+    if (parserError) return 0;
+    // 조각으로 간주할 태그들 — 닫힌 도형은 모두 "한 조각"으로 본다
+    const shapes = doc.querySelectorAll("path, polyline, polygon");
+    return shapes.length;
+  } catch {
+    // DOMParser 자체가 없는 환경 등 (Node test 시) — 안전한 기본값
+    return 0;
+  }
+}

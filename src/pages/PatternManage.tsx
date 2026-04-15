@@ -19,7 +19,9 @@ import { readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { PatternPreset, PatternPiece, PatternCategory, SizeSpec } from "../types/pattern";
-import { SIZE_LIST } from "../types/pattern";
+import { SIZE_LIST, getSizeRangeText } from "../types/pattern";
+import { countSvgPieces } from "../services/svgResolver";
+import { getSvg } from "../stores/svgCacheStore";
 import { loadPresets, savePresets, generateId } from "../stores/presetStore";
 import {
   loadCategories,
@@ -97,6 +99,84 @@ function getFolderNameFromPath(dirPath: string): string {
   return cleaned.split(/[\\/]/).pop() || "프리셋";
 }
 
+/**
+ * PresetCardPieceCount — 카드에 "조각 N개"를 실제 SVG 기반으로 표시하는 컴포넌트.
+ *
+ * 왜 별도 컴포넌트인가:
+ *   - Drive 프리셋은 svgBySize가 비어 있고 svgPathBySize(경로)만 있어서
+ *     실제 SVG 문자열을 디스크에서 await로 읽어야 한다.
+ *   - 각 카드가 독립적으로 로드되도록 하여 한 카드의 I/O 지연이 다른 카드 렌더를 막지 않게 한다.
+ *   - svgCacheStore가 LRU 캐시를 제공하므로 재방문 시 즉시 반환된다.
+ *
+ * 로직:
+ *   1) Local (svgBySize에 첫 사이즈 문자열 존재) → 동기 계산, 즉시 표시.
+ *   2) Drive (svgPathBySize만 존재) → 첫 번째 사이즈 경로를 getSvg로 비동기 로드 → countSvgPieces.
+ *   3) 로드 전/실패 시 "조각 …개"로 표시(노이즈 최소화). 실패해도 앱 흐름 영향 없음.
+ *
+ * 비유:
+ *   상품 카드가 재고를 서로 다른 창고에서 꺼내 표기하는 것과 같다 — 각자 비동기로 꺼내며,
+ *   한 카드가 늦어도 옆 카드는 이미 숫자를 보여주고 있다.
+ */
+function PresetCardPieceCount({ preset }: { preset: PatternPreset }) {
+  // 왜 useState인가: 비동기 로드가 완료되면 숫자를 갱신해야 하므로 리렌더 트리거가 필요.
+  // 초기값은 첫 piece의 svgBySize에서 동기 계산 가능하면 즉시 세팅(깜빡임 최소).
+  const [count, setCount] = useState<number | null>(() => {
+    // Local 프리셋: 첫 조각의 svgBySize 중 임의의 사이즈 1개에서 즉시 계산
+    const firstPiece = preset.pieces[0];
+    if (!firstPiece) return 0;
+    const inline = firstPiece.svgBySize
+      ? Object.values(firstPiece.svgBySize)[0]
+      : undefined;
+    if (inline) return countSvgPieces(inline);
+    // svgData(대표 인라인)도 있으면 활용
+    if (firstPiece.svgData) return countSvgPieces(firstPiece.svgData);
+    return null; // Drive 프리셋 → 비동기 로드 대기
+  });
+
+  useEffect(() => {
+    // 이미 동기로 계산됐으면 스킵
+    if (count !== null) return;
+    const firstPiece = preset.pieces[0];
+    if (!firstPiece) {
+      setCount(0);
+      return;
+    }
+    // Drive 프리셋의 첫 사이즈 경로를 뽑아 비동기 로드
+    const firstPath = firstPiece.svgPathBySize
+      ? Object.values(firstPiece.svgPathBySize)[0]
+      : undefined;
+    if (!firstPath) {
+      // 경로도 없으면 세기 불가 → 안전한 fallback
+      setCount(0);
+      return;
+    }
+    // 언마운트 후 setState 방지 (비동기 레이스)
+    let cancelled = false;
+    getSvg(firstPath)
+      .then((svg) => {
+        if (cancelled) return;
+        setCount(countSvgPieces(svg));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Drive 파일이 사라지거나 권한 문제 등 — 카드 전체 깨짐 방지용 0
+        setCount(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // preset.id 기준으로만 재실행 — 같은 preset 내 참조 변경은 무시
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset.id]);
+
+  return (
+    <span className="preset-card__stat">
+      {/* 로드 전에는 빈 말줄임으로 레이아웃만 유지 */}
+      조각 {count === null ? "…" : count}개
+    </span>
+  );
+}
+
 function PatternManage() {
   // === 라우터 네비게이션 (세션 없을 때 /work로 되돌리기 + "다음" 버튼용) ===
   const navigate = useNavigate();
@@ -115,7 +195,8 @@ function PatternManage() {
   const [presets, setPresets] = useState<PatternPreset[]>([]); // 전체 프리셋 목록
   const [categories, setCategories] = useState<PatternCategory[]>([]); // 카테고리 목록
   const [mode, setMode] = useState<EditMode>("list");          // 현재 화면 모드
-  const [editingId, setEditingId] = useState<string | null>(null); // 편집 중인 프리셋 ID
+  // 편집 중인 프리셋 ID — 진입 경로 제거로 항상 null이지만, 편집 폼 JSX 내부에서 참조되어 유지.
+  const [editingId] = useState<string | null>(null);
 
   // 카테고리 트리 선택 상태 (기본: 전체)
   const [selectedCategory, setSelectedCategory] = useState<SelectedCategory>({ type: "all" });
@@ -442,37 +523,10 @@ function PatternManage() {
     navigate("/generate");
   };
 
-  // === 새 프리셋 생성 모드 진입 ===
-  const handleCreate = () => {
-    setFormName("");
-    setFormPieces([]);
-    setFormSizes(SIZE_LIST.map((size) => ({ size, pieces: [] })));
-    setEditingId(null);
-    // 현재 선택된 카테고리를 기본 카테고리로 설정
-    setFormCategoryId(
-      selectedCategory.type === "category" ? selectedCategory.id : ""
-    );
-    setMode("create");
-  };
+  // 편집 진입 핸들러(handleCreate/handleEdit/handleDelete)는 카드 간소화(2026-04-15)로
+  // 호출 경로가 모두 사라져 제거됐다. 편집 폼 JSX 자체는 남아 있지만 진입 경로가 없어
+  // mode가 "list" 이외의 값이 될 일은 없다. 필요 시 git history에서 복원 가능.
 
-  // === 기존 프리셋 편집 모드 진입 ===
-  const handleEdit = (preset: PatternPreset) => {
-    setFormName(preset.name);
-    setFormPieces([...preset.pieces]);
-    const sizeMap = new Map(preset.sizes.map((s) => [s.size, s]));
-    setFormSizes(
-      SIZE_LIST.map((size) => sizeMap.get(size) || { size, pieces: [] })
-    );
-    setFormCategoryId(preset.categoryId || "");
-    setEditingId(preset.id);
-    setMode("edit");
-  };
-
-  // === 프리셋 삭제 ===
-  const handleDelete = async (id: string) => {
-    const updated = presets.filter((p) => p.id !== id);
-    await persistPresets(updated);
-  };
 
   // === SVG 파일 여러 개 선택 및 추가 (다중 선택) ===
   const handleAddPieces = async () => {
@@ -811,26 +865,9 @@ function PatternManage() {
   // Drive 카테고리는 Drive에서, Local 카테고리도 앱에서 rename 불가.
   // 필요 시 카테고리 삭제 후 새로 추가하는 것이 정책.
 
-  // === Drive 출처 프리셋 판정 ===
-  // 왜 헬퍼인가: 편집/삭제 버튼 비활성화 + 토스트 분기에 반복 사용된다.
-  // piece 중 하나라도 svgSource="drive"면 Drive 출처로 간주(하이브리드 케이스 방어).
-  const isDrivePreset = (preset: PatternPreset): boolean => {
-    return preset.pieces.some((p) => p.svgSource === "drive");
-  };
+  // Drive 출처 판정/토스트 헬퍼들은 카드 간소화(편집/삭제 버튼 + 새 프리셋 추가 버튼 제거,
+  // 2026-04-15)로 인해 호출부가 사라져 제거됐다. 필요 시 git history에서 복원 가능.
 
-  // === Drive 출처 카테고리 판정 ===
-  // 왜 헬퍼인가: "선택된 카테고리가 Drive면 + 새 프리셋 추가 버튼 비활성화" 분기에 사용.
-  // source 필드가 "drive"이면 즉시 Drive로 판정.
-  const isDriveCategoryById = (categoryId: string): boolean => {
-    const cat = categories.find((c) => c.id === categoryId);
-    return cat?.source === "drive";
-  };
-
-  // === 읽기 전용 안내 토스트 (alert로 fallback) ===
-  // 토스트 시스템이 없으므로 alert로 대체 — 동일 문구 일관성 유지를 위해 헬퍼화.
-  const showDriveReadonlyToast = () => {
-    alert("이 항목은 Google Drive에서만 수정할 수 있습니다.");
-  };
 
   // === 조각이 실제로 보유한 사이즈 키 집합 계산 ===
   //
@@ -845,6 +882,26 @@ function PatternManage() {
     // SIZE_LIST에 정의된 순서대로 정렬 (5XS → 5XL 방향, 작은→큰 순)
     // 이유: Set 반복 순서는 삽입 순서라 무작위로 보일 수 있음. 사용자가 카드에서
     // "5XS, 4XS, ..., 5XL" 순으로 보기를 원함. SIZE_LIST에 없는 값은 뒤로.
+    return Array.from(keys).sort((a, b) => {
+      const idxA = SIZE_LIST.indexOf(a as typeof SIZE_LIST[number]);
+      const idxB = SIZE_LIST.indexOf(b as typeof SIZE_LIST[number]);
+      return (idxA === -1 ? 99 : idxA) - (idxB === -1 ? 99 : idxB);
+    });
+  };
+
+  // === 프리셋 전체의 등록 사이즈 키 집합 ===
+  //
+  // 왜 별도 헬퍼인가: 간소화된 카드에서 "5XS ~ 5XL" 같은 범위를 표기하려면
+  // piece 단위가 아닌 "이 프리셋이 가진 모든 사이즈"의 합집합이 필요하다.
+  // 조각별로는 사이즈가 다를 수 있지만(예: 일부 조각만 2XL 등록), 프리셋 관점에서는
+  // 등록된 최소~최대로 요약한다. 비유: 여러 카탈로그 페이지의 사이즈를 모은
+  // "상품 라벨"의 sizes 표시와 같다.
+  const getPresetSizeKeys = (preset: PatternPreset): string[] => {
+    const keys = new Set<string>();
+    for (const piece of preset.pieces) {
+      for (const k of getRegisteredSizeKeys(piece)) keys.add(k);
+    }
+    // SIZE_LIST 순서 유지
     return Array.from(keys).sort((a, b) => {
       const idxA = SIZE_LIST.indexOf(a as typeof SIZE_LIST[number]);
       const idxB = SIZE_LIST.indexOf(b as typeof SIZE_LIST[number]);
@@ -955,37 +1012,9 @@ function PatternManage() {
               </div>
             )}
 
-            {/* 프리셋 추가 버튼 (Drive 가져오기 버튼은 옵션 4에서 자동 동기화로 대체되어 제거됨) */}
-            {/* 왜 조건부 비활성화: 현재 선택된 카테고리가 Drive 출처면 새 프리셋 생성을 막는다.
-                Drive 카테고리는 SSOT가 Drive 폴더이므로 앱에서 만든 프리셋이 다음 동기화에서
-                "고립"되거나 정합성을 깨뜨릴 수 있다. */}
-            <div className="preset-actions">
-              {(() => {
-                const blocked =
-                  selectedCategory.type === "category" &&
-                  isDriveCategoryById(selectedCategory.id);
-                return (
-                  <button
-                    className="btn btn--primary"
-                    onClick={() => {
-                      if (blocked) {
-                        showDriveReadonlyToast();
-                        return;
-                      }
-                      handleCreate();
-                    }}
-                    disabled={blocked}
-                    title={
-                      blocked
-                        ? "Drive 카테고리에는 앱에서 프리셋을 추가할 수 없습니다"
-                        : undefined
-                    }
-                  >
-                    + 새 프리셋 추가
-                  </button>
-                );
-              })()}
-            </div>
+            {/* "+ 새 프리셋 추가" 버튼은 사용자 요청(2026-04-15)으로 제거됨.
+                Drive 자동 동기화가 기본이 되면서 앱 내 수동 추가 경로는 가려둔다.
+                편집 폼(mode === "create" | "edit") 자체는 추후 재진입 경로를 열어둘 가능성을 위해 유지. */}
 
             {/* 프리셋이 없을 때 안내 */}
             {filteredPresets.length === 0 ? (
@@ -998,8 +1027,8 @@ function PatternManage() {
                 </p>
                 <p className="preset-empty__hint">
                   {presets.length === 0
-                    ? '위의 "새 프리셋 추가" 버튼을 눌러 첫 번째 프리셋을 만들어보세요'
-                    : "새 프리셋을 추가하거나 기존 프리셋의 카테고리를 변경하세요"}
+                    ? "Google Drive 동기화를 통해 프리셋이 자동으로 등록됩니다 (설정에서 확인)"
+                    : "다른 카테고리를 선택해 보세요"}
                 </p>
               </div>
             ) : (
@@ -1044,10 +1073,11 @@ function PatternManage() {
                         ✓
                       </div>
                     )}
-                    <div className="preset-card__header">
+                    {/* 간소화된 카드 — 패턴명(+DRIVE 뱃지) / 조각 수(실제 SVG 파싱) / 사이즈 범위 */}
+                    <div className="preset-card__title-row">
                       <h3 className="preset-card__name">
                         {preset.name}
-                        {/* Drive 출처 프리셋 식별 뱃지 (1개 이상의 piece가 svgSource="drive"면 표시) */}
+                        {/* Drive 출처 프리셋 식별 뱃지 */}
                         {preset.pieces.some((p) => p.svgSource === "drive") && (
                           <span
                             className="preset-card__drive-badge"
@@ -1062,122 +1092,15 @@ function PatternManage() {
                         )}
                       </h3>
                     </div>
-                    <div className="preset-card__body">
-                      <div className="preset-card__info">
-                        <span className="preset-card__stat">
-                          조각 {preset.pieces.length}개
-                        </span>
-                        <span className="preset-card__stat">
-                          사이즈{" "}
-                          {
-                            preset.sizes.filter((s) =>
-                              s.pieces.some((p) => p.width > 0 || p.height > 0)
-                            ).length
-                          }
-                          개
-                        </span>
-                      </div>
-                      {/* 조각별 SVG 사이즈 현황 — 등록된 SVG 파일 목록을 한눈에 보여준다 */}
-                      {preset.pieces.length > 0 && (
-                        <div className="preset-card__pieces">
-                          {preset.pieces.map((piece) => {
-                            // Local(svgBySize) + Drive(svgPathBySize) 양쪽 합산해서 사이즈 집계
-                            // 왜: Drive 프리셋은 svgBySize가 비어 있고 svgPathBySize에만 값이
-                            // 들어있어서 기존 로직으로는 "1개 SVG"로 잘못 표시되었다.
-                            const sizeKeys = getRegisteredSizeKeys(piece);
-                            return (
-                              <div key={piece.id} className="preset-card__piece">
-                                <span className="preset-card__piece-name">{piece.name}</span>
-                                {sizeKeys.length > 1 ? (
-                                  // 여러 사이즈가 등록된 경우: 사이즈 수 + 목록
-                                  <span className="preset-card__piece-sizes">
-                                    {sizeKeys.length}사이즈: {sizeKeys.join(", ")}
-                                  </span>
-                                ) : (
-                                  // 단일 SVG만 있는 경우
-                                  <span className="preset-card__piece-sizes preset-card__piece-sizes--single">
-                                    1개 SVG
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                      {/* 카테고리 태그 (있을 때만) */}
-                      {preset.categoryId && (
-                        <div className="preset-card__category">
-                          {getCategoryPath(categories, preset.categoryId)
-                            .map((c) => c.name)
-                            .join(" > ")}
-                        </div>
-                      )}
-                      <div className="preset-card__date">
-                        생성: {new Date(preset.createdAt).toLocaleDateString("ko-KR")}
-                      </div>
-                    </div>
-                    {/* SVG 미리보기 썸네일 */}
-                    {preset.pieces.length > 0 && (
-                      <div
-                        className="preset-card__preview"
-                        dangerouslySetInnerHTML={{
-                          __html: preset.pieces[0].svgData,
-                        }}
-                      />
-                    )}
-                    {/* 편집/삭제 버튼 — Drive 출처 프리셋은 비활성화 + 토스트 안내.
-                        왜: Drive 프리셋의 SSOT는 Drive 폴더이므로 앱 내 변경은
-                        다음 동기화에서 무효화될 수 있다(이름/조각 구조 등). */}
-                    {/* 버튼 onClick에서 e.stopPropagation()을 호출하는 이유:
-                        선택 모드에서는 카드 전체가 클릭 가능한 상태이므로,
-                        편집/삭제 버튼을 눌렀을 때 "카드 선택"으로 버블링되면
-                        의도치 않게 선택 상태가 바뀐다. */}
-                    <div className="preset-card__actions">
-                      {(() => {
-                        const isDrive = isDrivePreset(preset);
-                        return (
-                          <>
-                            <button
-                              className="btn btn--small"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (isDrive) {
-                                  showDriveReadonlyToast();
-                                  return;
-                                }
-                                handleEdit(preset);
-                              }}
-                              disabled={isDrive}
-                              title={
-                                isDrive
-                                  ? "Drive 프리셋은 앱에서 편집할 수 없습니다"
-                                  : undefined
-                              }
-                            >
-                              편집
-                            </button>
-                            <button
-                              className="btn btn--small btn--danger"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (isDrive) {
-                                  showDriveReadonlyToast();
-                                  return;
-                                }
-                                handleDelete(preset.id);
-                              }}
-                              disabled={isDrive}
-                              title={
-                                isDrive
-                                  ? "Drive 프리셋은 앱에서 삭제할 수 없습니다"
-                                  : undefined
-                              }
-                            >
-                              삭제
-                            </button>
-                          </>
-                        );
-                      })()}
+                    <div className="preset-card__meta-row">
+                      {/* 조각 수: 실제 SVG 내부 path/polyline/polygon 개수
+                          PresetCardPieceCount 내부에서 비동기 로드 + countSvgPieces 계산.
+                          컴포넌트 경계를 둔 이유: 카드별 독립 상태 + 각 카드의 useEffect 분리. */}
+                      <PresetCardPieceCount preset={preset} />
+                      {/* 사이즈 범위 — "5XS ~ 5XL" 등 */}
+                      <span className="preset-card__stat">
+                        {getSizeRangeText(getPresetSizeKeys(preset))}
+                      </span>
                     </div>
                   </div>
                   );
