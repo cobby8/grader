@@ -1083,6 +1083,19 @@ function alignToBodyCenter(group, layerFill) {
 function main() {
     $.writeln("[grading.jsx] 스크립트 시작 (CMYK 베이스 + 몸판 우선 재작성판)");
 
+    // ===== STEP -1: 대화상자 자동 계속 처리 =====
+    // 왜 필요한가: Illustrator는 AI 파일 열 때 폰트 누락/프로파일 불일치/링크 이미지 누락 등
+    // 다양한 경고 대화상자를 띄운다. 사용자가 매번 "계속" 버튼을 클릭해야 하면 자동화 의미가 없다.
+    // DONTDISPLAYALERTS 설정 시 경고를 기본 동작(계속)으로 자동 처리한다.
+    // 단, 치명 오류(파일 손상 등)는 여전히 표시될 수 있으나 이는 정상 동작.
+    try {
+        app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS;
+        $.writeln("[grading.jsx] userInteractionLevel=DONTDISPLAYALERTS 적용 (경고 자동 계속)");
+    } catch (uiError) {
+        // Illustrator 버전 차이로 실패 가능 — 무시하고 진행
+        $.writeln("[grading.jsx] userInteractionLevel 설정 실패, 무시: " + uiError);
+    }
+
     // ===== STEP 0: config.json 읽기 =====
     var config = readConfig();
     var resultPath = config.resultJsonPath;
