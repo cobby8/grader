@@ -242,6 +242,59 @@ grader/
 - **alert 사용**: 토스트 라이브러리 도입 비용 대비 alert가 가장 단순. 향후 Phase에서 toast UX 도입 시 한 곳(showDriveReadonlyToast 함수)만 교체.
 - **CategoryTree IIFE 패턴**: PatternManage에서 `(() => { ... })()`로 buttons 분기를 감쌌음. 가독성 vs JSX 외부 함수 추출 트레이드오프 — 현재는 작아서 인라인 유지.
 
+### [2026-04-15] Phase 1 뼈대 — 3단계 워크플로우 (/work → /pattern → /generate)
+
+📝 구현한 기능: 작업 흐름 재설계(PLAN-WORKFLOW-REDESIGN.md)의 Phase 1 "뼈대". 1단계 "작업 선택" 페이지(WorkSetup) 신규 + 세션(sessionStorage) 기반 WorkSession 타입/스토어 신규 + 사이드바/라우팅을 3단계 구조로 전환.
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| src/types/session.ts | WorkSession 인터페이스 신규 (workFolder, baseAiPath, selectedPresetId?, createdAt) | 신규 |
+| src/stores/sessionStore.ts | load/save/update/clearWorkSession 4함수 + STORAGE_KEY="grader.session" | 신규 |
+| src/pages/WorkSetup.tsx | 폴더 선택 + AI 파일 선택(.ai 필터 + stat 파일크기 표시) + "다음: 패턴 선택" 버튼 | 신규 |
+| src/App.css | `.work-section/.work-label/.work-input-row/.work-input/.work-hint` 스타일(+50줄) | 수정 |
+| src/components/Sidebar.tsx | navItems를 3항목으로 축소(작업선택/패턴/파일생성), icon=📁/✂/📄 | 수정 |
+| src/main.tsx | /work 라우트 추가, 루트→/work 리다이렉트, DesignUpload/SizeSelect import 제거, /design→/work /size→/generate 리다이렉트, /generate는 FileGenerate 유지 | 수정 |
+
+**핵심 구현 포인트**:
+- **세션 저장소**: `sessionStorage` 사용. 앱 재시작 시 초기화되는 "1회성 작업" 시맨틱에 부합. SSR/프라이빗 모드 대비 try/catch로 감쌈.
+- **stat 권한 처리**: `@tauri-apps/plugin-fs`의 `stat`은 `fs:allow-stat` 권한이 capabilities/default.json에 없음. WorkSetup에서 `try { stat(...) } catch {}`로 감싸 실패 시 파일 크기 표시만 생략(기능상 영향 없음). 권한 추가는 추후 필요 시 진행.
+- **/generate 라우트**: Phase 1에서는 OrderGenerate가 아직 없으므로 **기존 FileGenerate 유지**. Phase 4에서 OrderGenerate로 교체 예정. 이 설계 덕에 Phase 1만 돌려도 사이드바 3단계 모두 클릭 가능(단, /pattern→/generate 전환 흐름은 Phase 4 전엔 구/신 하이브리드).
+- **하위 호환 리다이렉트**: `/design → /work`, `/size → /generate`. 북마크/딥링크 안전망.
+- **DesignUpload/SizeSelect 파일**: 삭제하지 않고 유지(Phase 5에서 제거 예정). 현재 미사용이지만 FileGenerate가 generationStore를 통해 SizeSelect와 간접 연결되어 있어 `/generate` 흐름 유지용.
+- **세션 복원**: WorkSetup 진입 시 `loadWorkSession()`으로 기존 값 복원. /pattern에서 뒤로 왔을 때 빈 폼이 아님.
+- **Sidebar 아이콘**: 📁(폴더) / ✂(가위=패턴) / 📄(문서=생성). 이모지 기반으로 빠르게 구성(Phase 2+에서 Material Symbols로 통일 검토).
+
+**검증 결과**:
+- `npx tsc --noEmit` PASS (에러 0)
+- `npm run build` PASS (tsc + vite 776ms, 301.18 kB — 기존 318.70 kB에서 -17.52 kB 감소: DesignUpload import 제거 효과)
+
+💡 tester 참고:
+- 테스트 방법:
+  1. 앱 실행 → 루트(/) 접속 시 /work로 자동 이동되는지 확인
+  2. 사이드바가 "1 작업 선택 / 2 패턴 / 3 파일 생성" 3단계로 표시되는지
+  3. /work에서 "📁 찾기" 클릭 → 폴더 선택 다이얼로그 열림 → 선택 시 경로 표시
+  4. /work에서 "🎨 찾기" 클릭 → AI 파일 다이얼로그(.ai만 필터) → 선택 시 경로 + (권한 있으면) 크기 표시
+  5. 두 값 채우기 전에는 "다음" 버튼 disabled, 둘 다 채우면 활성화
+  6. "다음" 클릭 → /pattern으로 이동, 개발자 콘솔에서 `sessionStorage.getItem("grader.session")` 확인
+  7. /pattern에서 /work로 돌아오면 기존 선택값이 복원되는지
+  8. /design 딥링크 접속 → /work로 리다이렉트, /size 접속 → /generate로 리다이렉트
+- 정상 동작:
+  - sessionStorage에 `{workFolder, baseAiPath, createdAt}` JSON 저장
+  - 앱 재시작(창 닫고 다시 열기) 시 세션 휘발(sessionStorage 특성) → /work 빈 폼
+  - PatternManage는 기존 동작 그대로(세션을 아직 사용하지 않음, Phase 2에서 연동)
+- 주의할 입력:
+  - `.ai` 확장자가 아닌 파일은 다이얼로그에서 보이지 않음(필터 적용). 사용자가 강제로 다른 파일 선택해도 Tauri가 막음.
+  - 폴더/파일 선택을 취소(ESC)해도 에러 나지 않아야 함(open()이 null 반환).
+  - sessionStorage 용량 한계(5~10MB)는 이 데이터 크기에선 무의미하지만, 향후 확장 시 유의.
+
+⚠️ reviewer 참고:
+- **stat 권한 미추가**: 의도적. 기능에 필수가 아니고, capabilities 변경은 rebuild가 필요해 뼈대 단계에선 부담. 필요 시 `fs:allow-stat` + `allow: [{path: "C:/Users/**"}, ...]` 추가.
+- **DesignUpload/SizeSelect 페이지 존속**: 사용되지 않으나 파일 자체는 유지. Phase 5에서 제거하며 동시에 generationStore/designStore/DesignUpload.tsx/SizeSelect.tsx 정리 예정. TypeScript 컴파일에서 unused import는 main.tsx에서 이미 제거되어 문제 없음.
+- **FileGenerate 연결**: /generate가 FileGenerate를 계속 가리키고 있어, SizeSelect 없이 /generate로 직접 들어가면 generationStore가 비어있어 FileGenerate가 되돌려 보내려 할 것(L130). 이는 Phase 4까지의 임시 상태이고, OrderGenerate 구현 시 해결됨.
+- **Sidebar의 /work 노출**: step 1이라 사용자가 어느 단계에서든 클릭해 돌아갈 수 있음. 세션이 있으면 WorkSetup이 복원되므로 안전.
+- **이모지 아이콘**: 계획서의 `📁 🎨` 이모지를 따름. 추후 Material Symbols로 교체 가능성 있음.
+- **Phase 1 범위**: "뼈대"이므로 실제 그레이딩 흐름(세션→패턴선택→주문서생성)은 아직 미연결. Phase 2+에서 PatternManage가 session.selectedPresetId를 설정하고, Phase 4에서 OrderGenerate가 session을 소비.
+
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
@@ -257,3 +310,4 @@ grader/
 | 2026-04-15 | tester | Drive 옵션 4 정적 검증 11/11 통과 (tsc/build/치수 보존/쿨다운/무한루프 방지 확인) | 커밋 가능 |
 | 2026-04-15 | developer | 트리 더블클릭=토글 + rename 제거 + Drive 카테고리/프리셋 readonly UI (4파일, tsc/build PASS) | 커밋 대기 |
 | 2026-04-15 | planner-architect | 작업 흐름 재설계 상세 계획 PLAN-WORKFLOW-REDESIGN.md 작성 (4→3단계, PDF→AI, 1회성세션) | 완료 |
+| 2026-04-15 | developer | Phase 1 뼈대 — WorkSetup/session 타입·스토어 신규 + Sidebar/main 3단계 전환 (3신규+3수정, tsc/build PASS) | 커밋 대기 |

@@ -1,16 +1,20 @@
 /**
  * Sidebar 컴포넌트
- * 좌측 네비게이션 바. 워크플로우 4단계를 순서대로 표시.
+ * 좌측 네비게이션 바. 워크플로우 3단계(재설계 후)를 순서대로 표시.
  * NavLink를 사용하여 현재 페이지 하이라이트 처리.
+ *
+ * 재설계 이력:
+ *   - 기존 4단계(패턴관리/디자인등록/사이즈/파일생성) → 3단계(작업선택/패턴/파일생성).
+ *   - DesignUpload/SizeSelect는 /work /generate로 통합되어 사이드바에서 제외.
+ *   - 기존 라우트는 main.tsx에서 리다이렉트로 하위 호환 유지.
  */
 import { NavLink } from "react-router-dom";
 
-// 네비게이션 항목 정의 - 워크플로우 순서와 동일
+// 네비게이션 항목 정의 - 3단계 워크플로우
 const navItems = [
-  { path: "/pattern",  step: "1", label: "패턴 관리",    icon: "✂" },
-  { path: "/design",   step: "2", label: "디자인 등록",  icon: "🎨" },
-  { path: "/size",     step: "3", label: "사이즈 선택",  icon: "📏" },
-  { path: "/generate", step: "4", label: "파일 생성",    icon: "📄" },
+  { path: "/work",     step: "1", label: "작업 선택", icon: "📁" },
+  { path: "/pattern",  step: "2", label: "패턴",     icon: "✂" },
+  { path: "/generate", step: "3", label: "파일 생성", icon: "📄" },
 ];
 
 // 워크플로우와 분리된 보조 메뉴 (설정 등)

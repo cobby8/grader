@@ -1801,3 +1801,52 @@ html, body, #root {
   margin-bottom: 12px;
 }
 
+/* ============================================
+ * WorkSetup (1단계: 작업 선택) 스타일
+ * 왜 별도 클래스인가: 기존 .preset-*, .design-* 와 섞이지 않도록 네임스페이스 분리.
+ * ============================================ */
+
+/* 하나의 입력 블록(레이블 + 입력 + 버튼)을 감싸는 섹션 */
+.work-section {
+  margin-bottom: 24px;
+}
+
+/* 섹션 제목 (📁 작업 폴더 / 🎨 기준 AI 파일) */
+.work-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 8px;
+}
+
+/* 입력창 + 버튼을 가로로 배치 */
+.work-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* 경로 표시용 읽기 전용 입력 — flex:1로 남는 공간 차지 */
+.work-input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #f9fafb;
+  font-size: 13px;
+  color: #111827;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", monospace;
+}
+
+.work-input::placeholder {
+  color: #9ca3af;
+}
+
+/* 파일 크기 등 부가 정보 — 작은 회색 글씨 */
+.work-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
