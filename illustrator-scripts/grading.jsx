@@ -1498,10 +1498,30 @@ function main() {
                 // designDoc을 다시 활성 문서로 전환 (copy 대상 선택 위해)
                 app.activeDocument = designDoc;
                 designDoc.selection = null;
-                // refLayer의 모든 pageItem을 선택
+
+                // 왜 copy 전에 원본 bounds를 기록하나:
+                //   - 일반 paste는 화면 중앙으로 붙여넣어 원본 좌표가 손실된다.
+                //   - pasteInPlace가 실패/미지원 버전일 경우를 대비해, 원본 bounds를 기억해 두고
+                //     paste 후 실제 위치와 차이가 크면 translate로 강제 복원한다.
+                // 합집합 bounding box 계산 (여러 pageItem 전체의 외곽 박스):
+                //   - geometricBounds = [left, top, right, bottom] (top은 Illustrator에서 큰 값)
+                var refOrigLeft = null, refOrigTop = null, refOrigRight = null, refOrigBottom = null;
                 for (var r = 0; r < refLayer.pageItems.length; r++) {
                     refLayer.pageItems[r].selected = true;
+                    var gb = refLayer.pageItems[r].geometricBounds;
+                    if (refOrigLeft === null) {
+                        refOrigLeft = gb[0]; refOrigTop = gb[1];
+                        refOrigRight = gb[2]; refOrigBottom = gb[3];
+                    } else {
+                        if (gb[0] < refOrigLeft)   refOrigLeft = gb[0];
+                        if (gb[1] > refOrigTop)    refOrigTop = gb[1];    // top: 값이 클수록 위
+                        if (gb[2] > refOrigRight)  refOrigRight = gb[2];
+                        if (gb[3] < refOrigBottom) refOrigBottom = gb[3]; // bottom: 값이 작을수록 아래
+                    }
                 }
+                writeLog("STEP 8B 교체용요소 원본 bounds: ["
+                    + refOrigLeft + ", " + refOrigTop + ", " + refOrigRight + ", " + refOrigBottom + "]");
+
                 if (designDoc.selection && designDoc.selection.length > 0) {
                     app.executeMenuCommand("copy");
                     $.writeln("[grading.jsx] '교체용요소' " + designDoc.selection.length + "개 copy 완료");
@@ -1515,10 +1535,60 @@ function main() {
                         baseRefLayer.name = "교체용요소";
                     }
                     baseDoc.activeLayer = baseRefLayer;
-                    app.executeMenuCommand("paste");
-                    writeLog("STEP 4B 교체용요소 paste 완료: baseRefLayer.pageItems=" + baseRefLayer.pageItems.length);
+
+                    // 왜 pasteInPlace인가:
+                    //   - 일반 paste는 화면 중앙에 붙여넣어 교체용요소가 아트보드 중앙으로 이동하는 버그 발생.
+                    //   - pasteInPlace는 원본 좌표 그대로 붙여넣어, 아트보드 밖 원래 위치를 유지한다.
+                    //   - 메뉴 명령어 이름이 버전에 따라 다를 수 있어 try/catch로 폴백 체인 구성.
+                    var pasteMethod = "unknown";
+                    try {
+                        app.executeMenuCommand("pasteInPlace");
+                        pasteMethod = "pasteInPlace";
+                        writeLog("STEP 8B 교체용요소 pasteInPlace 성공");
+                    } catch (ePasteInPlace) {
+                        writeLog("[WARN] pasteInPlace 실패, 일반 paste로 폴백: " + ePasteInPlace);
+                        try {
+                            app.executeMenuCommand("paste");
+                            pasteMethod = "paste(fallback)";
+                        } catch (ePasteMenu) {
+                            app.paste();
+                            pasteMethod = "app.paste(fallback)";
+                        }
+                    }
+
+                    // 폴백 안전망: paste 후 위치를 원본과 비교하여 어긋나면 translate로 복원.
+                    //   - pasteInPlace가 성공해도 만일을 대비해 항상 검사 (오차 0.01pt 이상이면 복원).
+                    //   - geometricBounds는 스트로크 제외 기하학적 경계 → 원본 비교에 적합.
+                    if (baseRefLayer.pageItems.length > 0 && refOrigLeft !== null) {
+                        var newLeft = null, newTop = null;
+                        for (var nk = 0; nk < baseRefLayer.pageItems.length; nk++) {
+                            var nb = baseRefLayer.pageItems[nk].geometricBounds;
+                            if (newLeft === null) {
+                                newLeft = nb[0]; newTop = nb[1];
+                            } else {
+                                if (nb[0] < newLeft) newLeft = nb[0];
+                                if (nb[1] > newTop)  newTop = nb[1];
+                            }
+                        }
+                        var dx = refOrigLeft - newLeft;   // 좌측 기준 x 이동량
+                        var dy = refOrigTop - newTop;     // 상단 기준 y 이동량
+                        if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+                            // 붙여넣은 모든 요소를 동일 벡터로 이동 (상대 위치 유지)
+                            for (var tk = 0; tk < baseRefLayer.pageItems.length; tk++) {
+                                baseRefLayer.pageItems[tk].translate(dx, dy);
+                            }
+                            writeLog("STEP 8B 교체용요소 위치 복원: dx=" + dx + ", dy=" + dy
+                                + " (method=" + pasteMethod + ")");
+                            $.writeln("[grading.jsx] 교체용요소 위치 복원: dx=" + dx + ", dy=" + dy);
+                        } else {
+                            writeLog("STEP 8B 교체용요소 위치 일치 (복원 불필요, method=" + pasteMethod + ")");
+                        }
+                    }
+
+                    writeLog("STEP 8B 교체용요소 paste 완료: baseRefLayer.pageItems=" + baseRefLayer.pageItems.length
+                        + " (method=" + pasteMethod + ")");
                     $.writeln("[grading.jsx] '교체용요소' → baseDoc 레이어에 paste 완료 ("
-                        + baseRefLayer.pageItems.length + "개)");
+                        + baseRefLayer.pageItems.length + "개, method=" + pasteMethod + ")");
                 } else {
                     $.writeln("[grading.jsx] 경고: '교체용요소' 선택 가능한 아이템 없음 — 스킵");
                     baseRefLayer = null;
