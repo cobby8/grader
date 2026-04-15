@@ -55,6 +55,15 @@ grader/
 
 ## 기획설계 (planner-architect)
 
+### [2026-04-16] 조각 인식 기반 요소 배치 재설계 (Piece-Aware Layout)
+- **상세**: `PLAN-PIECE-AWARE-LAYOUT.md` (신규, 검토 보고서 + 옵션 5개 + Q1~Q5)
+- **현재 D1 한계**: 조각 정보는 이미 수집(Phase 2) 되는데 STEP 10에서 **미사용** — 전체 중심+clamp만 수행
+- **진단**: `importSvgPathsToDoc` L851 / `extractPatternPieces` L952에 **fill 체크 없음** → 장식선도 조각으로 오인 가능
+- **권장안 B+A 단계적**: Phase 1(filled path 필터, 1~2h) → Phase 2(조각 내부 rx/ry 상대좌표 매핑, 3~4h)
+- **핵심 변경**: 신규 `alignElementByRelativeCoord(item, rx, ry, targetPiece)` — 각 요소를 "원래 조각 내부의 정규화 좌표"로 타겟 조각에 재투영
+- **Q2 재확인 필수**: 이전 D1은 Q1=A(간격 고정) 전제. 이번 요청은 "조각 따라감" = 벌어짐 허용 전제 → 사용자 선호 변경 여부 확인
+- ⚠️ 코드 수정 없음 — 검토/계획서만
+
 ### [2026-04-16] grading.jsx 누적 회귀 감사 + 재건 계획
 - **상세**: `PLAN-GRADING-RECOVERY.md` (신규, 커밋 감사/버그 가설/3옵션 비교/Phase별 계획)
 - **핵심 진단**: 3개 독립 버그 — (A) STEP 8B 복원 안전망이 **문서 간 ruler origin 차이**를 인식 못해 `dy=-3401.57`(=svgHeight)로 파괴, (B) S/4XL paste=0 격번 실패는 designDoc.selection getter 타이밍 또는 clipboard 재번역 의심, (C) D1 CENTER 스케일은 건전하지만 원본 bounds가 아트보드 경계 근접 시 확대로 구조적 초과
