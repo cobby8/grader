@@ -211,6 +211,18 @@ function DriveImportModal({
         });
       }
 
+      // 신규 0개면 onImport 호출 생략하고 즉시 닫기
+      // 이유: PatternManage의 handleDriveImport가 "신규 0개, 0개" 빈 alert를 띄워 사용자 혼란 → 여기서 차단
+      if (newCategories.length === 0 && newPresets.length === 0) {
+        if (skippedCount > 0) {
+          alert(`모든 프리셋이 이미 존재합니다. ${skippedCount}개 스킵됨.`);
+        } else {
+          alert("가져올 신규 항목이 없습니다.");
+        }
+        onClose();
+        return;
+      }
+
       // 3) 부모 콜백 호출 — 부모가 영속화 + 토스트 표시
       await onImport({
         newCategories,
@@ -342,18 +354,30 @@ function DriveImportModal({
           <button className="btn" onClick={onClose} disabled={importing}>
             닫기
           </button>
-          {scanResult && scanResult.success && (
-            <button
-              className="btn btn--primary"
-              onClick={handleImport}
-              disabled={
-                importing ||
-                scanResult.presets.length - previewSkipped <= 0
-              }
-            >
-              {importing ? "가져오는 중..." : "가져오기"}
-            </button>
-          )}
+          {scanResult && scanResult.success && (() => {
+            // 버튼 라벨/상태 분기 — 스캔 성공 후엔 항상 누를 수 있게 (importing만 막음)
+            // 이유: 신규 0개여도 사용자가 확인차 누를 수 있어야 하고,
+            //       handleImport 안에서 "이미 존재함" 안내 후 즉시 닫기 처리
+            const newCount =
+              scanResult.presets.length - previewSkipped;
+            const skipCount = previewSkipped;
+            const buttonLabel = importing
+              ? "가져오는 중..."
+              : newCount === 0
+                ? "중복 확인 완료 (추가 없음)"
+                : skipCount === 0
+                  ? `${newCount}개 가져오기`
+                  : `${newCount}개 추가 가져오기 (${skipCount}개 스킵)`;
+            return (
+              <button
+                className="btn btn--primary"
+                onClick={handleImport}
+                disabled={importing}
+              >
+                {buttonLabel}
+              </button>
+            );
+          })()}
         </div>
       </div>
     </div>

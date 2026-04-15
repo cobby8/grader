@@ -67,6 +67,44 @@ grader/
 
 ## 구현 기록 (developer)
 
+### [2026-04-15] 가져오기 버튼 활성화 + 트리 기본 접힘 + 빈 import 모달 닫기
+
+📝 구현한 기능: DriveImportModal UX 개선 3종 + CategoryTree 기본 접힘
+
+| 파일 경로 | 변경 내용 | 신규/수정 | 라인 |
+|----------|----------|----------|------|
+| `C:\0. Programing\grader\src\components\DriveImportModal.tsx` | disabled 조건 완화 + 라벨 3분기 + 신규 0개 즉시 닫기 | 수정 | L214~225(신규 0개 가드), L356~380(footer 버튼 IIFE 렌더) |
+| `C:\0. Programing\grader\src\components\CategoryTree.tsx` | 기본 접힘 (useState true → false) + 주석 동반 수정 | 수정 | L61~62 |
+
+1. **DriveImportModal disabled 조건 완화** (L356~380 풋터 영역)
+   - 기존: `disabled={importing || scanResult.presets.length - previewSkipped <= 0}`
+   - 변경: `disabled={importing}`
+   - 이유: 스캔 성공 후엔 사용자가 항상 눌러볼 수 있어야 함. 신규 0개 케이스는 handleImport 내부에서 분기
+
+2. **DriveImportModal 버튼 라벨 3분기** (L356~380)
+   - `importing` → "가져오는 중..."
+   - `newCount === 0` → "중복 확인 완료 (추가 없음)"
+   - `skipCount === 0` → "N개 가져오기"
+   - 둘 다 있음 → "N개 추가 가져오기 (M개 스킵)"
+   - IIFE로 감싸 로컬 변수(newCount/skipCount/buttonLabel) 계산
+
+3. **CategoryTree 기본 접힘** (L62)
+   - `useState(true)` → `useState(false)`
+   - 주석 "(기본: 펼침)" → "(기본: 접힘)" 동반 수정
+
+4. **DriveImportModal handleImport 신규 0개 가드** (L214~225)
+   - `newCategories.length === 0 && newPresets.length === 0`이면 onImport 호출 생략
+   - skippedCount에 따라 "모든 프리셋이 이미 존재합니다. N개 스킵됨" 또는 "가져올 신규 항목이 없습니다" alert
+   - onClose() 즉시 호출 → PatternManage의 빈 "0개/0개" alert 방지
+
+💡 tester 참고:
+- 테스트 방법 1: Drive 루트에서 스캔 → 신규 프리셋이 있는 상태 → 버튼에 "N개 가져오기" 표시되는지 확인
+- 테스트 방법 2: 동일 Drive 폴더 재스캔 (이미 전부 가져온 상태) → 버튼 활성화 + "중복 확인 완료 (추가 없음)" 라벨 + 클릭 시 "모든 프리셋이 이미 존재합니다" alert 후 모달 닫힘
+- 테스트 방법 3: 일부는 신규 / 일부는 중복 → "N개 추가 가져오기 (M개 스킵)" 라벨
+- 테스트 방법 4: CategoryTree 렌더 시 모든 노드가 접혀 있는지, 클릭 시 펼쳐지는지
+
+검증: `npx tsc --noEmit` PASS / `npm run build` (vite 7.3.2) PASS (72 modules, 771ms)
+
 ### [2026-04-15] Drive 깊이 제한 완화 (5→20)
 - `src/services/driveSync.ts`: `MAX_SCAN_DEPTH` 5 → 20 (실전 최대 6레벨 확인, 사용자 "제한 없이" 요청 반영). 상수 주석/헤더 주석/경고 메시지 문구 갱신.
 - `PLAN-GDRIVE-SYNC.md`: "3레벨" 표현 전반 갱신 + [B]/[D]/[E]/[H]/[J-3] 섹션 반영 + 상단에 "갱신 이력" 섹션 추가.

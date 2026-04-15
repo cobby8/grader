@@ -58,8 +58,8 @@ function TreeNode({
   onDeleteCategory: (id: string) => void;
   onRenameCategory: (id: string, newName: string) => void;
 }) {
-  // 이 노드가 펼쳐져 있는지 (기본: 펼침)
-  const [expanded, setExpanded] = useState(true);
+  // 이 노드가 펼쳐져 있는지 (기본: 접힘)
+  const [expanded, setExpanded] = useState(false);
   // 이름 편집 모드인지
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(category.name);
