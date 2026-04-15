@@ -2,6 +2,12 @@
 <!-- 담당: debugger, tester | 최대 30항목 -->
 <!-- 이 프로젝트에서 반복되는 에러 패턴, 함정, 주의사항을 기록 -->
 
+### [2026-04-16] Illustrator 문서 간 geometricBounds 직접 비교 금지 (ruler origin 차이)
+- **분류**: error
+- **발견자**: planner-architect (PLAN-GRADING-RECOVERY 감사 중)
+- **내용**: grading.jsx STEP 8B의 "pasteInPlace 복원 안전망"이 designDoc의 `geometricBounds`([left, top, right, bottom])와 baseDoc의 `geometricBounds`를 **동일 좌표계인 것처럼 빼서** translate 보정했다가 정확히 `dy = -svgHeight`(-3401.57pt)만큼 파괴하는 버그 발생. 원인: 두 문서의 ruler origin이 다르면(설정 또는 새 문서 생성 기본값 차이) 같은 **아트보드 기준 위치**도 **문서 기준 좌표값**은 아트보드 높이만큼 차이가 난다. pasteInPlace는 아트보드 좌표 기준이라 정확히 맞게 붙여넣고, geometricBounds는 문서 좌표라 "어긋나 보이지만 실제로는 맞는" 상태를 만든다. 해결: (1) 서로 다른 문서의 bounds를 직접 비교하지 않는다. (2) 비교가 필요하면 각 문서의 `artboards[0].artboardRect`로 아트보드 기준 상대 좌표로 환산 후 비교. (3) pasteInPlace가 지원되는 Illustrator 버전(CS6+)에서는 안전망을 **두지 않는 편이 안전**.
+- **참조횟수**: 0
+
 ### [2026-04-10] PyMuPDF doc.close() 이후 len(doc) 사용 금지
 - **분류**: error
 - **발견자**: tester
