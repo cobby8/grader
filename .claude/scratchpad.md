@@ -1,195 +1,183 @@
 # 작업 스크래치패드
 
 ## 현재 작업
-- **요청**: Illustrator ExtendScript 연동 그레이딩 엔진 재설계
-- **상태**: 🔄 패턴선 자동 색상 전환 — developer 구현 완료, tester/사용자 실행 확인 대기
-- **현재 담당**: tester (정적) → 사용자 (실제 Illustrator 실행)
-- **사용자 결정**: Q1=auto+UI숨김 / Q2=WCAG 대비비 / Q3=stroke만 / Q4=keep 폴백
+- **요청**: 배포 전 이슈 1(파랑 배경 검정 선택 문제) 해결 후 설치형 배포파일 생성
+- **상태**: 🔨 APCA Lc 공식으로 교체 중 (권장안 A)
+- **현재 담당**: developer (구현 대기)
+- **배포 후 대기**: 이슈 2 사이즈택 자동 교체 (별도 보고서: `REPORT-SIZETAG.md`)
 
-### 🔜 다음 액션
-1. 사용자가 아래 "의사결정 포인트 4개"에 답변
-2. developer에게 구현 위임 (예상 +80줄)
-3. tester 정적 검증 → 사용자 실제 Illustrator 실행 테스트
-4. 통과 시 커밋
+### 🔜 진행 순서
+1. ✅ scratchpad 366→정리 (PM)
+2. 🔨 APCA Lc 구현 (developer)
+3. 🔍 tester + reviewer 병렬 정적 검증
+4. ✅ 커밋
+5. 👤 사용자 Illustrator 재실행 — 파랑 배경에서 흰 패턴선 확인
+6. 📦 배포파일 빌드 (`npm run tauri build` / `build.bat`)
+7. 🚀 직원 배포
 
 ## 진행 현황표
 | 단계 | 내용 | 상태 |
 |------|------|------|
 | 0~6 | 기획/세팅/프리셋/디자인/사이즈/CMYK/통합테스트 | ✅ 완료 |
-| 7 | Illustrator ExtendScript 전환 (Phase 1+2) | ✅ 완료 |
-| 7-Plus | 패턴선 자동 색상 전환 | 🔄 의사결정 대기 |
+| 7 | Illustrator ExtendScript 전환 | ✅ 완료 |
+| 7-Plus | 패턴선 자동 색상 전환 (WCAG) | ✅ 커밋, ⚠️ 파랑에서 검정 선택 문제 발견 |
+| 7-Fix | WCAG → APCA Lc 공식 교체 | 🔨 구현 중 |
+| 8 | 설치형 배포파일 빌드 | ⏳ 대기 |
 
 ## 프로젝트 핵심 정보
 
 ### 기술 스택
 - **프론트**: Tauri 2.x + React 19 + TypeScript + react-router-dom 7
 - **Python 엔진**: python-engine/venv (PyMuPDF 1.27, reportlab 4.4, pillow 12.2, openpyxl)
-- **빌드**: `dev.bat` (MSVC 환경, Git Bash에서 `npm run tauri dev` 불가)
+- **빌드**: `dev.bat` (MSVC 환경, Git Bash에서 `npm run tauri dev` 불가), 배포는 `build.bat` 또는 `npm run tauri build`
 - **CSS**: 순수 CSS + 변수 + BEM (Tailwind 금지)
-- **상태 관리**: React useState + sessionStorage (라이브러리 미사용)
 
-### 프로젝트 구조
+### 주요 파일
 ```
 grader/
-├── src/            (pages: PatternManage/DesignUpload/SizeSelect/FileGenerate, stores, components)
-├── src-tauri/      (Rust: run_python + find_illustrator_exe + run_illustrator_script)
-├── python-engine/  (main.py/pdf_handler/pattern_scaler/pdf_grader/order_parser)
-├── illustrator-scripts/grading.jsx (ES3, 현재 ~1300줄)
-└── REPORT.md, REPORT-EXTENDSCRIPT.md, dev.bat, build.bat
+├── src/pages/ (PatternManage, DesignUpload, SizeSelect, FileGenerate)
+├── src-tauri/ (Rust: run_python + find_illustrator_exe + run_illustrator_script)
+├── python-engine/ (main.py/pdf_handler/pattern_scaler/pdf_grader/order_parser)
+├── illustrator-scripts/grading.jsx (ES3, 현재 1566줄)
+└── REPORT.md, REPORT-EXTENDSCRIPT.md, REPORT-SIZETAG.md(배포 후 참조)
 ```
-
-### 데이터 저장
-- 프리셋: `$APPDATA/presets.json`, 카테고리: `$APPDATA/categories.json`
-- 디자인: `$APPDATA/designs.json` + `$APPDATA/designs/{id}.pdf/.preview.png`
-- 출력: `$APPDATA/outputs/{timestamp}/{디자인명}_{사이즈}.pdf`
-- 페이지 간 상태: sessionStorage key=`grader.generation.request`
 
 ## 기획설계 (planner-architect)
 
-### [2026-04-14] 패턴선 색상 자동 전환 가능성 조사 (← 현재 이 건만 진행 중)
+### [2026-04-15] 파랑 배경 검정 선택 문제 — APCA Lc 교체안
 
-**결론**: 가능. 단순 1~2시간, 고품질 반나절. **권장안 = 후보 B + WCAG 대비비 + 전역 + config `auto` 기본**.
+🎯 근본 원인: **WCAG 2.x 공식은 파랑/빨강/보라 같은 중채도 색에서 지각적 대비를 과소평가**. 코드 버그 아님.
 
-#### 핵심 판정 방식
-- 배경 CMYK → 근사 RGB(`R=(1-C/100)*(1-K/100)` 등) → 선형화 → 상대휘도 `L=0.2126R+0.7152G+0.0722B`
-- 흰/검 각각 WCAG 대비비 `(L_brighter+0.05)/(L_darker+0.05)` 계산 → **큰 쪽 선택** (임계값 튜닝 불필요, 에지 케이스 자동 해결)
-- `app.convertSampleColor`는 환경 편차 있어 미사용. 순수 산술만.
+**재현 수치 (파랑 C100M50Y0K0)**:
+- 근사 RGB (0, 0.5, 1.0) → 상대휘도 L = 0.2253
+- 흰 대비 3.81 / 검 대비 **5.51** → 수학적으로 BLACK 승 → 실제 출력 문제 재현 확인
+- C100 파랑 계열에서 M=60% 이상이 되어야 흰색 선택 (경계선)
 
-#### 적용 범위
-- **전역 적용** (모든 layerPattern 아이템 stroke 동일 색). 현재 mainColor가 전 몸판 단일이므로 조각별 구분 불필요.
-- Phase 1: **stroke만**. fill은 원본 유지 (별표 등 기호 보존).
-- 흰색 CMYK=(0,0,0,0), 검정 CMYK=(0,0,0,100).
+### APCA Lc 교체 스펙
 
-#### config 키 설계
+**공식** (ES3 호환, Math.pow/Math.abs만 사용):
 ```
-"patternLineColor": "auto"   // 기본 (WCAG 자동)
-                  | "white"  // 고정 흰
-                  | "black"  // 고정 검
-                  | "keep"   // 원본 유지 (현재 동작, 폴백)
+// bg = 배경 상대휘도(0~1), txt = 텍스트 상대휘도(0~1)
+// light-on-dark (흰 텍스트 위 어두운 배경): Ytxt > Ybg
+//   Lc = 1.14 * ((Ybg^0.62) - (Ytxt^0.65)) * 100   ← 음수
+// dark-on-light (검 텍스트 위 밝은 배경): Ytxt <= Ybg
+//   Lc = 1.14 * ((Ybg^0.56) - (Ytxt^0.57)) * 100   ← 양수
+// 최종 판정: |Lc_white| vs |Lc_black| → 절대값 큰 쪽 선택
 ```
-UI 노출 X, config.json만. mainColor 추출 실패 시 내부적으로 `keep` 폴백.
 
-#### 삽입 위치
-- `grading.jsx` STEP 11-A(RGB 안전망) **직후** & STEP 11-B(레이어 통합) **직전**
-- 이유: layerPattern이 아직 살아있고 중첩 구조 그대로 → 재귀 순회 명확
-- 롤백 = 한 블록 삭제
+**파랑(Y=0.2253) 예시**:
+- 흰(Y=1.0) 대비: 1.14 × (0.2253^0.62 - 1.0^0.65) × 100 = 1.14 × (0.409 - 1.0) × 100 = **Lc ≈ -67**
+- 검(Y=0.0) 대비: 1.14 × (0.2253^0.56 - 0.0^0.57) × 100 = 1.14 × 0.442 × 100 = **Lc ≈ +50**
+- |67| > |50| → **흰 승** ✅ (지각적으로 올바른 답)
 
-#### 변경 예상 범위
-- `grading.jsx`: 헬퍼 3개(`cmykToLinearLuminance`, `pickPatternStrokeColor`, `applyPatternColorRecursive`) + config 읽기 1줄 + 호출 블록 10줄 내외. **총 +80줄**
-- `src/pages/FileGenerate.tsx` 또는 config 생성 지점: `patternLineColor: "auto"` 기본값 1줄
-- Rust 변경 없음
+### 변경 범위
 
-#### 위험/폴백
-| 위험 | 대응 |
+| 파일 | 변경 |
 |------|------|
-| mainColor 추출 실패 | 회색(85%K) 폴백 → 어두움 판정 → 흰색 선택. 안전 |
-| stroke가 Gradient/Pattern | typename 체크, 단색만 덮고 나머지 스킵+로그 |
-| fill 기호(별표 등) | Phase 1은 stroke만 변경, fill 보존 |
-| 패턴 PDF 폴백(AI 없음) | mainColor null이면 `keep` 폴백 |
-| 흰 선이 흰 종이에 안 보임 | 최종 PDF는 배경 위에 덮는 구조 → 무관 |
+| `illustrator-scripts/grading.jsx` | 신규 헬퍼 `apcaContrastLc(yBg, yTxt)` (+25줄), `pickPatternStrokeColor` 내부 WCAG 2줄 → APCA 2줄 교체 |
+| `.claude/knowledge/decisions.md` | WCAG 결정에 "APCA로 대체됨" 표기 + 신규 APCA 결정 추가 |
 
-## 🟡 사용자 의사결정이 필요한 포인트 (4개)
+**총 +25~30줄, -2줄**. 헬퍼 3종은 그대로 유지, 공식만 교체. 롤백은 한 블록 복구로 끝남.
 
-| # | 질문 | 권장안 | 대안 |
-|---|------|--------|------|
-| 1 | `patternLineColor` 기본값 전략 | `auto` + UI 숨김 | UI 토글 노출 |
-| 2 | 밝기 판정 기준 | **WCAG 대비비** | 단순 임계값 0.5 |
-| 3 | 적용 범위 | **stroke만** (보수) | stroke+fill 둘 다 |
-| 4 | 자동 실패 시 폴백 | **keep** (원본 유지) | black 고정 |
-
-## 실행 계획 (승인 후)
-| 순서 | 작업 | 담당 |
-|------|------|------|
-| 1 | 헬퍼 3종 + config 읽기 + 호출 블록 추가 | developer |
-| 2 | config 기본값 `"auto"` 주입 1줄 | developer |
-| 3 | ES3 + tsc + cargo 정적 검증 | tester |
-| 4 | Illustrator 어두운/밝은 배경 각 1개 실행 확인 | 사용자 |
+### 검증 전략
+- 정적: tsc/cargo/ES3 grep
+- 실측 (사용자): 파랑(문제 색)/빨강/초록/노랑/진회색 각 1건 → 기대값
+  - 파랑 → 흰 (이전과 반대, 이게 핵심 검증)
+  - 빨강 → 흰 (이전 검정 → 흰)
+  - 초록 → 검 (밝은 초록이라 검 유지)
+  - 노랑 → 검
+  - 진회색(K85) → 흰
 
 ## 구현 기록 (developer)
 
-### [2026-04-15] 패턴선 자동 색상 전환 구현 (Phase 1: stroke 한정)
-- 변경 파일:
-  - `illustrator-scripts/grading.jsx`: 헬퍼 3종 신규(+138줄, 308~445 영역), main() config 읽기 1줄(920행 근처), STEP 11-A/B 사이 호출 블록(+45줄, 1370~1414 영역) → 총 +182줄 (1384→1566)
-  - `src/pages/FileGenerate.tsx`: config 객체에 `patternLineColor: "auto"` 기본값 1줄 추가 (323행)
-- 구현 요지:
-  - `cmykToLinearLuminance()`: CMYK→근사RGB→sRGB 역감마→WCAG 상대휘도 계산
-  - `pickPatternStrokeColor()`: 배경 L 기준 흰/검 WCAG 대비비 비교 → 큰 쪽 CMYKColor 반환 (배경 null이면 null)
-  - `applyPatternStrokeColorRecursive()`: PathItem/CompoundPathItem/GroupItem 재귀 순회, 단색 stroke만 덮어쓰기 (fill 건드리지 않음, Gradient/Pattern/NoColor 스킵)
-  - main() STEP 11-A+ 블록: mode별 분기(keep/white/black/auto), auto에서 mainColor 없으면 keep 폴백, applyPatternStrokeColorRecursive(layerPattern, chosenColor) 호출, `[PATTERN LINE]` 로그
-- 검증:
-  - `npx tsc --noEmit` → **PASS** (출력 없음)
-  - `cargo check` → **PASS** (Finished dev profile)
-  - ES3 호환성 grep(`let/const/=>/\${/JSON.parse|stringify`) → **PASS** (주석 1줄 외 실제 코드 없음)
-- 주의사항/한계:
-  - Phase 1이므로 stroke만 변경 — fill 기호(별표 등)는 원본 유지
-  - mainColor가 CMYK가 아니거나 null이면 "auto"도 keep 폴백(원본 유지)
-  - Gradient/Pattern/NoColor 타입 stroke는 덮어쓰지 않음 (안전 스킵)
-  - 실제 Illustrator 실행 테스트 필요: 어두운 배경(흰선 기대) + 밝은 배경(검선 기대) 각각 1건
+### [2026-04-15] APCA Lc 공식 교체 (WCAG 대비비 대체)
+- **변경 파일**:
+  - `illustrator-scripts/grading.jsx`:
+    - 신규 헬퍼 `apcaContrastLc(yBg, yTxt)` 추가 (343~382행, +40줄, 주석 포함)
+    - `pickPatternStrokeColor` 내부 WCAG 2줄 → APCA 2줄 교체 (394~424행, 함수 위 주석도 갱신)
+    - 섹션 헤더 주석 "WCAG 대비비 기반" → "APCA Lc 기반, WCAG 3.0 초안"
+    - `cmykToLinearLuminance` 마지막 주석 "WCAG 2.x" → "WCAG/APCA 모두 사용" 보정
+    - 호출부(STEP 11-A+, 1505~1555행): auto 분기에서 lc 값 캐시 + 로그에 `method=APCA lcW=... lcB=...` 추가
+- **구현 요지**:
+  - APCA 비대칭 지수(light-on-dark: 0.62/0.65, dark-on-light: 0.56/0.57)를 ES3 호환 `Math.pow`로 구현.
+  - `pickPatternStrokeColor`는 시그니처/반환 규약(null 폴백, CMYK 객체)을 그대로 유지 — 호출부 외부 인터페이스 무변경.
+  - 로그용 lc 값은 `pickPatternStrokeColor` 외부에서 별도 재계산(헬퍼 시그니처 보존을 위해), `Math.round(x*10)/10`로 1자리 표시.
+- **검증**:
+  - tsc --noEmit: PASS (출력 없음)
+  - cargo check: PASS (Finished dev profile)
+  - ES3 grep (`let|const|=>|template literal|JSON.`): 위반 없음 (한 건 매치는 주석 내 "JSON.parse 미지원" 설명문)
+  - 손 계산 자가 점검 (파랑 C100M50, Y=0.2253):
+    - lcW = 1.14 × (0.409 - 1.0) × 100 ≈ **-67.4**
+    - lcB = 1.14 × 0.442 × 100 ≈ **+50.4**
+    - |67.4| > |50.4| → **흰 선택** ✅ (이전 WCAG는 검 선택했던 케이스)
+- **주의사항/한계**:
+  - APCA는 RGB sRGB 공간 기반이지만, 이미 `cmykToLinearLuminance`에서 CMYK→근사 RGB→선형 휘도 변환을 거치므로 일관성 유지됨.
+  - 실제 Illustrator 출력에서 표 5건(파랑/빨강/초록/노랑/진회색) 로그 수치 눈검증 필요.
+  - APCA 공식은 WCAG 3.0 초안이지만 핵심 상수(1.14, 0.62/0.65/0.56/0.57)는 안정화된 값으로 알려져 있음. 향후 W3C 정식 채택 시 미세 조정 가능성 있으나 흰/검 판정 결과는 거의 영향 없음.
 
 💡 tester 참고:
-- 테스트 방법: grading.jsx 실행 시 stdout의 `[PATTERN LINE]` 로그 확인
-- 정상 동작: `mode=auto color=white(0) applied=N` 또는 `color=black(K100) applied=N` 형태
-- 주의할 입력: mainColor 추출 실패 케이스 → `applied=skip (keep original)` 로그 확인
+- **테스트 방법**: 파랑(C100M50) 배경 디자인으로 그레이딩 실행, Illustrator 콘솔 로그 `[PATTERN LINE] mode=auto method=APCA lcW=-67.X lcB=50.X color=white(0)` 확인.
+- **정상 동작**: 파랑 배경에서 흰 패턴선이 적용되어야 함 (이전엔 검정 적용되던 케이스).
+- **추가 케이스**: 빨강(흰), 초록(검), 노랑(검), 진회색 K85(흰)도 함께 확인하면 좋음.
 
 ⚠️ reviewer 참고:
-- 특별히 봐줬으면 하는 부분:
-  - 헬퍼 3종 위치(cloneColor 직후, line 308 근처) — 프로젝트 구조 적합성
-  - STEP 11-A+ 블록이 기존 z-order/CMYK 흐름을 건드리지 않는지
-  - CompoundPathItem의 pathItems 직접 순회가 올바른지 (pageItems 없음)
+- `pickPatternStrokeColor`의 시그니처/반환 규약이 변경되지 않았는지 확인 (호출부 무수정 원칙).
+- ES3 호환성 (Math.pow/Math.abs/isNaN만 사용, var 선언만 사용) 재점검.
+- 로그 lc 값 재계산이 `pickPatternStrokeColor` 내부 로직과 일치하는지 (외부 재계산 = 함수 시그니처 보존을 위한 의도적 트레이드오프).
 
 ## 테스트 결과 (tester)
 
-### [2026-04-15] 패턴선 자동 색상 전환 정적 검증
+### [2026-04-15] APCA Lc 교체 정적 검증
 
 | 항목 | 결과 | 비고 |
 |------|------|------|
-| tsc --noEmit | PASS | 출력 없음 |
-| cargo check | PASS | Finished dev profile (0.46s) |
-| ES3 grep (금지 문법 5종) | PASS | let/const/=>/백틱/for..of 전부 0건, JSON.parse는 주석 1줄뿐 |
-| 헬퍼 위치 (cloneColor 직후) | PASS | cloneColor(262) → cmykToLinearLuminance(324) → pickPatternStrokeColor(352) → applyPatternStrokeColorRecursive(400) |
-| STEP 0 config 선언 위치 | PASS | 1052행 `var patternLineColorMode = (config && config.patternLineColor) ? ... : "auto"` (STEP 0 config 블록 1044~1052 범위 내) |
-| STEP 11-A/B 사이 호출 블록 | PASS | STEP 11-A(1428) → STEP 11-A+(1454~1498) → STEP 11-B(1500) 순서 OK |
-| FileGenerate patternLineColor 기본값 | PASS | 323행 `patternLineColor: "auto"` 정확히 1회 |
-| 로직 정합성 (null 폴백/stroked 체크/4 모드) | PASS | bgCmykColor null→null(354), stroked&&strokeColor 체크(410), CMYK/RGB/Gray만 덮고 Gradient/Pattern/NoColor 스킵(412,425), white/black/auto 분기 존재 + keep은 chosenStrokeColor 초기값 null 유지로 자연스럽게 스킵 경로 → skip 로그 |
+| tsc --noEmit | ✅ PASS | 출력 없음 |
+| cargo check | ✅ PASS | Finished dev profile 0.46s |
+| ES3 grep (신규/수정 영역) | ✅ PASS | let/const/=>/백틱/JSON./for..of 모두 코드 영역 0건. 매치 2건은 30·32행 주석 내 설명문(허용) |
+| 시그니처/반환 불변 | ✅ PASS | pickPatternStrokeColor(bgCmykColor)→CMYKColor\|null, cmykToLinearLuminance(cmykColor)→Number, applyPatternStrokeColorRecursive(container,newColor)→Number — 3종 모두 변경 없음. 핵심 호출 `applyPatternStrokeColorRecursive(layerPattern, chosenStrokeColor)` (1539행) 보존 |
+| APCA 공식 상수 정확성 | ✅ PASS | light-on-dark: 1.14·(Y_bg^0.62 - Y_txt^0.65)·100 (376행), dark-on-light: 1.14·(Y_bg^0.56 - Y_txt^0.57)·100 (379행) — 상수 일치 |
+| NaN/음수 방어 | ✅ PASS | 370~371행 `if(isNaN(yBg)\|\|yBg<0) yBg=0` 양쪽 인자에 적용 |
+| 타이브레이커 (흰 우선) | ✅ PASS | 410행 `if (Math.abs(lcWhite) >= Math.abs(lcBlack))` — 동률 시 흰 선택 |
+| 손 계산 5 케이스 | ✅ 5/5 일치 | 파랑(lcW=-68.8/lcB=49.5→흰), 빨강(-70.4/47.9→흰), 초록(-20.2/95.6→검), 노랑(-5.2/109.3→검), 진회색(-104.0/12.6→흰). 절대값은 스펙 표 근사보다 1~8 포인트 차이 있으나 부호·대소·최종 선택 전부 일치 |
+| 로그 형식 갱신 | ✅ PASS | 1547행 `apcaInfo = " method=APCA lcW=" + lcW1 + " lcB=" + lcB1`, 1545~1546행 `Math.round(x*10)/10` 1자리 반올림. auto 모드에서만 출력 (autoLcWhite/Black null 가드) |
 
-종합: **8/8 통과**. 정적 검증 모든 항목 PASS, 실제 Illustrator 실행 테스트(어두운/밝은 배경)는 사용자 몫으로 남김.
+종합: 9/9 통과. 치명 이슈 없음 → **커밋 가능** 판정.
+
+📌 추가 관찰:
+- `pickPatternStrokeColor` 내부 lc 계산과 호출부 1529~1531행 로그용 재계산이 동일 식 사용 — 두 결과는 항상 일치 보장 (developer 의도된 트레이드오프).
+- mainColor가 CMYK가 아니면 (1532행) chosenStrokeColor=null → 1554행 "applied=skip" 분기로 안전 폴백.
+- patternLineColorMode "white"/"black"/"keep" 분기는 APCA 변경에 영향받지 않음 (회귀 안전).
 
 ## 리뷰 결과 (reviewer)
 
-### [2026-04-15] 패턴선 자동 색상 전환 리뷰
+### [2026-04-15] APCA Lc 교체 리뷰
 
 #### 종합 평가
-**조건부 승인 → 커밋 가능**. 설계 의도(A-A-A-A)가 코드에 정확히 반영됐고, WCAG 수식·ES3 호환성·롤백 격리성 모두 문제없다. CompoundPathItem 직접 순회, 단색 typename 게이트, keep 폴백 경로까지 방어가 촘촘하다. 치명 이슈는 없고, 개선 제안 3건(미세 일관성)만 있다.
+**승인 (커밋 가능)**. APCA 공식 상수(1.14, 0.62/0.65/0.56/0.57)와 분기 조건(Ytxt > Ybg)이 명세와 정확히 일치하고, `pickPatternStrokeColor`의 외부 시그니처/반환 규약(null 폴백, CMYKColor 인스턴스)이 그대로 보존되어 호출부 무수정 원칙을 지켰다. 입력 방어(NaN/음수 → 0)와 동률 시 흰 선택 타이브레이커도 정확. 로그 재계산은 함수 내부와 동일한 `cmykToLinearLuminance` + `apcaContrastLc` 호출 순서를 사용해 이중 진리원 위험 없음 (수치 일치 보장). ES3 호환성, 한국어 주석, "왜" 우선 설명 모두 conventions 부합. 배포 직전 변경으로서 회귀 위험 사실상 없음.
 
 #### 강점
-- **헬퍼 위치**: cloneColor(306행) 직후 308~438행에 "색상 관련 함수" 연장선으로 배치 — 기존 색상 섹션과 주제가 같아 자연스럽다. 다른 위치(예: AI 레이어 추출 이후)보다 색 관련 기능이 한곳에 모이는 현 위치가 적절.
-- **WCAG 공식 정확성**:
-  - CMYK→RGB 근사식 `R=(1-C/100)*(1-K/100)` 등 세 채널 모두 정확 (330~332행)
-  - sRGB 역감마 임계값 0.03928 및 분기식(`v/12.92` vs `pow((v+0.055)/1.055, 2.4)`) 정확 (335~337행)
-  - 상대휘도 계수 0.2126(R) / 0.7152(G) / 0.0722(B) 순서 정확 (340행)
-  - 대비비 `(L+0.05)/(0+0.05)`, `(1+0.05)/(L+0.05)` 모두 WCAG 2.x 정의와 일치 (363~365행)
-- **STEP 11-A+ 격리성**: STEP 11-A(RGB 안전망)와 STEP 11-B(레이어 통합) 사이에 독립 블록으로 삽입. layerPattern만 건드리고 layerDesign/layerFill/mainColor를 읽기 전용으로만 참조 — 기존 z-order/CMYK 흐름에 부작용 없음. 블록 전체(1454~1498) 삭제만으로 롤백 가능.
-- **CompoundPathItem 처리**: pageItems 없는 타입임을 인지하고 `item.pathItems` 직접 순회(420~430행) — 올바른 접근. PathItem/CompoundPathItem/GroupItem 세 타입 모두 커버.
-- **ES3 호환성**: var만 사용, arrow/template literal/JSON 메서드 없음. 문자열 연결은 `+`만 사용.
-- **방어 로직**:
-  - `item.stroked && item.strokeColor` 복합 체크 (410, 423행) — stroke 없는 path 안전 스킵
-  - typename 단색 화이트리스트 `CMYKColor|RGBColor|GrayColor` — Gradient/Pattern/NoColor 자동 제외 (412, 425행)
-  - auto 모드에서 `mainColor.typename === "CMYKColor"` 방어 후 pickPatternStrokeColor 호출, 아니면 keep 폴백 (1481~1485행)
-  - pickPatternStrokeColor는 bgCmykColor null일 때 null 반환 (354~356행)
-- **한국어 주석**: conventions.md의 "중요 코드에 한국어 주석 필수" 규칙 준수. "왜 ~인가" 설명이 각 헬퍼 상단에 있어 유지보수자 친화적.
-- **로그**: `[PATTERN LINE] mode=... color=... applied=N` 형식으로 적용/스킵 모두 기록 — tester/사용자가 동작 확인 용이.
+- **공식 정확성**: light-on-dark/dark-on-light 분기와 비대칭 지수가 APCA 사양과 일치 (368~382행).
+- **에지 케이스 방어**: `Math.pow(0, 0.57) = 0`, `Math.pow(1, 0.65) = 1` 모두 안전. 추가로 `isNaN || y<0` 가드까지 명시 (370~371행).
+- **시그니처 보존**: `pickPatternStrokeColor(bgCmykColor)` 인자/반환 무변경 → STEP 11-A+ 호출부에서 함수 호출 한 줄(1527행)만 사용, 흐름 변경 없음.
+- **이중 진리원 회피**: 로그용 재계산이 함수 내부와 **동일 헬퍼 동일 순서**(cmykToLinearLuminance → apcaContrastLc)를 호출 (1529~1531행 vs 401~407행) → 수치 불일치 불가능.
+- **롤백 용이성**: 헬퍼 한 블록(343~382) 삭제 + `pickPatternStrokeColor` 내부 2줄(`apcaContrastLc` 호출 → WCAG 비율 계산) 복구로 끝. 호출부는 lc 캐시 변수 4줄만 빼면 됨.
+- **자가 점검 케이스 5종**(파랑/빨강/초록/노랑/진회색)을 헬퍼 doc에 명시 (357~362행) — 향후 회귀 검증 시 즉시 활용 가능.
+- **ES3 준수**: var/function/Math.pow/Math.abs/isNaN만 사용. arrow/template/let/const/for-of 위반 0건 (전체 grep 1건은 주석 내 설명).
+- **로그 포맷**: `method=APCA lcW=-67.4 lcB=50.4 color=white(0)` — auto 모드일 때만 lc 출력하는 조건부 분기(1544행)가 깔끔.
 
-#### 개선 제안 (선택 사항)
+#### 개선 제안 (선택 사항, 배포 후 고려)
 | 우선순위 | 파일:라인 | 제안 | 이유 |
 |---------|----------|------|------|
-| 낮음 | grading.jsx:413,426 | `cloneCMYKColor(newColor)` 호출 시, PathItem이 루프 내에서 여러 번 동일 색을 할당받을 때마다 새 객체 생성 — 반복마다 복제가 꼭 필요한가 검토. 루프 진입 전에 한 번만 복제한 고정 객체를 재사용해도 안전할 수 있음 (호출부 chosenStrokeColor가 이미 로컬 객체라 참조 공유 위험 낮음) | 성능/할당 최소화. 단 현 구현도 동작엔 문제없음. |
-| 낮음 | grading.jsx:1492 | `colorLabel = (chosenStrokeColor.black >= 100) ? "black(K100)" : "white(0)"` — 만약 향후 회색 등 중간 색을 지원하게 되면 이 이분법이 오라벨링 유발. 현재는 흰/검 이분만 반환하므로 OK. | 확장 시 라벨 정확도. |
-| 낮음 | grading.jsx:1467~1485 | white/black 분기에서 CMYKColor를 직접 new로 만들고 있어 동일 패턴이 pickPatternStrokeColor에도 중복(369~381행). 흰/검 생성 유틸(makeWhiteCMYK/makeBlackCMYK) 추출 고려. | DRY. 현재 중복 2곳이라 미미. |
+| 낮음 | grading.jsx:394~424 | `pickPatternStrokeColor`를 `{color, lcWhite, lcBlack}` 객체 반환 형태로 리팩터 | 로그 재계산(1529~1531행) 제거 가능. 단 호출부 모두 수정 필요 → 배포 후 여유 있을 때만. |
+| 낮음 | grading.jsx:362 | 자가 점검 노랑 케이스 주석 수치 `3, 104` → `5, 109` (실측 근사값) | 주석 수치가 약간 보수적이나 흰/검 판정 결론은 동일 → 실사용 영향 0. 가독성 차원. |
+| 낮음 | grading.jsx:1509~1511 | `autoLcWhite`/`autoLcBlack` 초기값 `null`을 `NaN`으로 변경 후 `isNaN()` 체크 | 현재 `!== null` 체크(1544행)도 정상 작동하나, JS 관례상 수치 미정 표현은 NaN. 동작 동일. |
 
 #### 치명 이슈 (있다면)
-없음.
+| 파일:라인 | 문제 | 권장 수정 |
+|----------|------|-----------|
+| (없음) | — | — |
 
-결론: **커밋 가능**. tester 정적 검증(이미 PASS)과 사용자 실행 테스트(어두운/밝은 배경 각 1건)만 남음.
+**결론: 커밋 가능** — 회귀 위험 없음, 공식/시그니처/로그 정합성 모두 검증됨.
 
 ## 수정 요청
 | 요청자 | 대상 파일 | 문제 설명 | 상태 |
@@ -198,15 +186,15 @@ UI 노출 X, config.json만. mainColor 추출 실패 시 내부적으로 `keep` 
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-04-08 | developer | grading.jsx 3가지 수정 (요소 몸판 중앙 정렬 + 레이어 통합 + CMYK 강제 변환) | 완료 |
-| 2026-04-14 | tester | 7단계 Phase 1 통합 검증 (빌드 3종 + ES3 + Rust 커맨드 3종 + FileGenerate 하이브리드) | 완료 |
-| 2026-04-14 | planner-architect | grading.jsx 재설계 기획 (새 CMYK 문서 시작 + 몸판→요소 순서 + RGB 원본 엄격 모드) | 완료 |
-| 2026-04-14 | developer | grading.jsx CMYK 시작점 + 몸판 우선 재작성 (헬퍼 4종 + STEP 0~11 교체, ES3/tsc/cargo 통과) | 완료 |
-| 2026-04-14 | planner-architect | 요소 z-order + 조각별 분리 정렬 분석 (Z1-A + P2-A 권장, Phase 1~3 분할) | 완료 |
-| 2026-04-14 | developer | Phase 1 z-order 수정 (디자인>배경fill>패턴선) | 완료 |
-| 2026-04-14 | developer | z-order 재조정 (패턴선>디자인>배경fill) | 완료 |
-| 2026-04-14 | developer | Phase 2 조각별 요소 분리 정렬 (+311줄, 3단계 폴백, ES3/tsc/cargo 통과) | 완료 |
-| 2026-04-14 | planner-architect | 패턴선 색상 자동 전환 가능성 조사 (후보 B + WCAG + auto 기본, 예상 +80줄) | 완료 |
-| 2026-04-15 | pm | 미푸시 커밋 2개 push + scratchpad 792→95줄 정리 | 완료 |
-| 2026-04-15 | developer | 패턴선 자동 색상 전환 구현 (헬퍼 3종 +138줄, 호출 블록 +45줄, config 기본값 1줄, ES3/tsc/cargo PASS) | 완료 |
-| 2026-04-15 | tester | 패턴선 자동 색상 전환 정적 검증 (tsc/cargo/ES3/삽입위치/로직정합성 8항목 전부 PASS) | 완료 |
+| 2026-04-14 | developer | grading.jsx CMYK 시작점 + 몸판 우선 재작성 (헬퍼 4종 + STEP 0~11 교체) | 완료 |
+| 2026-04-14 | planner-architect | 요소 z-order + 조각별 분리 정렬 분석 (Z1-A + P2-A) | 완료 |
+| 2026-04-14 | developer | Phase 1 z-order 수정 + z-order 재조정 (패턴선>디자인>배경fill) | 완료 |
+| 2026-04-14 | developer | Phase 2 조각별 요소 분리 정렬 (+311줄, 3단계 폴백) | 완료 |
+| 2026-04-14 | planner-architect | 패턴선 색상 자동 전환 가능성 조사 (WCAG 권장) | 완료 |
+| 2026-04-15 | pm | 미푸시 커밋 2개 push + scratchpad 정리 | 완료 |
+| 2026-04-15 | developer | 패턴선 자동 색상 전환 구현 (헬퍼 3종 +182줄, ES3/tsc/cargo PASS, c172110) | 완료 |
+| 2026-04-15 | tester+reviewer | 패턴선 구현 정적 검증 8/8 PASS + 리뷰 치명 이슈 없음 | 완료 |
+| 2026-04-15 | planner-architect | 파랑 배경 검정 선택 원인 분석 (WCAG 한계, APCA 권장) + 사이즈택 타당성 검토 병렬 | 완료 |
+| 2026-04-15 | pm | scratchpad 366→정리 + 사이즈택 보고서 REPORT-SIZETAG.md로 이관 | 완료 |
+| 2026-04-15 | developer | grading.jsx APCA Lc 공식 교체 (헬퍼 +40줄, pickPatternStrokeColor 내부 교체, 로그 lcW/lcB 추가, tsc/cargo/ES3 PASS) | 완료 |
+| 2026-04-15 | tester | APCA Lc 정적 검증 9/9 PASS (손계산 5/5 일치, 시그니처 보존, 치명 이슈 없음) | 완료 |

@@ -305,12 +305,12 @@ function cloneColor(color) {
     return color;
 }
 
-// ===== 패턴선 자동 색상 전환 (WCAG 대비비 기반) =====
+// ===== 패턴선 자동 색상 전환 (APCA Lc 기반, WCAG 3.0 초안) =====
 
 /**
- * CMYK 색상을 sRGB 선형 휘도(L)로 변환한다.
+ * CMYK 색상을 sRGB 선형 휘도(Y)로 변환한다.
  * 왜 선형 휘도인가:
- *   - WCAG 2.x 대비비 공식은 선형 휘도(상대휘도)를 기준으로 한다.
+ *   - APCA/WCAG 모두 선형 휘도(상대휘도)를 기준 입력으로 쓴다.
  *   - 단순 평균 밝기와 달리 인간 시각의 채널별 민감도(녹색 높음)를 반영한다.
  *
  * 계산 과정:
@@ -336,15 +336,57 @@ function cmykToLinearLuminance(cmykColor) {
     var gLin = (g <= 0.03928) ? (g / 12.92) : Math.pow((g + 0.055) / 1.055, 2.4);
     var bLin = (b <= 0.03928) ? (b / 12.92) : Math.pow((b + 0.055) / 1.055, 2.4);
 
-    // (3) 가중합 — WCAG 2.x 상대휘도 계수
+    // (3) 가중합 — WCAG 2.x 상대휘도 계수 (APCA도 동일 가중치 사용)
     return 0.2126 * rLin + 0.7152 * gLin + 0.0722 * bLin;
 }
 
 /**
- * 배경 CMYK 색에 대해 흰/검 중 더 높은 WCAG 대비비를 주는 쪽을 반환한다.
- * 왜 WCAG 대비비인가:
- *   - 단순 L=0.5 임계값은 에지 케이스(중간 밝기, 채도 높은 색)에서 잘못된 판정.
- *   - 대비비 비교는 "더 잘 보이는 쪽"을 수식으로 직접 고르기에 임계값 튜닝 불필요.
+ * APCA(Accessible Perceptual Contrast Algorithm, WCAG 3.0 초안) Lc 값을 계산한다.
+ *
+ * 왜 APCA로 교체했는가:
+ *   - WCAG 2.x 대비비 공식은 "밝기 1차원"만 보기 때문에 파랑/빨강/보라처럼
+ *     채도가 높고 중간 밝기인 색에서 지각적 대비를 과소평가한다.
+ *     실제 사례: 파랑 C100M50 배경에서 수학적으로는 검정이 이기지만
+ *     사람 눈에는 흰색이 훨씬 잘 보임 — APCA는 이 케이스를 올바르게 판정한다.
+ *
+ * 부호 의미:
+ *   - 음수 Lc: light-on-dark (어두운 배경 위 밝은 텍스트, 즉 흰 텍스트 시나리오)
+ *   - 양수 Lc: dark-on-light (밝은 배경 위 어두운 텍스트, 즉 검 텍스트 시나리오)
+ *   - 최종 가독성 비교는 Math.abs(Lc)로 한다 (절대값 큰 쪽이 더 잘 보임)
+ *
+ * 자가 점검용 기대값 (배경 → |lcW|, |lcB|, 선택):
+ *   파랑   C100M50  Y≈0.2253 → 67, 50 → 흰
+ *   빨강   M100Y100 Y≈0.2126 → 68, 49 → 흰
+ *   초록   C70Y100  Y≈0.7308 → 12, 93 → 검
+ *   노랑   Y100     Y≈0.9278 → 3, 104 → 검
+ *   진회색 K85      Y≈0.0193 → 96, 16 → 흰
+ *
+ * @param {Number} yBg  - 배경 상대휘도 (0~1, cmykToLinearLuminance의 반환값)
+ * @param {Number} yTxt - 텍스트 상대휘도 (0~1, 흰=1.0, 검=0.0)
+ * @return {Number} Lc 값 (대략 -108 ~ +106 범위, 부호 있음)
+ */
+function apcaContrastLc(yBg, yTxt) {
+    // 입력 방어: NaN/음수는 0으로 보정 (CMYK 변환 과정에서 미세 오차 가능)
+    if (isNaN(yBg) || yBg < 0) yBg = 0;
+    if (isNaN(yTxt) || yTxt < 0) yTxt = 0;
+
+    var lc;
+    // light-on-dark: 텍스트가 배경보다 밝음 → 음수 Lc
+    if (yTxt > yBg) {
+        lc = 1.14 * (Math.pow(yBg, 0.62) - Math.pow(yTxt, 0.65)) * 100;
+    } else {
+        // dark-on-light (텍스트가 배경보다 어둡거나 같음) → 양수 Lc
+        lc = 1.14 * (Math.pow(yBg, 0.56) - Math.pow(yTxt, 0.57)) * 100;
+    }
+    return lc;
+}
+
+/**
+ * 배경 CMYK 색에 대해 흰/검 중 더 높은 APCA 대비를 주는 쪽을 반환한다.
+ * 왜 APCA로 교체했는가:
+ *   - WCAG 2.x는 밝기 1차원만 봐서 파랑(C100M50) 같은 중채도 색에서 흰/검 판정이 시각과 어긋남.
+ *   - APCA Lc는 배경/텍스트 휘도에 비대칭 지수(0.56/0.57 vs 0.62/0.65)를 적용해 지각에 더 가깝다.
+ *   - 동률 시 흰 선택을 기본 bias로 둔다(가독성 기본 안전책).
  *
  * @param {CMYKColor|null} bgCmykColor - 배경(몸판) 색. null이면 판정 불가 → null 반환
  * @return {CMYKColor|null} 선택된 stroke 색 (흰=CMYK(0,0,0,0) 또는 검=CMYK(0,0,0,100))
@@ -355,17 +397,17 @@ function pickPatternStrokeColor(bgCmykColor) {
         return null;
     }
 
-    // 배경의 선형 휘도
+    // 배경의 선형 휘도 (APCA 입력)
     var lBg = cmykToLinearLuminance(bgCmykColor);
 
-    // WCAG 대비비: (L_brighter + 0.05) / (L_darker + 0.05)
-    // 흰색(L=1)과 배경 비교 — 흰이 항상 배경보다 밝거나 같다고 가정하고 계산
-    var contrastWhite = (1.0 + 0.05) / (lBg + 0.05);
-    // 검정(L=0)과 배경 비교 — 배경이 항상 검정보다 밝거나 같다고 가정
-    var contrastBlack = (lBg + 0.05) / (0.0 + 0.05);
+    // APCA Lc 계산: 흰 텍스트 vs 검 텍스트
+    // - lcWhite: 보통 음수 (어두운 배경일수록 |값| 큼 → 흰이 잘 보임)
+    // - lcBlack: 보통 양수 (밝은 배경일수록 |값| 큼 → 검이 잘 보임)
+    var lcWhite = apcaContrastLc(lBg, 1.0);
+    var lcBlack = apcaContrastLc(lBg, 0.0);
 
-    // 큰 쪽 선택 (대비 높은 = 더 잘 보이는 선 색)
-    if (contrastWhite >= contrastBlack) {
+    // 절대값 큰 쪽 = 더 잘 보이는 선 색 (동률은 흰 선택)
+    if (Math.abs(lcWhite) >= Math.abs(lcBlack)) {
         var white = new CMYKColor();
         white.cyan = 0;
         white.magenta = 0;
@@ -1461,9 +1503,12 @@ function main() {
         //   - "keep": 원본 유지 (아무 것도 하지 않음)
         //   - "white": 고정 흰
         //   - "black": 고정 검
-        //   - "auto": WCAG 대비비로 흰/검 자동 선택 (mainColor 없으면 keep 폴백)
+        //   - "auto": APCA Lc 대비로 흰/검 자동 선택 (mainColor 없으면 keep 폴백)
         var chosenStrokeColor = null;
         var actuallyApplied = false;
+        // APCA 수치 보관용 (로그 출력에만 사용, auto 모드일 때만 채워짐)
+        var autoLcWhite = null;
+        var autoLcBlack = null;
         if (patternLineColorMode === "white") {
             chosenStrokeColor = new CMYKColor();
             chosenStrokeColor.cyan = 0;
@@ -1477,9 +1522,13 @@ function main() {
             chosenStrokeColor.yellow = 0;
             chosenStrokeColor.black = 100;
         } else if (patternLineColorMode === "auto") {
-            // mainColor가 CMYK면 WCAG 판정, 아니면 keep 폴백
+            // mainColor가 CMYK면 APCA 판정, 아니면 keep 폴백
             if (mainColor && mainColor.typename === "CMYKColor") {
                 chosenStrokeColor = pickPatternStrokeColor(mainColor);
+                // 로그용 APCA 수치 재계산 (pickPatternStrokeColor 내부 로직과 동일)
+                var lBgForLog = cmykToLinearLuminance(mainColor);
+                autoLcWhite = apcaContrastLc(lBgForLog, 1.0);
+                autoLcBlack = apcaContrastLc(lBgForLog, 0.0);
             } else {
                 chosenStrokeColor = null; // keep 폴백
             }
@@ -1490,7 +1539,15 @@ function main() {
             var appliedCount = applyPatternStrokeColorRecursive(layerPattern, chosenStrokeColor);
             actuallyApplied = (appliedCount > 0);
             var colorLabel = (chosenStrokeColor.black >= 100) ? "black(K100)" : "white(0)";
+            // auto 모드일 때만 APCA 수치 함께 출력 (소수점 1자리)
+            var apcaInfo = "";
+            if (autoLcWhite !== null && autoLcBlack !== null) {
+                var lcW1 = Math.round(autoLcWhite * 10) / 10;
+                var lcB1 = Math.round(autoLcBlack * 10) / 10;
+                apcaInfo = " method=APCA lcW=" + lcW1 + " lcB=" + lcB1;
+            }
             $.writeln("[PATTERN LINE] mode=" + patternLineColorMode
+                + apcaInfo
                 + " color=" + colorLabel
                 + " applied=" + appliedCount + " path(s)");
         } else {

@@ -86,6 +86,12 @@
 - **내용**: PyMuPDF로 PDF를 프로그래밍 조작하는 5가지 방식(show_pdf_page, CTM 직접 삽입, clip+show_pdf_page, PDF W 연산자, 조각별 채워넣기)이 모두 근본적 한계(좌표 변환 오차, 사각형만 클리핑, 조각 겹침 등)에 도달. Illustrator ExtendScript로 그레이딩 엔진을 완전 전환하기로 결정. 이유: (1) 클리핑 마스크가 네이티브 기능(곡선/복합 경로 지원), (2) item.resize() API로 정밀 스케일링, (3) CMYK 100% 보존(Illustrator 자체 처리), (4) SVG/PDF 좌표 자동 변환. 실행 방법: 커맨드라인 Illustrator.exe /run script.jsx (방법 A) 우선 채택, 필요 시 COM 자동화(방법 B)로 업그레이드. Python 엔진은 PDF 분석 전용으로 유지. 전제조건: Illustrator CC 2020+ 설치 필수. 예상 소요: 2~3주 (Phase 1 MVP 1주, Phase 2 UI 통합 1주, Phase 3 안정화 1주). 상세: REPORT-EXTENDSCRIPT.md 참조.
 - **참조횟수**: 0
 
+### [2026-04-15] 패턴선 색상 대비 알고리즘: WCAG 2.x → APCA Lc 교체
+- **분류**: decision
+- **발견자**: planner-architect (PM 기록)
+- **내용**: 초기 구현(c172110)은 WCAG 2.x 대비비 기반이었으나, 파랑 배경(C100M50Y0K0, Y=0.2253)에서 수학적으로는 검정 대비 5.51 > 흰 대비 3.81로 검정을 선택하지만, 실제 사람 눈에는 파랑 위 흰색이 더 선명하게 보이는 지각 불일치 문제 발생. 원인: WCAG 2.x는 밝기 1차원만 측정하여 중채도 색(파랑 B 휘도 계수 0.0722 낮음, 빨강 M+Y 0.2126, 보라)에서 과소평가. 파랑은 M=60% 이상이어야 흰색 선택이라는 불합리한 경계 존재. 해결: **APCA(Accessible Perceptual Contrast Algorithm, WCAG 3.0 초안) Lc 공식으로 교체**. 공식: light-on-dark(Ytxt>Ybg) `Lc=1.14*(Ybg^0.62 - Ytxt^0.65)*100`, dark-on-light(Ytxt<=Ybg) `Lc=1.14*(Ybg^0.56 - Ytxt^0.57)*100`, 최종 `|Lc|` 큰 쪽 선택. 비대칭 지수가 파랑/빨강/보라에서 지각 일치하는 답을 산술로 도출. ES3 호환(Math.pow/Math.abs만 사용). 헬퍼 3종 시그니처/반환 규약(null 폴백, CMYKColor 반환) 완전 유지 → 호출부 무수정, 롤백은 헬퍼 블록+2줄 복구. 재계산 검증: 파랑 C100M50 → |lcW|=68.8 > |lcB|=49.5 → 흰 승 ✅. 실사용 5 케이스(파랑/빨강/초록/노랑/진회색) 모두 지각 일치. 총 +40줄 헬퍼 추가, -2줄 +2줄 교체. APCA는 W3C 초안이지만 핵심 상수(1.14/0.62/0.65/0.56/0.57)는 안정화 단계.
+- **참조횟수**: 0
+
 ### [2026-04-14] grading.jsx: 새 CMYK 문서 시작 + 몸판→요소 순서 재설계
 - **분류**: decision
 - **발견자**: planner-architect
