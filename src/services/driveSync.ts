@@ -6,7 +6,7 @@
  *   카테고리/프리셋으로 자동 매핑하기 위한 "스캔 엔진"이다.
  *
  * 책임 범위 (Phase 1):
- *   1) 루트 경로 재귀 스캔 (최대 5레벨, 권장 3레벨)
+ *   1) 루트 경로 재귀 스캔 (깊이 제한 사실상 무제한 — 안전 상한 20, 실측 최대 6레벨)
  *   2) 파일명 파싱: `{패턴명}_{사이즈}.svg` 단일 규칙
  *   3) meta.json 읽기/자동 생성 (stableId UUID 유지)
  *   4) 파일 시스템 접근은 Tauri fs 플러그인 사용 (절대경로)
@@ -47,8 +47,16 @@ const SIZE_LIST_DESC = [...SIZE_LIST].sort((a, b) => b.length - a.length);
 const SIZE_ALT = SIZE_LIST_DESC.join("|");
 export const SIZE_REGEX = new RegExp(`^(.+)_(${SIZE_ALT})\\.svg$`, "i");
 
-/** 재귀 스캔 최대 깊이 (무한 재귀 방지 안전장치) */
-const MAX_SCAN_DEPTH = 5;
+/**
+ * 재귀 스캔 최대 깊이 (무한 재귀 방지 안전장치)
+ *
+ * 왜 20인가:
+ *   사용자 요청("깊이 제한 없이")에 따라 사실상 무제한으로 동작하도록 충분히 크게 설정.
+ *   실측 최대 깊이는 6레벨(예: 루트/카테고리/세부/V넥/슬림/프리셋폴더/SVG)이며,
+ *   20레벨은 실전에서 만날 수 없는 수준이라 사실상 무제한이다.
+ *   이 값은 무한 재귀(심볼릭 링크 순환 등) 방어용 하드 가드로만 동작한다.
+ */
+const MAX_SCAN_DEPTH = 20;
 
 /** meta.json 파일의 확장자 규약 (`{패턴명}.meta.json`) */
 const META_JSON_SUFFIX = ".meta.json";
@@ -361,10 +369,12 @@ export async function scanDriveRoot(rootAbs: string): Promise<ScanResult> {
   while (queue.length > 0) {
     const node = queue.shift()!;
 
-    // 깊이 제한 체크 (무한 재귀 방지)
+    // 깊이 제한 체크 (무한 재귀 방지 — 심볼릭 링크 순환 등 방어용 하드 가드)
+    // 왜 이 가드가 거의 발동하지 않는가: MAX_SCAN_DEPTH=20은 실전에서 만날 수 없는 수준.
+    // 여기 걸렸다면 비정상적으로 깊은 폴더 구조이거나 순환 참조가 의심된다.
     if (node.depth > MAX_SCAN_DEPTH) {
       warnings.push(
-        `스캔 깊이 제한(${MAX_SCAN_DEPTH})을 초과하여 스킵됨: ${node.absPath}`
+        `[심각] 비정상적으로 깊은 폴더 구조 감지(${MAX_SCAN_DEPTH}레벨 초과). 무한 재귀 방지를 위해 중단: ${node.absPath}`
       );
       continue;
     }

@@ -67,6 +67,12 @@ grader/
 
 ## 구현 기록 (developer)
 
+### [2026-04-15] Drive 깊이 제한 완화 (5→20)
+- `src/services/driveSync.ts`: `MAX_SCAN_DEPTH` 5 → 20 (실전 최대 6레벨 확인, 사용자 "제한 없이" 요청 반영). 상수 주석/헤더 주석/경고 메시지 문구 갱신.
+- `PLAN-GDRIVE-SYNC.md`: "3레벨" 표현 전반 갱신 + [B]/[D]/[E]/[H]/[J-3] 섹션 반영 + 상단에 "갱신 이력" 섹션 추가.
+- 검증: `npx tsc --noEmit` PASS.
+- 주의: 카테고리 UI가 6레벨+에서 답답할 수 있음 → Phase 2 UI 개선 고려.
+
 ### [2026-04-15] Drive 연동 Phase 1 (1~4단계)
 
 📝 구현한 기능: Drive 폴더 연동 MVP의 타입/스캔 서비스/캐시/설정 스토어 기반 (UI 없음, 로직 계층만)
