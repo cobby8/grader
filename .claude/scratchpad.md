@@ -295,6 +295,56 @@ grader/
 - **이모지 아이콘**: 계획서의 `📁 🎨` 이모지를 따름. 추후 Material Symbols로 교체 가능성 있음.
 - **Phase 1 범위**: "뼈대"이므로 실제 그레이딩 흐름(세션→패턴선택→주문서생성)은 아직 미연결. Phase 2+에서 PatternManage가 session.selectedPresetId를 설정하고, Phase 4에서 OrderGenerate가 session을 소비.
 
+### [2026-04-15] Phase 2 — 패턴 선택 모드 + "다음" 버튼
+
+📝 구현한 기능: PatternManage를 "선택 모드 / 관리 모드" 이중 페이지로 전환. 세션이 있으면 카드 클릭으로 프리셋 선택 → 세션에 selectedPresetId 저장 → "다음: 파일 생성" 버튼으로 /generate 이동. 세션 없으면 기존 관리 UI 그대로 유지.
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| src/pages/PatternManage.tsx | useNavigate import, session/selectedPresetId state, 세션 로드 useEffect, handleSelectPreset/handleNextToGenerate 추가, 타이틀/설명 분기, 카드 클릭/키보드/aria 속성 + 선택 체크 아이콘, 편집/삭제 stopPropagation, size-footer "다음" 버튼 | 수정 |
+| src/App.css | .preset-card position:relative + border:2px transparent, .preset-card--selectable(cursor/focus), .preset-card--selected(테두리+그림자), .preset-card__check(우상단 원형 배지) | 수정 |
+
+**핵심 구현 포인트**:
+- **세션 판정 3상태**: `session === null`(로드 전=로딩), `undefined`(세션 없음=관리 모드), `WorkSession`(선택 모드). 관리 모드 폴백 덕에 사이드바에서 "패턴" 직접 클릭해도 기존 동작 보존.
+- **진입 가드 완화**: 세션 없을 때 /work로 리다이렉트하지 않고 관리 모드로 폴백. 이유: 사용자가 작업 세션과 무관하게 프리셋을 정리·편집하는 흐름도 흔하기 때문.
+- **selectedPresetId 이중 보관**: React state(화면 하이라이트용) + sessionStorage(새로고침/뒤로가기 대비). 카드 클릭 즉시 `updateWorkSession({ selectedPresetId })` 호출로 동기화.
+- **접근성**: 선택 모드 카드에 `role="button"`, `tabIndex=0`, `aria-pressed`, Enter/Space 키 처리. 관리 모드에서는 이 속성들을 undefined로 둬 기존 경험을 건드리지 않음.
+- **이벤트 버블링 차단**: 편집/삭제 버튼 onClick에 `e.stopPropagation()` 추가. 버튼 누르면 카드 선택되는 이중 동작 방지.
+- **레이아웃 이동 방지**: `.preset-card` 기본에 `border: 2px solid transparent` → 선택 시 `border-color` 변경으로 크기 변화 없음.
+- **Drive 프리셋도 선택 가능**: SSOT 제약은 편집/삭제에만 적용. 그레이딩 대상 선택은 막을 이유 없어 허용.
+- **"다음" 버튼 UX**: selectedPresetId 없을 때 disabled + title 안내. WorkSetup과 동일한 `.size-footer` 클래스 재사용.
+
+**검증 결과**:
+- `npx tsc --noEmit` PASS (에러 0, EXIT 0)
+- `npm run build` PASS (vite 771ms, 302.55 kB — Phase 1 대비 +1.37 kB)
+
+💡 tester 참고:
+- 테스트 방법:
+  1. /work에서 AI 파일 선택 → "다음" → /pattern 진입 → 타이틀이 "패턴 선택"인지
+  2. 안내문 "그레이딩할 패턴 프리셋을 하나 선택한 뒤..." 표시 확인
+  3. 하단 고정 푸터에 "다음: 파일 생성 →" 버튼 노출, 초기엔 disabled
+  4. 임의 프리셋 카드 클릭 → 테두리 강조 + 우상단 원형 ✓ 배지 + 버튼 활성화
+  5. 다른 카드 클릭 → 선택이 새 카드로 이동
+  6. 선택 상태에서 편집/삭제 버튼 클릭 → 선택 상태 유지됨(버블링 차단 확인)
+  7. 새로고침 후 /pattern 재진입 → 이전에 선택한 카드가 자동 하이라이트
+  8. Tab 키로 카드 포커스 → Enter/Space로 선택 가능
+  9. "다음: 파일 생성" 클릭 → /generate 이동, sessionStorage `grader.session`에 selectedPresetId 기록
+  10. 사이드바에서 "패턴"만 클릭(세션 없는 시나리오 재현용: 콘솔에서 `sessionStorage.clear()` 후 새로고침) → 타이틀 "패턴 관리", "다음" 버튼 숨김, 카드 클릭 시 아무 반응 없음(기존 편집/삭제만 동작)
+- 정상 동작:
+  - 선택 모드: 카드 hover 시 cursor: pointer, 선택 시 파란 테두리 + ✓
+  - 관리 모드: 기존과 완전히 동일(cursor 변화 없음, 카드 클릭 무시)
+  - Drive 프리셋도 선택 가능(편집/삭제만 disabled 유지)
+- 주의할 입력:
+  - 세션에 selectedPresetId가 있는데 해당 프리셋이 삭제된 경우: 하이라이트 대상이 없어 표시 안 됨(무해). 사용자는 다시 선택하면 됨.
+  - 필터링된 카테고리로 이동 시 선택된 프리셋이 화면에서 사라질 수 있음 → 선택 자체는 유지(다른 카테고리 돌아오면 하이라이트 복귀).
+
+⚠️ reviewer 참고:
+- **세션 없을 때 리다이렉트 하지 않는 결정**: 계획서 범위엔 "진입 가드"가 있었지만 UX 관점에서 사이드바 직접 진입 시 관리 모드로 폴백하는 게 자연스러움. 엄격한 가드가 필요하면 `else navigate("/work")`로 한 줄 추가만 하면 됨.
+- **카드 클릭 가능 영역**: 카드 전체(header/body/preview/actions 영역 포함)가 클릭 핸들러를 탐. 편집/삭제 버튼은 stopPropagation으로 제외. preview SVG(dangerouslySetInnerHTML)도 클릭 시 카드로 버블링되어 정상 동작.
+- **.preset-card__check의 z-index:2**: preview 미리보기(기본 z-auto)보다 위에 떠야 함. 다른 요소들과 충돌 여지 낮음.
+- **ko 텍스트 중 따옴표**: `\u201C다음\u201D` 유니코드 이스케이프 사용 — JSX 문자열 내 중복 인용 혼동 회피.
+- **eslint-disable 미사용**: useEffect deps는 의존성 없는 mount-only effect라 `[]` 유지, 경고 없음.
+
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
@@ -311,3 +361,4 @@ grader/
 | 2026-04-15 | developer | 트리 더블클릭=토글 + rename 제거 + Drive 카테고리/프리셋 readonly UI (4파일, tsc/build PASS) | 커밋 대기 |
 | 2026-04-15 | planner-architect | 작업 흐름 재설계 상세 계획 PLAN-WORKFLOW-REDESIGN.md 작성 (4→3단계, PDF→AI, 1회성세션) | 완료 |
 | 2026-04-15 | developer | Phase 1 뼈대 — WorkSetup/session 타입·스토어 신규 + Sidebar/main 3단계 전환 (3신규+3수정, tsc/build PASS) | 커밋 대기 |
+| 2026-04-15 | developer | Phase 2 — 패턴 선택 모드 + 카드 클릭/체크/다음 버튼 + 관리 모드 폴백 (2파일 수정, tsc/build PASS) | 커밋 금지 |

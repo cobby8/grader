@@ -13,6 +13,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { invoke } from "@tauri-apps/api/core";
@@ -31,6 +32,9 @@ import {
 import CategoryTree, { type SelectedCategory } from "../components/CategoryTree";
 import { loadSettings } from "../stores/settingsStore";
 import { scanDriveRoot, mergeDriveScanResult } from "../services/driveSync";
+// 세션 저장소 — 2단계 "패턴 선택" 진입 가드 + selectedPresetId 저장용
+import { loadWorkSession, updateWorkSession } from "../stores/sessionStore";
+import type { WorkSession } from "../types/session";
 
 /** 편집 모드 상태 타입 */
 type EditMode = "list" | "create" | "edit";
@@ -94,6 +98,19 @@ function getFolderNameFromPath(dirPath: string): string {
 }
 
 function PatternManage() {
+  // === 라우터 네비게이션 (세션 없을 때 /work로 되돌리기 + "다음" 버튼용) ===
+  const navigate = useNavigate();
+
+  // === 작업 세션 상태 ===
+  // 왜 상태로 들고 있나: selectedPresetId를 UI에서 "하이라이트"로 쓰려면 리렌더가 필요하기 때문.
+  // sessionStorage는 저장소일 뿐이고, 화면에 반영되려면 React state로 복사해야 한다.
+  // null: 아직 로드 전 (로딩 화면), undefined: 로드 후 세션 없음(관리 모드), WorkSession: 선택 모드
+  const [session, setSession] = useState<WorkSession | null | undefined>(null);
+  // 선택 모드 여부 — 세션이 있으면 true. "관리"가 아닌 "선택"이 주 목적이 된다.
+  const isSelectMode = !!session;
+  // 현재 선택된 프리셋 ID (선택 모드에서만 의미). 카드 하이라이트 + "다음" 버튼 활성화 조건.
+  const [selectedPresetId, setSelectedPresetId] = useState<string | undefined>(undefined);
+
   // === 상태 관리 ===
   const [presets, setPresets] = useState<PatternPreset[]>([]); // 전체 프리셋 목록
   const [categories, setCategories] = useState<PatternCategory[]>([]); // 카테고리 목록
@@ -144,6 +161,29 @@ function PatternManage() {
         setDrivePatternRoot(result.data.drivePatternRoot);
       }
     });
+  }, []);
+
+  // === 작업 세션 로드 — 진입 가드 + 초기 선택 복원 ===
+  //
+  // 왜 필요한가: 워크플로우 재설계(Phase 2)에서 /pattern은 "세션을 이미 만든 사용자"만
+  // 도달해야 하는 "2단계" 페이지다. 세션 없이 직접 /pattern을 치고 들어오면 기준 AI 파일이
+  // 없는 상태이므로 /work로 되돌려 보낸다. 단, 관리 목적(편집/삭제)으로도 쓰일 수 있으니
+  // "세션이 전혀 없는" 경우에는 관리 모드로 폴백(undefined)하여 계속 사용 가능하게 둔다.
+  //
+  // 진입 시나리오:
+  //   1) /work에서 "다음" → 세션 있음 → 선택 모드 (isSelectMode=true)
+  //   2) 사이드바에서 "패턴" 직접 클릭 + 세션 없음 → 관리 모드 (isSelectMode=false)
+  //   3) 사이드바에서 "패턴" 직접 클릭 + 세션 있음(이전 작업) → 선택 모드로 복원
+  useEffect(() => {
+    const s = loadWorkSession();
+    if (s) {
+      setSession(s);
+      // 세션에 이미 선택한 프리셋이 있으면 복원 (뒤로 돌아왔을 때 하이라이트 유지)
+      setSelectedPresetId(s.selectedPresetId);
+    } else {
+      // 세션 없음 = 관리 모드. 리다이렉트하지 않고 기존 동작 유지.
+      setSession(undefined);
+    }
   }, []);
 
   // === 앱 시작 시 프리셋 + 카테고리 로드 ===
@@ -382,6 +422,25 @@ function PatternManage() {
     selectedCategory.type === "category"
       ? getCategoryPath(categories, selectedCategory.id)
       : null;
+
+  // === 프리셋 카드 선택 (선택 모드 전용) ===
+  // 왜: 선택 모드에서 사용자가 카드를 클릭하면 즉시 세션에 저장해야
+  // "다음" 버튼 누르기 전에 새로고침해도 선택이 유지된다.
+  // 동일 카드를 다시 클릭해도 토글하지 않는다(선택 해제는 다른 카드 클릭으로).
+  const handleSelectPreset = (presetId: string) => {
+    if (!isSelectMode) return; // 관리 모드에서는 카드 클릭 무시 (기존 동작 보존)
+    setSelectedPresetId(presetId);
+    // 세션에 즉시 반영 — 페이지 리로드/뒤로가기 대비
+    updateWorkSession({ selectedPresetId: presetId });
+  };
+
+  // === "다음: 파일 생성" — 선택 모드 전용 ===
+  const handleNextToGenerate = () => {
+    if (!selectedPresetId) return; // 가드 — 버튼은 disabled지만 안전망
+    // 이미 handleSelectPreset에서 세션에 저장됐지만, 혹시 누락되었을 경우 한 번 더 확정.
+    updateWorkSession({ selectedPresetId });
+    navigate("/generate");
+  };
 
   // === 새 프리셋 생성 모드 진입 ===
   const handleCreate = () => {
@@ -817,7 +876,8 @@ function PatternManage() {
   const categoryOptions = getCategoryOptions(categories);
 
   // === 로딩 화면 ===
-  if (loading) {
+  // 세션 판정이 끝나기 전에도 로딩 표시 (session === null)
+  if (loading || session === null) {
     return (
       <div className="page">
         <h1 className="page__title">패턴 관리</h1>
@@ -830,10 +890,16 @@ function PatternManage() {
   if (mode === "list") {
     return (
       <div className="page">
-        <h1 className="page__title">패턴 관리</h1>
+        {/* 타이틀/설명: 선택 모드냐 관리 모드냐에 따라 문구가 달라진다.
+            선택 모드는 "그레이딩할 패턴 고르기"가 목적이고,
+            관리 모드는 기존처럼 "프리셋 등록/관리"가 목적이다. */}
+        <h1 className="page__title">
+          {isSelectMode ? "패턴 선택" : "패턴 관리"}
+        </h1>
         <p className="page__description">
-          SVG 형식의 옷 패턴(조각) 파일을 등록하고 관리합니다.
-          등록된 패턴은 프리셋으로 저장되어 반복 사용할 수 있습니다.
+          {isSelectMode
+            ? "그레이딩할 패턴 프리셋을 하나 선택한 뒤, 오른쪽 아래 \u201C다음\u201D 버튼을 눌러주세요."
+            : "SVG 형식의 옷 패턴(조각) 파일을 등록하고 관리합니다. 등록된 패턴은 프리셋으로 저장되어 반복 사용할 수 있습니다."}
         </p>
 
         {/* 로드 실패 시 경고 배너 */}
@@ -939,8 +1005,45 @@ function PatternManage() {
             ) : (
               /* 프리셋 카드 목록 */
               <div className="preset-grid">
-                {filteredPresets.map((preset) => (
-                  <div key={preset.id} className="preset-card">
+                {filteredPresets.map((preset) => {
+                  // 선택 모드에서 현재 카드가 선택됐는지 여부 — 하이라이트 + 체크 아이콘 렌더링 근거
+                  const isSelected =
+                    isSelectMode && selectedPresetId === preset.id;
+                  // 카드 전체 클릭 핸들러 — 선택 모드에서만 의미 있음.
+                  // 관리 모드에서는 onClick=undefined로 두어 커서/포커스가 바뀌지 않도록 한다.
+                  const cardClickHandler = isSelectMode
+                    ? () => handleSelectPreset(preset.id)
+                    : undefined;
+                  return (
+                  <div
+                    key={preset.id}
+                    className={
+                      "preset-card" +
+                      (isSelected ? " preset-card--selected" : "") +
+                      (isSelectMode ? " preset-card--selectable" : "")
+                    }
+                    onClick={cardClickHandler}
+                    // 접근성: 선택 모드일 때만 버튼처럼 동작 (키보드 Enter/Space 선택 허용)
+                    role={isSelectMode ? "button" : undefined}
+                    tabIndex={isSelectMode ? 0 : undefined}
+                    onKeyDown={
+                      isSelectMode
+                        ? (e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              handleSelectPreset(preset.id);
+                            }
+                          }
+                        : undefined
+                    }
+                    aria-pressed={isSelectMode ? isSelected : undefined}
+                  >
+                    {/* 선택 체크 표시 — 선택 모드에서 선택된 카드에만 나타난다 */}
+                    {isSelected && (
+                      <div className="preset-card__check" aria-hidden="true">
+                        ✓
+                      </div>
+                    )}
                     <div className="preset-card__header">
                       <h3 className="preset-card__name">
                         {preset.name}
@@ -1025,6 +1128,10 @@ function PatternManage() {
                     {/* 편집/삭제 버튼 — Drive 출처 프리셋은 비활성화 + 토스트 안내.
                         왜: Drive 프리셋의 SSOT는 Drive 폴더이므로 앱 내 변경은
                         다음 동기화에서 무효화될 수 있다(이름/조각 구조 등). */}
+                    {/* 버튼 onClick에서 e.stopPropagation()을 호출하는 이유:
+                        선택 모드에서는 카드 전체가 클릭 가능한 상태이므로,
+                        편집/삭제 버튼을 눌렀을 때 "카드 선택"으로 버블링되면
+                        의도치 않게 선택 상태가 바뀐다. */}
                     <div className="preset-card__actions">
                       {(() => {
                         const isDrive = isDrivePreset(preset);
@@ -1032,7 +1139,8 @@ function PatternManage() {
                           <>
                             <button
                               className="btn btn--small"
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 if (isDrive) {
                                   showDriveReadonlyToast();
                                   return;
@@ -1050,7 +1158,8 @@ function PatternManage() {
                             </button>
                             <button
                               className="btn btn--small btn--danger"
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 if (isDrive) {
                                   showDriveReadonlyToast();
                                   return;
@@ -1071,13 +1180,33 @@ function PatternManage() {
                       })()}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </main>
         </div>
 
         {/* Drive 가져오기 모달은 옵션 4 자동 동기화로 대체되어 제거됨 */}
+
+        {/* "다음: 파일 생성" 고정 푸터 버튼 — 선택 모드에서만 표시.
+            WorkSetup과 동일한 .size-footer 클래스를 재사용해 디자인 일관성 유지. */}
+        {isSelectMode && (
+          <div className="size-footer">
+            <button
+              className="btn btn--primary btn--large"
+              onClick={handleNextToGenerate}
+              disabled={!selectedPresetId}
+              title={
+                !selectedPresetId
+                  ? "먼저 패턴 프리셋을 하나 선택해주세요"
+                  : undefined
+              }
+            >
+              다음: 파일 생성 →
+            </button>
+          </div>
+        )}
       </div>
     );
   }
