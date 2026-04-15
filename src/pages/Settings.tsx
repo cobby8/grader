@@ -303,8 +303,8 @@ function Settings() {
               />
               <span>
                 {settings.driveSyncEnabled
-                  ? "활성 (PatternManage에 가져오기 버튼 표시)"
-                  : "비활성 (Drive 관련 UI 숨김)"}
+                  ? "활성 (패턴 관리 진입 시 자동 동기화, 60초 쿨다운)"
+                  : "비활성 (Drive 자동 동기화 중지)"}
               </span>
             </label>
           </div>

@@ -2,8 +2,8 @@
 
 ## 현재 작업
 - **요청**: Drive 연동을 "경량 자동 동기화" 방식(옵션 4)으로 리팩터 — 가져오기 버튼 제거, 자동 스캔/병합
-- **상태**: 🔨 developer 착수 예정 (Phase A → B 순서)
-- **현재 담당**: developer
+- **상태**: ✅ developer 구현 완료 (tsc/build PASS) → tester 검증 대기
+- **현재 담당**: tester
 - **사용자 결정 (A-B-B-A-B)**:
   - Q1=자동 동기화 (패턴관리 진입 시)
   - Q2=파일 사라지면 카드 유지 + "파일 없음" 배지
@@ -74,17 +74,119 @@ grader/
 **치수 보존 전략**: stableId 매칭 시 기존 presets.json의 사용자 입력 치수 **덮어쓰지 않음**
 
 ## 구현 기록 (developer)
-(옵션 4 착수 대기)
+
+### [2026-04-15] Drive 연동 옵션 4 — 자동 동기화 리팩터
+
+📝 구현한 기능: Drive 가져오기 버튼/모달을 제거하고, PatternManage 진입 시 자동으로 스캔·병합하는 경량 동기화.
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| src/services/driveSync.ts | `mergeDriveScanResult()` 함수 + `MergeResult` 타입 추가 (+180줄) | 수정 |
+| src/pages/PatternManage.tsx | DriveImportModal 제거, `runAutoSync` useCallback + 쿨다운 useRef + 자동 트리거 useEffect 추가, 가져오기 버튼 삭제 | 수정 |
+| src/components/DriveImportModal.tsx | 파일 전체 삭제 (-388줄) | 삭제 |
+
+**핵심 구현 포인트**:
+- **치수 보존 전략**: `mergeDriveScanResult`에서 stableId 매칭 시 `{...existing, pieces: updatedPieces, driveFolder, updatedAt}` 구조로 기존 preset을 유지. `sizes`, `svgData`, `svgBySize`, `name`, `categoryId`는 spread로 이월되어 **덮어쓰지 않음**. 오직 `svgPathBySize`만 최신 스캔 결과로 교체.
+- **파일 사라져도 카드 유지**: 이번 스캔에서 매칭되지 않은 기존 프리셋은 `updatedStableIds` 세트를 기준으로 필터링해서 그대로 `mergedPresets`에 포함 (Q2-B 사용자 결정).
+- **쿨다운 60초**: `useRef<number>(0)`로 `lastAutoScanRef` 보유, `Date.now() - lastAutoScanRef.current < 60000`이면 스킵 + console.info. 중복 실행 방지용 `autoScanInFlightRef` 별도.
+- **경고 alert 제거**: 모든 경고/완료 알림은 `console.info/warn`만 사용 (Q3-B).
+- **useEffect 의존성**: `[isLoadSuccess, driveSyncEnabled, drivePatternRoot]` 3개만. presets/categories를 deps에 넣으면 동기화 후 presets 갱신 → useEffect 재실행 → 무한 루프 위험이 있어 의도적으로 제외 (쿨다운이 실제 스캔은 막지만 useEffect 재실행 자체도 피함).
+
+**검증 결과**:
+- `npx tsc --noEmit` PASS (에러 0)
+- `npm run build` PASS (vite 780ms, 318.70 kB)
+
+💡 tester 참고:
+- 테스트 방법:
+  1. Settings에서 driveSyncEnabled=true + drivePatternRoot 설정 후 PatternManage 진입 → 자동 스캔 확인 (개발자 도구 콘솔에 `[Drive 자동 동기화] 스캔 시작:` 로그)
+  2. 이미 사이즈 치수를 입력해둔 Drive 프리셋이 있는 상태에서 PatternManage 재진입 → 치수 값이 유지되는지 확인
+  3. 60초 내 재진입 → `[Drive 자동 동기화] 쿨다운 중 (N초 남음) — 스킵` 로그
+  4. Drive 파일을 임의로 삭제 후 60초 경과 후 재진입 → 카드는 남아있지만 svgPathBySize에서 해당 사이즈가 빠졌는지 확인
+- 정상 동작:
+  - 가져오기 버튼 화면에서 사라짐
+  - 신규 프리셋만 있으면 `[Drive 자동 동기화] 완료 — 신규 N, 갱신 0, 카테고리 M` 로그
+  - 기존 프리셋 경로만 갱신되면 `신규 0, 갱신 N` 로그
+- 주의할 입력:
+  - driveSyncEnabled=false인 상태 → runAutoSync가 조기 return (스캔 안 함)
+  - drivePatternRoot가 undefined → 조기 return
+
+⚠️ reviewer 참고:
+- `mergeDriveScanResult`의 "미매칭 기존 프리셋 보존" 로직(driveSync.ts 안쪽 for 루프). `updatedStableIds`가 Set이므로 O(1)이고, stableId 없는 로컬 업로드 프리셋도 그대로 유지.
+- useEffect deps에 `runAutoSync`를 넣지 않은 설계 결정(의존성 경고는 eslint-disable로 처리). 무한 루프 방지 목적.
+- DriveImportModal.tsx 삭제했으나 관련 CSS 클래스(`.drive-import-modal*`)는 index.css에 그대로 남아있음(다른 페이지에서 쓰지 않아 dead code). 정리는 reviewer 판단.
 
 ## 테스트 결과 (tester)
-(옵션 4 구현 후 검증 예정)
+
+### [2026-04-15] 옵션 4 정적 검증
+
+| 항목 | 결과 |
+|------|------|
+| tsc --noEmit | PASS |
+| vite build | PASS (779ms, 318.70 kB) |
+| 치수 보존 (sizes/svgBySize/svgData 무변경) | PASS |
+| 파일 사라진 프리셋 보존 | PASS |
+| 쿨다운 60초 + autoScanInFlight | PASS |
+| useEffect 무한 루프 방지 | PASS |
+| 기존 Drive 프리셋 svgPathBySize만 갱신 | PASS |
+| Local 프리셋 무영향 | PASS |
+| 경고 alert 제거 | PASS |
+| DriveImportModal import 완전 제거 | PASS |
+| 가져오기 버튼 JSX 제거 | PASS |
+
+종합: 11/11 통과 — **커밋 가능**
+
+**근거 요약**:
+- driveSync.ts L618-639: `{...existing, pieces: updatedPieces, driveFolder, updatedAt}` — sizes/svgData/svgBySize/name/categoryId는 spread로만 이월(덮어쓰기 없음).
+- driveSync.ts L676-679: `updatedStableIds` Set 제외 로직으로 미매칭 기존 프리셋 및 stableId 없는 로컬 프리셋 모두 보존.
+- driveSync.ts L621: `piece.svgSource === "drive" || !piece.svgSource` + idx===0 가드 — Local 전용 피스는 건드리지 않음.
+- PatternManage.tsx L134-136: `lastAutoScanRef`, `autoScanInFlightRef` 2종 방호.
+- PatternManage.tsx L249-258: 60초 쿨다운 + 남은 시간 콘솔 로깅.
+- PatternManage.tsx L261-262: in-flight 재진입 차단.
+- PatternManage.tsx L340-343: deps=[isLoadSuccess, driveSyncEnabled, drivePatternRoot] + eslint-disable — presets/categories 자체가 deps에 없어 자동 동기화로 인한 재진입 폭주 원천 차단.
+- runAutoSync 경로에서는 console.info/warn만 사용 (alert 0).
+- src/components/ 에 DriveImportModal.tsx 파일 존재하지 않음(삭제 확인). src/ 내 활성 import 0건.
+- PatternManage.tsx L868·L997: "제거됨" 주석만 남고 JSX 실체 없음.
+
+**치명 아닌 관찰 사항**:
+1. App.css L1726-1854 `.drive-import-modal*` CSS dead code 잔류 (reviewer도 동일 지적).
+2. Settings.tsx L306 메시지 `"활성 (PatternManage에 가져오기 버튼 표시)"` — 이제 버튼이 없으므로 "페이지 진입 시 자동 동기화" 등으로 수정 권장.
 
 ## 리뷰 결과 (reviewer)
-(옵션 4 구현 후 리뷰 예정)
+
+### [2026-04-15] 옵션 4 리뷰
+
+#### 종합 평가
+자동 동기화 리팩터는 **커밋 가능** 수준. 치수 보존 전략(sp.svgPathBySize만 교체 + 기존 sizes/svgData 이월)이 의도대로 구현되어 있고, 쿨다운·중복실행·무한루프 방지가 3중으로 안전하게 감싸져 있음. 치명 이슈 없음. DriveImportModal 참조는 완전히 제거되어 데드코드도 깨끗하게 정리됨. UX 피드백(동기화 진행 표시)과 CSS 잔존은 후속 개선 사항으로만 남김.
+
+#### 강점
+- **설계**: `mergeDriveScanResult`가 순수 함수로 분리되어 테스트·추론이 쉬움. `{...existing, pieces: updatedPieces, driveFolder, updatedAt}` 스프레드 순서도 올바름(나중 프로퍼티가 덮어쓰므로 `driveFolder/updatedAt`는 의도적 갱신, `sizes/name/categoryId`는 자동 이월).
+- **치수 보존**: `piece.svgPathBySize`만 교체, `svgData/svgBySize/width/height`는 그대로. 게다가 `svgSource !== "drive"`인 local 피스는 map에서 원본 그대로 return(driveSync.ts:628) → 사용자 업로드 보호 완벽.
+- **카테고리 매핑**: `parentId + name` 조합 중복 체크 + 깊이 오름차순 처리 → 계층 구조 안전.
+- **미매칭 프리셋 보존**: Set 기반 O(1) 필터링으로 stableId 없는 local 프리셋도 자동 유지(driveSync.ts:676-679). Q2-B 결정 정확히 구현.
+- **에러 방어**: scanResult.success=false, 카테고리 저장 실패, 프리셋 저장 실패, 예외 모두 console.warn으로 조용히 스킵. 실패 시 `lastAutoScanRef` 갱신 안 함 → 재시도 가능.
+- **쿨다운 구현**: useRef 선택 적절(리렌더 방지), `autoScanInFlightRef`로 await 사이 재진입 race 차단.
+- **useEffect 의존성**: `[isLoadSuccess, driveSyncEnabled, drivePatternRoot]` 3개 + eslint-disable 주석 + 장황한 주석까지 달아둠. Settings 토글 on/off는 정상 재실행됨.
+- **롤백 용이성**: `scanDriveRoot`/`ScanResult`는 유지되어 있고 삭제분은 UI(Modal)뿐이라, 버튼 방식 복구 시 mergeDriveScanResult 무시 + Modal 복구만 하면 됨.
+
+#### 치명 이슈
+없음.
+
+#### 개선 제안 (배포 후 고려, 우선순위 낮음)
+| 우선순위 | 파일:라인 | 제안 |
+|---------|----------|------|
+| 낮음 | src/App.css:1728-1783 | `.drive-import-modal*` CSS 잔존(56줄). dead code이므로 다음 커밋에서 함께 제거하면 깔끔. 렌더에는 영향 없음. |
+| 낮음 | PatternManage.tsx:240-330 | UX 피드백 부재 — 사용자는 콘솔을 안 볼 것이므로 "동기화되고 있음"을 인지하기 어려움. Phase 2에서 상태바나 토스트(예: "동기화 중… / 완료 신규 N 갱신 M") 추가 검토. 지금은 조용히 돌아가는 게 오히려 사용자 결정(A-B-B-A-B)에 부합. |
+| 낮음 | PatternManage.tsx:324-330 | `runAutoSync` deps에 `presets/categories`가 있어 매 상태 변경 시 함수 레퍼런스는 재생성됨. useEffect는 이를 deps에 넣지 않아 문제 없지만, 향후 runAutoSync를 다른 곳에서 호출한다면 stale closure를 조심해야 함(현재 호출처가 useEffect 하나뿐이라 OK). |
+| 낮음 | driveSync.ts:618-629 | `piece.svgSource`가 undefined인 기존(Phase 1 초기) 프리셋도 `svgSource === "drive"`로 승격됨. 이게 의도라면 OK(대부분 Drive 출처일 것이므로), 아니면 undefined는 건너뛰도록 명시적 분기 권장. 주석 근거 있으니 현재는 문제 없음. |
+| 낮음 | driveSync.ts:558-565 | 동일 부모 아래 대소문자만 다른 카테고리 이름("Shirts" vs "shirts")은 다른 것으로 취급됨. Windows 파일시스템은 대소문자 무시라 실제 충돌 가능. 실측에서 문제 없으면 유지. |
+
+결론: **커밋 가능**
 
 ## 수정 요청
 | 요청자 | 대상 파일 | 문제 설명 | 상태 |
 |--------|----------|----------|------|
+| reviewer | src/App.css:1728-1783 | `.drive-import-modal*` CSS 잔존(56줄, dead code) — 다음 커밋에서 함께 제거 권장 | 제안 |
+| tester | src/pages/Settings.tsx L306 | driveSyncEnabled 활성 안내 문구가 "PatternManage에 가져오기 버튼 표시"로 남아있음 — 버튼 제거됐으므로 "페이지 진입 시 자동 동기화" 등으로 수정 권장 (치명 아님) | 제안 |
 
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
@@ -96,3 +198,6 @@ grader/
 | 2026-04-15 | developer | 가져오기 버튼 활성화 + 트리 기본 접힘 + 빈 import 처리 | 커밋 4367af0 |
 | 2026-04-15 | planner-architect | Drive 폴더 직접 표시 재검토 (4개 옵션 비교, 옵션 4 권장 44점) | 완료 |
 | 2026-04-15 | pm | 10개 커밋 push + scratchpad 547→120줄 정리 | 완료 |
+| 2026-04-15 | developer | Drive 옵션 4 리팩터 (mergeDriveScanResult + 자동 동기화 + 모달 삭제) tsc/build PASS | 커밋 대기 |
+| 2026-04-15 | reviewer | Drive 옵션 4 리뷰 — 치명 이슈 없음, 커밋 가능 (CSS 잔존 개선만 후속) | 통과 |
+| 2026-04-15 | tester | Drive 옵션 4 정적 검증 11/11 통과 (tsc/build/치수 보존/쿨다운/무한루프 방지 확인) | 커밋 가능 |

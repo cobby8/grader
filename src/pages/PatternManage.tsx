@@ -29,10 +29,8 @@ import {
   getNextOrder,
 } from "../stores/categoryStore";
 import CategoryTree, { type SelectedCategory } from "../components/CategoryTree";
-import DriveImportModal, {
-  type DriveImportResult,
-} from "../components/DriveImportModal";
 import { loadSettings } from "../stores/settingsStore";
+import { scanDriveRoot, mergeDriveScanResult } from "../services/driveSync";
 
 /** 편집 모드 상태 타입 */
 type EditMode = "list" | "create" | "edit";
@@ -122,18 +120,28 @@ function PatternManage() {
   const [isDragOver, setIsDragOver] = useState(false);
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
-  // === Drive 가져오기 모달 상태 ===
-  // 왜 별도 상태인가: 모달 열림/닫힘만 관리하고 실제 데이터는 모달 컴포넌트가 자체 관리.
-  const [showDriveImport, setShowDriveImport] = useState(false);
-  // Settings의 driveSyncEnabled 값 — 가져오기 버튼 표시 여부 결정
+  // === Drive 자동 동기화 상태 (옵션 4) ===
+  // 왜 버튼/모달이 사라졌나: 사용자가 "가져오기 버튼 귀찮음 + 경고 부담" 피드백을 주어
+  // "페이지 진입 시 자동 스캔·병합" 방식으로 리팩터했다 (옵션 4).
+  // Settings의 driveSyncEnabled + drivePatternRoot 둘 다 있을 때만 동기화 실행.
   const [driveSyncEnabled, setDriveSyncEnabledState] = useState(false);
+  const [drivePatternRoot, setDrivePatternRoot] = useState<string | undefined>(
+    undefined
+  );
+  // 마지막 자동 스캔 시각 (epoch ms). 60초 쿨다운 유지.
+  // 왜 useRef인가: 쿨다운 값은 화면을 다시 렌더링할 필요 없이 "단순히 기억"만 하면 되므로,
+  // state가 아닌 ref가 더 적합(값 변경해도 리렌더 유발 안 함).
+  const lastAutoScanRef = useRef<number>(0);
+  // 현재 동기화 진행 중 플래그 — 중복 실행 방지
+  const autoScanInFlightRef = useRef<boolean>(false);
 
-  // === Settings에서 Drive 동기화 활성 여부 로드 ===
+  // === Settings에서 Drive 동기화 활성 여부 + 루트 경로 로드 ===
   // 왜 별도 useEffect인가: Settings는 presets와 독립이라 병렬 로드 가능.
   useEffect(() => {
     loadSettings().then((result) => {
       if (result.success) {
         setDriveSyncEnabledState(result.data.driveSyncEnabled);
+        setDrivePatternRoot(result.data.drivePatternRoot);
       }
     });
   }, []);
@@ -224,54 +232,115 @@ function PatternManage() {
     }
   }, [isLoadSuccess]);
 
-  // === Drive 가져오기 결과 병합 ===
-  // 모달이 stableId 중복 체크 + 카테고리 트리 매핑까지 끝낸 후 신규 항목만 전달한다.
-  // 여기서는 단순히 기존 배열에 concat하고 영속화한다.
-  const handleDriveImport = useCallback(
-    async (result: DriveImportResult) => {
-      if (!isLoadSuccess) {
-        alert("데이터 로드 실패 상태에서는 가져올 수 없습니다.");
+  // === Drive 자동 동기화 (옵션 4) ===
+  // 왜 useCallback + ref 조합인가:
+  //   1) 쿨다운/진행중 체크는 ref로 (리렌더 없이 즉시 판정)
+  //   2) 실제 병합 로직은 state/store에 의존하므로 useCallback의 deps로 최신값 추적
+  //   3) alert 제거 — 사용자가 "경고 부담" 피드백을 주었기 때문. console만 사용.
+  const runAutoSync = useCallback(async () => {
+    // 선행 조건: 로드 성공 + 동기화 활성 + 루트 경로 존재
+    if (!isLoadSuccess) return;
+    if (!driveSyncEnabled) return;
+    if (!drivePatternRoot) return;
+
+    // 쿨다운: 마지막 스캔으로부터 60초 이내면 스킵
+    // 왜 60초인가: 사용자가 페이지를 빠르게 왕복해도 스캔이 폭주하지 않도록.
+    // 실측 스캔 시간이 5~10초대이므로 60초는 충분한 여유.
+    const now = Date.now();
+    const COOLDOWN_MS = 60 * 1000;
+    if (now - lastAutoScanRef.current < COOLDOWN_MS) {
+      console.info(
+        `[Drive 자동 동기화] 쿨다운 중 (${Math.round(
+          (COOLDOWN_MS - (now - lastAutoScanRef.current)) / 1000
+        )}초 남음) — 스킵`
+      );
+      return;
+    }
+
+    // 중복 실행 방지 (스캔 중 재진입 차단)
+    if (autoScanInFlightRef.current) return;
+    autoScanInFlightRef.current = true;
+
+    try {
+      console.info("[Drive 자동 동기화] 스캔 시작:", drivePatternRoot);
+      const scanResult = await scanDriveRoot(drivePatternRoot);
+
+      if (!scanResult.success) {
+        console.warn("[Drive 자동 동기화] 스캔 실패:", scanResult.error);
         return;
       }
-      // 카테고리 먼저 (프리셋이 categoryId를 참조하므로)
-      if (result.newCategories.length > 0) {
-        const updatedCats = [...categories, ...result.newCategories];
-        setCategories(updatedCats);
+
+      // 병합: 기존 치수(sizes)는 절대 덮어쓰지 않고, svgPathBySize만 최신화
+      const merged = mergeDriveScanResult(scanResult, presets, categories);
+
+      // 변경이 하나도 없으면 저장 생략 (불필요한 파일 I/O 방지)
+      const hasChanges =
+        merged.newPresetCount > 0 ||
+        merged.updatedPresetCount > 0 ||
+        merged.newCategoryCount > 0;
+
+      if (!hasChanges) {
+        console.info("[Drive 자동 동기화] 변경 없음");
+      } else {
+        // 카테고리 먼저 저장 (프리셋이 categoryId를 참조하므로 순서 중요)
+        if (merged.newCategoryCount > 0) {
+          setCategories(merged.mergedCategories);
+          try {
+            await saveCategories(merged.mergedCategories);
+          } catch (err) {
+            console.warn("[Drive 자동 동기화] 카테고리 저장 실패:", err);
+            return;
+          }
+        }
+        // 프리셋 저장
+        setPresets(merged.mergedPresets);
         try {
-          await saveCategories(updatedCats);
+          await savePresets(merged.mergedPresets);
         } catch (err) {
-          alert(`카테고리 저장 실패: ${err instanceof Error ? err.message : String(err)}`);
+          console.warn("[Drive 자동 동기화] 프리셋 저장 실패:", err);
           return;
         }
-      }
-      if (result.newPresets.length > 0) {
-        const updatedPresets = [...presets, ...result.newPresets];
-        setPresets(updatedPresets);
-        try {
-          await savePresets(updatedPresets);
-        } catch (err) {
-          alert(`프리셋 저장 실패: ${err instanceof Error ? err.message : String(err)}`);
-          return;
-        }
+        console.info(
+          `[Drive 자동 동기화] 완료 — 신규 ${merged.newPresetCount}, 갱신 ${merged.updatedPresetCount}, 카테고리 ${merged.newCategoryCount}`
+        );
       }
 
-      // 사용자에게 요약 안내 (alert로 단순화 — 토스트 시스템이 없으므로)
-      const lines = [
-        `가져오기 완료`,
-        `- 신규 프리셋: ${result.newPresets.length}개`,
-        `- 신규 카테고리: ${result.newCategories.length}개`,
-      ];
-      if (result.skippedCount > 0) {
-        lines.push(`- 스킵(중복): ${result.skippedCount}개`);
+      if (merged.warnings.length > 0) {
+        // 왜 console만: 사용자는 "경고 보고 싶지 않음" 피드백(Q3-B).
+        // Settings에서 최근 경고 확인 기능은 Phase 2에서 추가 예정.
+        console.warn(
+          `[Drive 자동 동기화] 경고 ${merged.warnings.length}건:`,
+          merged.warnings
+        );
       }
-      if (result.warnings.length > 0) {
-        lines.push(`- 경고: ${result.warnings.length}건 (콘솔 확인)`);
-        console.warn("[Drive 가져오기 경고]", result.warnings);
-      }
-      alert(lines.join("\n"));
-    },
-    [isLoadSuccess, categories, presets]
-  );
+
+      // 성공/변경없음 모두 마지막 스캔 시각 갱신 (실패만 쿨다운 갱신 안 함 → 재시도 허용)
+      lastAutoScanRef.current = Date.now();
+    } catch (err) {
+      console.warn("[Drive 자동 동기화] 예외:", err);
+    } finally {
+      autoScanInFlightRef.current = false;
+    }
+  }, [
+    isLoadSuccess,
+    driveSyncEnabled,
+    drivePatternRoot,
+    presets,
+    categories,
+  ]);
+
+  // === 페이지 진입(= isLoadSuccess 전환 or 설정 변경) 시 자동 동기화 트리거 ===
+  // 왜 isLoadSuccess를 deps에 넣었나: 초기 로드가 끝나야 presets/categories가 채워지고,
+  // 그 후에 병합해야 사용자 데이터와 정확히 매칭된다.
+  // 왜 runAutoSync 자체를 deps에 넣지 않았나: presets/categories가 바뀔 때마다
+  // runAutoSync의 레퍼런스가 변해 useEffect가 재실행되는데,
+  // 자동 동기화가 presets를 갱신하면 다시 재실행되는 무한 루프 위험이 있다.
+  // 쿨다운 가드가 실제 스캔은 막지만, useEffect가 매번 실행되는 자체를 피하기 위해
+  // 설정 값(driveSyncEnabled/drivePatternRoot)과 로드 성공 여부만 의존성에 둔다.
+  useEffect(() => {
+    runAutoSync();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoadSuccess, driveSyncEnabled, drivePatternRoot]);
 
   // === 카테고리별 프리셋 수 계산 (트리 표시용) ===
   const presetCountByCategory = new Map<string, number>();
@@ -796,21 +865,11 @@ function PatternManage() {
               </div>
             )}
 
-            {/* 프리셋 추가 버튼 + Drive 가져오기 버튼 */}
+            {/* 프리셋 추가 버튼 (Drive 가져오기 버튼은 옵션 4에서 자동 동기화로 대체되어 제거됨) */}
             <div className="preset-actions">
               <button className="btn btn--primary" onClick={handleCreate}>
                 + 새 프리셋 추가
               </button>
-              {/* Drive 동기화가 활성화된 경우만 가져오기 버튼 표시 */}
-              {driveSyncEnabled && (
-                <button
-                  className="btn"
-                  onClick={() => setShowDriveImport(true)}
-                  title="설정에 등록된 Drive 폴더에서 패턴을 스캔합니다"
-                >
-                  📥 Drive에서 가져오기
-                </button>
-              )}
             </div>
 
             {/* 프리셋이 없을 때 안내 */}
@@ -935,15 +994,7 @@ function PatternManage() {
           </main>
         </div>
 
-        {/* Drive 가져오기 모달 (showDriveImport일 때만 마운트) */}
-        {showDriveImport && (
-          <DriveImportModal
-            existingCategories={categories}
-            existingPresets={presets}
-            onClose={() => setShowDriveImport(false)}
-            onImport={handleDriveImport}
-          />
-        )}
+        {/* Drive 가져오기 모달은 옵션 4 자동 동기화로 대체되어 제거됨 */}
       </div>
     );
   }

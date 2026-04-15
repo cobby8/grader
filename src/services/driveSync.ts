@@ -27,8 +27,13 @@ import {
   exists,
 } from "@tauri-apps/plugin-fs";
 
-import type { DriveMetaJson } from "../types/pattern";
+import type {
+  DriveMetaJson,
+  PatternCategory,
+  PatternPreset,
+} from "../types/pattern";
 import { SIZE_LIST } from "../types/pattern";
+import { generateId } from "../stores/presetStore";
 
 // ============================================================================
 // 상수 및 정규식
@@ -489,6 +494,197 @@ export async function scanDriveRoot(rootAbs: string): Promise<ScanResult> {
     presets,
     warnings,
     success: true,
+  };
+}
+
+// ============================================================================
+// 옵션 4: 자동 동기화용 병합 함수
+// ============================================================================
+
+/**
+ * 스캔 결과를 기존 presets/categories에 병합한 결과
+ *
+ * 왜 별도 타입인가: 자동 동기화는 "신규 추가" 외에도 "기존 항목의 svgPathBySize 갱신"
+ * 까지 책임진다. DriveImportModal의 DriveImportResult는 신규만 다뤘다.
+ */
+export interface MergeResult {
+  /** 병합 후 전체 prese 배열 (기존 + 신규, 중복 stableId는 1개만) */
+  mergedPresets: PatternPreset[];
+  /** 병합 후 전체 카테고리 배열 (기존 + 신규) */
+  mergedCategories: PatternCategory[];
+  /** 신규 추가된 프리셋 개수 */
+  newPresetCount: number;
+  /** 기존 stableId에 매칭되어 svgPathBySize가 갱신된 프리셋 개수 */
+  updatedPresetCount: number;
+  /** 신규 추가된 카테고리 개수 */
+  newCategoryCount: number;
+  /** 스캔 경고 원문 (호출자가 로그에 출력) */
+  warnings: string[];
+}
+
+/**
+ * Drive 스캔 결과를 기존 데이터와 병합한다.
+ *
+ * 왜 "덮어쓰지 않고 갱신"인가:
+ *   사용자가 PatternManage에서 입력한 사이즈별 치수(width/height)는
+ *   Drive에 없는 정보다. stableId가 같으면 같은 프리셋으로 간주하고,
+ *   sizes / svgData / svgBySize 같은 사용자 입력 데이터는 **절대 덮어쓰지 않는다**.
+ *   단, 파일 경로(svgPathBySize)는 Drive가 정답이므로 최신 스캔 결과로 교체한다.
+ *
+ * @param scanResult scanDriveRoot 반환값 (success=true 여야 함)
+ * @param existingPresets 현재 presets.json 내용
+ * @param existingCategories 현재 categories.json 내용
+ */
+export function mergeDriveScanResult(
+  scanResult: ScanResult,
+  existingPresets: PatternPreset[],
+  existingCategories: PatternCategory[]
+): MergeResult {
+  // === 1) 카테고리 병합 ===
+  // scan 카테고리 id(경로 해시) → 최종 카테고리 id(기존 또는 신규) 매핑
+  const scanIdToFinalId = new Map<string, string>();
+  const newCategories: PatternCategory[] = [];
+
+  // 깊이 오름차순으로 처리 (parent가 먼저 등록되어야 자식의 parentId를 연결할 수 있음)
+  const sortedScanCats = [...scanResult.categories].sort(
+    (a, b) => a.depth - b.depth
+  );
+
+  for (const sc of sortedScanCats) {
+    const finalParentId = sc.parentId
+      ? scanIdToFinalId.get(sc.parentId) ?? null
+      : null;
+
+    // 동일한 부모 아래 같은 이름의 카테고리가 이미 존재하는가?
+    const existing = existingCategories.find(
+      (c) => c.parentId === finalParentId && c.name === sc.name
+    );
+    const existingNew = newCategories.find(
+      (c) => c.parentId === finalParentId && c.name === sc.name
+    );
+
+    if (existing) {
+      scanIdToFinalId.set(sc.id, existing.id);
+    } else if (existingNew) {
+      scanIdToFinalId.set(sc.id, existingNew.id);
+    } else {
+      // 신규 카테고리
+      const newId = generateId();
+      const siblings = [
+        ...existingCategories.filter((c) => c.parentId === finalParentId),
+        ...newCategories.filter((c) => c.parentId === finalParentId),
+      ];
+      const maxOrder = siblings.reduce((m, c) => Math.max(m, c.order), -1);
+      newCategories.push({
+        id: newId,
+        name: sc.name,
+        parentId: finalParentId,
+        order: maxOrder + 1,
+      });
+      scanIdToFinalId.set(sc.id, newId);
+    }
+  }
+
+  const mergedCategories: PatternCategory[] = [
+    ...existingCategories,
+    ...newCategories,
+  ];
+
+  // === 2) 프리셋 병합 ===
+  // 기존 프리셋을 stableId 기준으로 빠르게 찾기 위한 맵
+  // 왜 Map인가: existingPresets가 수백 개여도 O(1)로 매칭 — 스캔 결과 순회 시 성능 이슈 없음.
+  const existingByStableId = new Map<string, PatternPreset>();
+  for (const p of existingPresets) {
+    if (p.stableId) existingByStableId.set(p.stableId, p);
+  }
+
+  // 신규 프리셋 & 갱신된 프리셋을 분리 관리
+  const mergedPresets: PatternPreset[] = [];
+  const updatedStableIds = new Set<string>();
+  let newPresetCount = 0;
+  let updatedPresetCount = 0;
+  const now = new Date().toISOString();
+
+  for (const sp of scanResult.presets) {
+    const existing = existingByStableId.get(sp.stableId);
+    const finalCategoryId = scanIdToFinalId.get(sp.categoryId);
+
+    if (existing) {
+      // --- 기존 프리셋 갱신: svgPathBySize만 교체, 나머지(사용자 입력) 보존 ---
+      // 왜 이렇게 해야 하나:
+      //   - sizes: 사용자가 mm 단위 치수를 직접 입력한 값 → 덮어쓰면 치명적 데이터 유실
+      //   - svgData/svgBySize: local 업로드 프리셋이 가진 인라인 SVG → 보존
+      //   - 오직 "Drive 파일 위치"만 최신 스캔 결과로 교체
+      const updatedPieces = existing.pieces.map((piece, idx) => {
+        // Drive 출처 피스(단일 piece 가정 — Phase 1 J-8 기준)만 경로 갱신
+        // 왜 idx === 0 체크: 향후 Phase에서 다중 piece 지원 시에도 첫 piece만 Drive 경로 소유
+        if (idx === 0 && (piece.svgSource === "drive" || !piece.svgSource)) {
+          return {
+            ...piece,
+            svgPathBySize: { ...sp.svgPathBySize },
+            svgSource: "drive" as const,
+          };
+        }
+        return piece;
+      });
+
+      mergedPresets.push({
+        ...existing,
+        pieces: updatedPieces,
+        // driveFolder는 폴더 이동 시 반영해야 하므로 갱신
+        driveFolder: sp.driveFolder,
+        updatedAt: now,
+        // 중요: sizes, name, categoryId는 **절대 건드리지 않음**
+        // 사용자가 PatternManage에서 rename/재분류했을 수 있음
+      });
+      updatedStableIds.add(sp.stableId);
+      updatedPresetCount++;
+    } else {
+      // --- 신규 프리셋 생성 ---
+      const sizesFromDrive = Object.keys(sp.svgPathBySize);
+      const pieceId = generateId();
+      const piece = {
+        id: pieceId,
+        name: sp.presetName,
+        svgPath: "",
+        svgData: "",
+        svgPathBySize: { ...sp.svgPathBySize },
+        svgSource: "drive" as const,
+      };
+      mergedPresets.push({
+        id: generateId(),
+        name: sp.presetName,
+        pieces: [piece],
+        sizes: sizesFromDrive.map((size) => ({
+          size,
+          pieces: [{ pieceId, width: 0, height: 0 }],
+        })),
+        categoryId: finalCategoryId,
+        createdAt: now,
+        updatedAt: now,
+        driveFolder: sp.driveFolder,
+        stableId: sp.stableId,
+      });
+      newPresetCount++;
+    }
+  }
+
+  // 이번 스캔에서 매칭되지 않은 기존 프리셋은 그대로 유지한다.
+  // 왜: "파일이 사라져도 카드는 유지" (사용자 결정 Q2-B).
+  // 스캔에서 갱신된(updatedStableIds 포함) 프리셋은 위에서 이미 푸시되었으므로 제외.
+  // stableId가 없는 로컬 업로드 프리셋도 여기서 그대로 유지된다.
+  for (const p of existingPresets) {
+    if (p.stableId && updatedStableIds.has(p.stableId)) continue;
+    mergedPresets.push(p);
+  }
+
+  return {
+    mergedPresets,
+    mergedCategories,
+    newPresetCount,
+    updatedPresetCount,
+    newCategoryCount: newCategories.length,
+    warnings: scanResult.warnings,
   };
 }
 
