@@ -87,6 +87,60 @@ grader/
 
 ## 구현 기록 (developer)
 
+### [2026-04-16] 조각 인식 Phase 1+2 구현 (B-A-A-A-A)
+
+📝 구현한 기능: 조각 인식 기반 요소 배치 (Phase 1 filled 체크 + Phase 2 rx/ry 정규화 D2 모드)
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| illustrator-scripts/grading.jsx | Phase 1 filled 체크 (importSvgPathsToDoc + extractPatternPieces) + Phase 2 STEP 4 rx/ry 사전 수집 + STEP 10 D2 모드 분기 + 레거시 alignElementToPiece 블록 제거 | 수정 |
+
+#### Phase 1 (path.filled 체크)
+- **importSvgPathsToDoc L851~869**: `path.filled + fillColor + typename !== "NoColor"` 3중 체크. 실패 시 장식선으로 간주 → 패턴선 레이어로만 복제 후 continue. `[SKIP] path[layer=N,idx=M] filled=X fillColor=Y` 로그.
+- **extractPatternPieces L962~977**: 동일 조건. 실패 시 `[SKIP] designPath idx=N ...` 로그 후 continue.
+- **효과**: basePieces/designPieces에 실제 색 채운 몸판 조각만 포함. 큰 장식선/보조선 제외.
+
+#### Phase 2 (rx/ry 정규화 D2 모드)
+- **STEP 4 L1370~1436**: `elementOriginalCenters[i]`에 `{cx, cy, rx, ry}` 저장 (기존 `{cx, cy}` 확장).
+  - designPieces 중 요소와 매칭된 조각의 bbox 기반으로 `rx = (cx - left) / width`, `ry = (cy - bottom) / height` 계산
+  - clamp(0~1) 적용 (경계선 위 요소 안전망)
+  - Q4=A: findBestMatchingPiece가 -1 반환 시 가장 가까운 조각 중심까지 거리로 fallback 매핑
+  - 로그: `[Phase2-D2] 요소 N → piece M rx= ry= origCenter=(,)`
+- **STEP 10 L1746~1825**: `USE_D2_MODE = true, USE_D1_MODE = false` 초기값.
+  - Q3=A: `basePieces.length !== designPieces.length` 또는 `basePieces.length === 0` 시 D2 off + D1 on (`[WARN] 조각 수 불일치 → D1 fallback`)
+  - D2 경로: 각 요소 → `basePieces[pieceIdx].bbox`의 rx/ry 지점으로 translate (scale 없음, 위치만)
+  - D2 실패 시: 기존 D1 clamp + 아트보드 중심 정렬 경로 실행
+  - 최종 bounds 로그: `STEP 10 D2 최종 요소 bounds=[...] size= placed= skipped=`
+- **레거시 제거**: 구 `alignElementToPiece` else 블록(구 L1929~1961)은 문법 균형상 불필요 → 주석으로 대체.
+
+#### 건드리지 않은 것 (요청대로 보존)
+- STEP 4 duplicate 기반 elemItems 수집 (버그 B 픽스)
+- STEP 8 duplicate 기반 paste 로직
+- STEP 10 D1 clamp 로직 (버그 C 픽스) — D2 실패 시 fallback으로 작동
+- STEP 9 linearScale, mainColor 추출, CMYK 변환 등 모든 기존 로직
+- alignElementToPiece / alignToBodyCenter 함수 정의 (호출부만 제거됨)
+
+#### 검증
+- ES3 호환 PASS (var, for, push, continue, try/catch, Math.abs/sqrt — 모두 ES3)
+- 중괄호 균형 PASS (node 스크립트로 검증 완료, final depth=0)
+- `npx tsc --noEmit`은 jsx 대상 아님 (무관)
+
+💡 tester 참고:
+- **Phase 1 검증**: `grading-log.txt`에서 `[SKIP] path ... filled=false` 또는 `fillColor=NoColor` 항목 확인 → 장식선 제외 증거. basePieces/designPieces 개수가 이전보다 줄었는지 확인.
+- **Phase 2 검증 (3사이즈 2XS/L/4XL)**:
+  - 로그에 `[Phase2-D2] 요소 N → piece M rx= ry=` 확인
+  - `STEP 10 D2 시작` / `STEP 10 D2 최종 요소 bounds=` 확인
+  - 조각 수 불일치 시 `[WARN] 조각 수 불일치 → D1 fallback` 자동 작동
+  - 앞판 요소는 앞판 조각 안, 뒷판 요소는 뒷판 조각 안에 위치
+  - 3XL/4XL에서 조각이 벌어지면 요소도 따라감 (Q2=A 반영)
+- **폴백 테스트**: `USE_D2_MODE = false`로 바꾸면 기존 D1 경로 그대로 작동 (즉시 롤백 가능)
+
+⚠️ reviewer 참고:
+- D2 모드에서 scale이 없음 (위치만). 크기 조정은 STEP 9의 linearScale에서 이미 적용됨.
+- rx/ry = -1이면 스킵 (요소 paste 위치 유지). 이 경우 `[D2 SKIP]` 로그로 가시화.
+- duplicate 기반 버그 B 픽스와 충돌 없음 (STEP 4/8는 건드리지 않음).
+- target/debug/illustrator-scripts/grading.jsx 동기화는 PM이 수동 처리 필요.
+
 ### [2026-04-16] 버그 B 수정: duplicate 기반 전환
 
 #### 원인

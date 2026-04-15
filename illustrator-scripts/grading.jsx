@@ -849,6 +849,24 @@ function importSvgPathsToDoc(svgDoc, targetDoc, mainColor, layerFill, layerPatte
 
             // 가로/세로 모두 50pt 이상 = 패턴 조각으로 간주
             if (Math.abs(path.width) > 50 && Math.abs(path.height) > 50) {
+                // Phase 1 (2026-04-16): path.filled + 실제 색 fillColor 여야 진짜 조각으로 인정
+                // 이유: 큰 장식선/보조선(stroke만 있는 path)이 조각으로 오인되면
+                //       basePieces 수가 부풀려져 Phase 2 조각 매핑이 어긋난다.
+                // 판정: path.filled === true && fillColor 존재 && typename !== "NoColor"
+                if (!path.filled || !path.fillColor || path.fillColor.typename === "NoColor") {
+                    try {
+                        var _skipFillType = path.fillColor ? path.fillColor.typename : "(null)";
+                        writeLog("  [SKIP] path[layer=" + li + ",idx=" + pi + "] filled=" + path.filled
+                            + " fillColor=" + _skipFillType + " → 장식선/보조선으로 간주, 조각 제외");
+                    } catch (eSkipLog) { /* 무시 */ }
+                    // 장식선은 패턴선 레이어로만 복제 (fill 포기)
+                    var decorCopy = path.duplicate(layerPattern, ElementPlacement.PLACEATEND);
+                    decorCopy.filled = false;
+                    if (decorCopy.stroked && decorCopy.strokeColor && decorCopy.strokeColor.typename === "RGBColor") {
+                        decorCopy.strokeColor = cloneColor(decorCopy.strokeColor);
+                    }
+                    continue;
+                }
                 // 열린 경로는 닫기 (fill 적용 가능하게)
                 if (!path.closed) {
                     path.closed = true;
@@ -950,6 +968,17 @@ function extractPatternPieces(layer, minSize) {
         var path = layer.pathItems[pi];
         // 너치/가이드 필터: 가로/세로 모두 minSize 이상
         if (Math.abs(path.width) > minSize && Math.abs(path.height) > minSize) {
+            // Phase 1 (2026-04-16): filled + 실제 fillColor 여야 진짜 조각으로 인정
+            // 이유: 디자인 AI의 "패턴선" 레이어에 큰 가이드선/장식선이 있으면
+            //       designPieces가 부풀려져 요소-조각 매핑이 어긋난다.
+            if (!path.filled || !path.fillColor || path.fillColor.typename === "NoColor") {
+                try {
+                    var _dpSkipType = path.fillColor ? path.fillColor.typename : "(null)";
+                    writeLog("  [SKIP] designPath idx=" + pi + " filled=" + path.filled
+                        + " fillColor=" + _dpSkipType + " → 조각 제외");
+                } catch (eDpSkip) { /* 무시 */ }
+                continue;
+            }
             var pb = path.geometricBounds;
             pieces.push({
                 bbox: [pb[0], pb[1], pb[2], pb[3]],
@@ -1367,17 +1396,67 @@ function main() {
             // --- Phase 2 사전 수집 ②: 각 요소의 원본 중심 + 매칭 조각 인덱스 ---
             // 주의: elemLayer.pageItems는 PathItem/GroupItem/TextItem 등 섞여있지만
             //       모두 geometricBounds를 갖는다. 순서는 copy→paste 시 유지된다고 가정.
+            //
+            // ★ D2 모드 (2026-04-16): 각 요소에 대해 "조각 내 상대 좌표" rx, ry 추가 계산.
+            //   - rx = (요소 중심x - 조각 left) / 조각 width      (0=왼쪽 경계, 1=오른쪽 경계)
+            //   - ry = (요소 중심y - 조각 bottom) / 조각 height   (0=아래 경계, 1=위 경계)
+            //   - 조각 밖에 있는 요소는 가장 가까운 조각으로 매핑 후 rx/ry clamp(0~1) (Q4=A)
+            //   - STEP 10 D2 모드가 타겟 조각의 같은 rx/ry 지점으로 요소를 재배치한다.
             for (var emi = 0; emi < elemLayer.pageItems.length; emi++) {
                 var emItem = elemLayer.pageItems[emi];
                 var emb = emItem.geometricBounds; // [left, top, right, bottom]
                 var emCx = (emb[0] + emb[2]) / 2;
                 var emCy = (emb[1] + emb[3]) / 2;
-                elementOriginalCenters.push({ cx: emCx, cy: emCy });
                 // designPieces가 비었으면 매칭 스킵 (-1 저장)
                 var bestIdx = (designPieces.length > 0)
                     ? findBestMatchingPiece([emb[0], emb[1], emb[2], emb[3]], designPieces)
                     : -1;
+
+                // ── D2 rx/ry 계산 ──
+                var rx = -1, ry = -1;
+                if (bestIdx < 0 && designPieces.length > 0) {
+                    // Q4=A: 조각 밖 요소 → 가장 가까운 조각 중심까지 거리로 매핑
+                    var minDistSq = Infinity;
+                    var nearestIdx = -1;
+                    for (var dpi = 0; dpi < designPieces.length; dpi++) {
+                        var dp = designPieces[dpi];
+                        var ddx = emCx - dp.cx;
+                        var ddy = emCy - dp.cy;
+                        var distSq = ddx * ddx + ddy * ddy;
+                        if (distSq < minDistSq) {
+                            minDistSq = distSq;
+                            nearestIdx = dpi;
+                        }
+                    }
+                    if (nearestIdx >= 0) {
+                        bestIdx = nearestIdx;
+                        try {
+                            writeLog("  [Phase2-D2] 요소 " + emi + " 조각 밖 → 가장 가까운 조각 " + nearestIdx + "에 매핑");
+                        } catch (eNear) { /* 무시 */ }
+                    }
+                }
+                if (bestIdx >= 0 && bestIdx < designPieces.length) {
+                    var bp = designPieces[bestIdx];
+                    // bbox = [left, top, right, bottom] (Illustrator Y축: 위가 큰 값)
+                    var bpL = bp.bbox[0], bpT = bp.bbox[1], bpR = bp.bbox[2], bpB = bp.bbox[3];
+                    var bpW = bpR - bpL;
+                    var bpH = bpT - bpB;
+                    if (bpW > 0 && bpH > 0) {
+                        rx = (emCx - bpL) / bpW;
+                        ry = (emCy - bpB) / bpH;
+                        // clamp(0~1) — 경계선 위 요소 혹은 근접 조각 매핑 시 안전망
+                        if (rx < 0) rx = 0; if (rx > 1) rx = 1;
+                        if (ry < 0) ry = 0; if (ry > 1) ry = 1;
+                    }
+                }
+                elementOriginalCenters.push({ cx: emCx, cy: emCy, rx: rx, ry: ry });
                 elementPieceIndex.push(bestIdx);
+                try {
+                    writeLog("  [Phase2-D2] 요소 " + emi + " → piece " + bestIdx
+                        + " rx=" + (rx >= 0 ? rx.toFixed(3) : "N/A")
+                        + " ry=" + (ry >= 0 ? ry.toFixed(3) : "N/A")
+                        + " origCenter=(" + emCx.toFixed(1) + "," + emCy.toFixed(1) + ")");
+                } catch (eElemLog) { /* 무시 */ }
             }
             elementCountAtCopy = elemLayer.pageItems.length;
             $.writeln("[grading.jsx] [Phase 2] 요소별 매핑 기록: " + elementPieceIndex.length + "개");
@@ -1654,6 +1733,97 @@ function main() {
                 // ② individualItems[i]는 paste 순서대로 보장된다고 가정
                 //    → elementPieceIndex[i], elementOriginalCenters[i]와 1:1 매칭
                 //
+                // ===== D2 모드 (2026-04-16, Phase 2 조각 인식 배치) =====
+                // 왜 도입:
+                //   - D1(아트보드 중심 정렬)은 조각 정보를 무시 → 사이즈 커져도 앞/뒤판 구분 없이
+                //     전부 한 덩어리로 중앙에 고정 → "각 조각에 원래 있던 요소"가 사라지는 느낌.
+                //   - D2는 STEP 4에서 계산한 rx/ry(조각 내부 0~1 비율)를 타겟 조각 bbox에 투영해
+                //     요소가 "원래 속했던 조각의 같은 위치"에 재배치된다.
+                //   - 조각이 벌어지면 요소도 따라 이동 (Q2=A).
+                //   - 조각 수 불일치 시 D1 fallback (Q3=A).
+                //
+                // 롤백: USE_D2_MODE = false 로 바꾸면 D1 경로로 즉시 복귀.
+                var USE_D2_MODE = true;
+                var USE_D1_MODE = false;
+
+                // Q3=A: basePieces vs designPieces 수 불일치 시 D1 fallback
+                if (USE_D2_MODE && basePieces.length !== designPieces.length) {
+                    writeLog("[WARN] STEP 10 D2: 조각 수 불일치 (base=" + basePieces.length
+                        + " vs design=" + designPieces.length + ") → D1 fallback");
+                    USE_D2_MODE = false;
+                    USE_D1_MODE = true;
+                }
+                if (USE_D2_MODE && basePieces.length === 0) {
+                    writeLog("[WARN] STEP 10 D2: basePieces=0 → D1 fallback");
+                    USE_D2_MODE = false;
+                    USE_D1_MODE = true;
+                }
+
+                if (USE_D2_MODE) {
+                    // --- D2 Step 1: 각 요소를 elementPieceIndex에 따라 타겟 조각으로 이동 ---
+                    // 이유: STEP 4에서 각 요소에 대해 (pieceIdx, rx, ry)를 계산해두었다.
+                    //       타겟 basePieces[pieceIdx]의 bbox 내부의 같은 rx/ry 지점으로 이동.
+                    // scale은 하지 않음 (MVP, 위치만 이동). 크기는 STEP 9의 linearScale에서 이미 적용됨.
+                    writeLog("STEP 10 D2 시작: 조각 수=" + basePieces.length
+                        + ", individualItems=" + individualItems.length);
+
+                    var d2Placed = 0;
+                    var d2Skipped = 0;
+                    for (var d2i = 0; d2i < individualItems.length; d2i++) {
+                        var d2Item = individualItems[d2i];
+                        var d2PieceIdx = elementPieceIndex[d2i];
+                        var d2Orig = elementOriginalCenters[d2i];
+
+                        // 매핑 실패(-1) 또는 범위 밖 → 스킵 (해당 요소는 paste 위치 그대로 유지)
+                        if (d2PieceIdx < 0 || d2PieceIdx >= basePieces.length) {
+                            d2Skipped++;
+                            writeLog("  [D2 SKIP] 요소 " + d2i + " pieceIdx=" + d2PieceIdx + " → 매핑 없음");
+                            continue;
+                        }
+                        // rx/ry가 유효해야 D2 가능
+                        if (!d2Orig || d2Orig.rx < 0 || d2Orig.ry < 0) {
+                            d2Skipped++;
+                            writeLog("  [D2 SKIP] 요소 " + d2i + " rx/ry 없음");
+                            continue;
+                        }
+
+                        var d2Tp = basePieces[d2PieceIdx];
+                        // basePieces.bbox = [left, top, right, bottom]
+                        var d2L = d2Tp.bbox[0];
+                        var d2T = d2Tp.bbox[1];
+                        var d2R = d2Tp.bbox[2];
+                        var d2B = d2Tp.bbox[3];
+                        var d2W = d2R - d2L;
+                        var d2H = d2T - d2B;
+                        // 타겟 조각 내부의 rx/ry 지점을 새 중심으로
+                        var d2NewCx = d2L + d2Orig.rx * d2W;
+                        var d2NewCy = d2B + d2Orig.ry * d2H;
+                        // 현재 요소 중심
+                        var d2Ib = d2Item.geometricBounds;
+                        var d2CurCx = (d2Ib[0] + d2Ib[2]) / 2;
+                        var d2CurCy = (d2Ib[1] + d2Ib[3]) / 2;
+                        d2Item.translate(d2NewCx - d2CurCx, d2NewCy - d2CurCy);
+                        d2Placed++;
+                        try {
+                            writeLog("  [D2] 요소 " + d2i + " → piece " + d2PieceIdx
+                                + " rx=" + d2Orig.rx.toFixed(3) + " ry=" + d2Orig.ry.toFixed(3)
+                                + " new=(" + d2NewCx.toFixed(1) + "," + d2NewCy.toFixed(1) + ")");
+                        } catch (eD2Log) { /* 무시 */ }
+                    }
+
+                    // --- D2 Step 2: 최종 bounds 로그 ---
+                    var d2FinalBounds = calculateUnionBoundsOfItems(individualItems);
+                    writeLog("STEP 10 D2 최종 요소 bounds=["
+                        + d2FinalBounds[0].toFixed(1) + "," + d2FinalBounds[1].toFixed(1) + ","
+                        + d2FinalBounds[2].toFixed(1) + "," + d2FinalBounds[3].toFixed(1) + "]"
+                        + " size=" + (d2FinalBounds[2] - d2FinalBounds[0]).toFixed(1) + "x"
+                        + (d2FinalBounds[1] - d2FinalBounds[3]).toFixed(1)
+                        + " placed=" + d2Placed + " skipped=" + d2Skipped);
+
+                    $.writeln("[grading.jsx] [Phase 2 / D2] 조각별 rx/ry 배치 완료: placed=" + d2Placed
+                        + " skipped=" + d2Skipped + " / 총 " + individualItems.length);
+                }
+
                 // ===== D1 모드 (2026-04-16, 버그 C 대응) =====
                 // 왜 도입:
                 //   - alignElementToPiece는 조각별 이동으로 사이즈 커지면 몸판 벌어짐이
@@ -1661,8 +1831,7 @@ function main() {
                 //   - 대응: (1) 조각별 이동 skip, (2) 요소 전체 중심을 아트보드 중심에 복원,
                 //           (3) 요소 전체가 아트보드 초과 시 그룹 중심 기준 추가 scale down (clamp).
                 //
-                // 롤백: USE_D1_MODE = false 로 바꾸면 기존 alignElementToPiece 경로로 즉시 복귀.
-                var USE_D1_MODE = true;
+                // D2 모드에서 조각 수 불일치 시 자동으로 이 경로로 fallback한다.
 
                 if (USE_D1_MODE) {
                     // --- D1 Step 1: 요소 전체 합집합 bounds ---
@@ -1757,39 +1926,10 @@ function main() {
 
                     $.writeln("[grading.jsx] [Phase 2 / D1] 아트보드 clamp+중심 정렬 완료: "
                         + individualItems.length + "개 요소");
-                } else {
-                    // ===== 레거시 Phase 2: alignElementToPiece 조각별 정렬 (롤백용 보존) =====
-                    var placedCount = 0;
-                    var skippedCount = 0;
-                    for (var idx = 0; idx < individualItems.length; idx++) {
-                        var pieceIdx = elementPieceIndex[idx];
-                        // (S3) 인덱스 범위 체크
-                        if (pieceIdx < 0 || pieceIdx >= basePieces.length) {
-                            skippedCount++;
-                            continue;
-                        }
-                        var origCenter = elementOriginalCenters[idx];
-                        if (!origCenter) {
-                            skippedCount++;
-                            continue;
-                        }
-                        alignElementToPiece(
-                            individualItems[idx],
-                            origCenter,
-                            designPieces[pieceIdx],
-                            basePieces[pieceIdx],
-                            linearScaleApplied
-                        );
-                        placedCount++;
-                    }
-                    $.writeln("[grading.jsx] [Phase 2] 개별 정렬 완료: 배치=" + placedCount
-                        + ", 스킵=" + skippedCount + " / 총 " + individualItems.length);
-                    // [DEBUG LOG] 개별 정렬 결과 — S에서 0개, 3XL에서 과대 배치 등 원인 파악
-                    writeLog("STEP 10 개별 정렬: 배치=" + placedCount
-                        + ", 스킵=" + skippedCount
-                        + ", 총=" + individualItems.length
-                        + ", linearScaleApplied=" + linearScaleApplied.toFixed(4));
                 }
+                // 주의: 레거시 alignElementToPiece 경로는 2026-04-16 D2 도입 시 제거됨.
+                //       D2 실패(조각 수 불일치 등)는 자동으로 D1로 fallback 되므로 별도 else 불필요.
+
                 // 배치된 요소 전체의 bounds 측정 (layerDesign 기준)
                 try {
                     var lMin = Infinity, tMax = -Infinity, rMax = -Infinity, bMin = Infinity;
