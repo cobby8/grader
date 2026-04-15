@@ -1133,6 +1133,35 @@ function alignToBodyCenter(group, layerFill) {
         + ") 이동량(" + offsetX.toFixed(1) + ", " + offsetY.toFixed(1) + ")");
 }
 
+/**
+ * pageItem 배열의 합집합 geometricBounds 계산 (2026-04-16, 버그 C 대응 D1 모드).
+ *
+ * 왜 필요한가:
+ *   - STEP 10 D1 모드는 "요소 전체"가 아트보드 안에 들어가는지 판정해야 한다.
+ *   - 개별 요소가 layerDesign에 흩어져 있으면 그룹 bounds를 얻을 수 없으므로,
+ *     배열 순회로 합집합 bounds를 직접 계산.
+ *
+ * Illustrator 좌표: [left, top, right, bottom], top > bottom (Y 위쪽이 큼).
+ * @param {PageItem[]} items
+ * @returns {Number[]} [left, top, right, bottom]
+ */
+function calculateUnionBoundsOfItems(items) {
+    if (!items || items.length === 0) return [0, 0, 0, 0];
+    var first = items[0].geometricBounds; // [left, top, right, bottom]
+    var minLeft = first[0];
+    var maxTop = first[1];
+    var maxRight = first[2];
+    var minBottom = first[3];
+    for (var i = 1; i < items.length; i++) {
+        var b = items[i].geometricBounds;
+        if (b[0] < minLeft) minLeft = b[0];       // 가장 왼쪽
+        if (b[1] > maxTop) maxTop = b[1];         // 가장 위 (Y 큰 값)
+        if (b[2] > maxRight) maxRight = b[2];     // 가장 오른쪽
+        if (b[3] < minBottom) minBottom = b[3];   // 가장 아래 (Y 작은 값)
+    }
+    return [minLeft, maxTop, maxRight, minBottom];
+}
+
 // ===== 메인 로직 =====
 
 /**
@@ -1624,36 +1653,143 @@ function main() {
 
                 // ② individualItems[i]는 paste 순서대로 보장된다고 가정
                 //    → elementPieceIndex[i], elementOriginalCenters[i]와 1:1 매칭
-                var placedCount = 0;
-                var skippedCount = 0;
-                for (var idx = 0; idx < individualItems.length; idx++) {
-                    var pieceIdx = elementPieceIndex[idx];
-                    // (S3) 인덱스 범위 체크
-                    if (pieceIdx < 0 || pieceIdx >= basePieces.length) {
-                        skippedCount++;
-                        continue;
+                //
+                // ===== D1 모드 (2026-04-16, 버그 C 대응) =====
+                // 왜 도입:
+                //   - alignElementToPiece는 조각별 이동으로 사이즈 커지면 몸판 벌어짐이
+                //     요소 위치에 누적 전가 → 3XL/4XL에서 아트보드 초과(bottom -256~-268pt).
+                //   - 대응: (1) 조각별 이동 skip, (2) 요소 전체 중심을 아트보드 중심에 복원,
+                //           (3) 요소 전체가 아트보드 초과 시 그룹 중심 기준 추가 scale down (clamp).
+                //
+                // 롤백: USE_D1_MODE = false 로 바꾸면 기존 alignElementToPiece 경로로 즉시 복귀.
+                var USE_D1_MODE = true;
+
+                if (USE_D1_MODE) {
+                    // --- D1 Step 1: 요소 전체 합집합 bounds ---
+                    var unionBounds = calculateUnionBoundsOfItems(individualItems);
+                    var elemLeft = unionBounds[0];
+                    var elemTop = unionBounds[1];
+                    var elemRight = unionBounds[2];
+                    var elemBottom = unionBounds[3];
+                    var elemWidth = elemRight - elemLeft;
+                    var elemHeight = elemTop - elemBottom;
+
+                    // --- D1 Step 2: 아트보드 bounds ---
+                    var abRect = baseDoc.artboards[0].artboardRect; // [left, top, right, bottom]
+                    var abLeft = abRect[0];
+                    var abTop = abRect[1];
+                    var abRight = abRect[2];
+                    var abBottom = abRect[3];
+                    var abWidth = abRight - abLeft;
+                    var abHeight = abTop - abBottom;
+
+                    writeLog("STEP 10 D1 시작: 요소 " + elemWidth.toFixed(1) + "x" + elemHeight.toFixed(1)
+                        + ", 아트보드 " + abWidth.toFixed(1) + "x" + abHeight.toFixed(1)
+                        + ", individualItems=" + individualItems.length);
+
+                    // --- D1 Step 3: 아트보드 95% 초과 시 추가 scale down (clamp) ---
+                    // 왜 95%: 완전 경계 맞춤하면 stroke/outline 겹침 위험 — 5% 여백 둠.
+                    // 왜 그룹 중심 기준: 각 요소 간 상대 위치 비율을 그대로 유지해야 디자인 형태가 안 깨짐.
+                    var MARGIN_RATIO = 0.95;
+                    var maxAllowedWidth = abWidth * MARGIN_RATIO;
+                    var maxAllowedHeight = abHeight * MARGIN_RATIO;
+                    var widthScale = (elemWidth > maxAllowedWidth) ? (maxAllowedWidth / elemWidth) : 1.0;
+                    var heightScale = (elemHeight > maxAllowedHeight) ? (maxAllowedHeight / elemHeight) : 1.0;
+                    var clampScale = Math.min(widthScale, heightScale);
+
+                    if (clampScale < 0.999) {
+                        var clampPct = clampScale * 100;
+                        writeLog("STEP 10 D1 clamp: 요소 " + elemWidth.toFixed(0) + "x" + elemHeight.toFixed(0)
+                            + " > 허용 " + maxAllowedWidth.toFixed(0) + "x" + maxAllowedHeight.toFixed(0)
+                            + " -> 추가 scale " + clampPct.toFixed(1) + "%");
+
+                        // 그룹 중심 (요소 전체 bbox 중심)
+                        var groupCx = (elemLeft + elemRight) / 2;
+                        var groupCy = (elemTop + elemBottom) / 2;
+
+                        for (var ci = 0; ci < individualItems.length; ci++) {
+                            var d1Item = individualItems[ci];
+                            var ib = d1Item.geometricBounds;
+                            var icx = (ib[0] + ib[2]) / 2;
+                            var icy = (ib[1] + ib[3]) / 2;
+                            // 새 중심: 그룹 중심 기준 상대 거리를 clampScale 배로 축소
+                            var newCx = groupCx + (icx - groupCx) * clampScale;
+                            var newCy = groupCy + (icy - groupCy) * clampScale;
+                            // 먼저 이동 (상대 위치 축소)
+                            d1Item.translate(newCx - icx, newCy - icy);
+                            // 그다음 자기 중심 기준 resize (크기 축소)
+                            d1Item.resize(
+                                clampPct, clampPct,       // x, y 비율
+                                true, true, true, true,   // changePositions, changeFillPatterns, changeFillGradients, changeStrokePattern
+                                clampPct,                 // changeLineWidths
+                                Transformation.CENTER     // 자기 중심 기준
+                            );
+                        }
+                    } else {
+                        writeLog("STEP 10 D1 clamp 생략 (요소가 아트보드 내 fit)");
                     }
-                    var origCenter = elementOriginalCenters[idx];
-                    if (!origCenter) {
-                        skippedCount++;
-                        continue;
+
+                    // --- D1 Step 4: 재계산 후 아트보드 중심으로 translate ---
+                    var recBounds = calculateUnionBoundsOfItems(individualItems);
+                    var recCx = (recBounds[0] + recBounds[2]) / 2;
+                    var recCy = (recBounds[1] + recBounds[3]) / 2;
+                    var abCx = (abLeft + abRight) / 2;
+                    var abCy = (abTop + abBottom) / 2;
+                    var dx = abCx - recCx;
+                    var dy = abCy - recCy;
+
+                    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                        for (var ti = 0; ti < individualItems.length; ti++) {
+                            individualItems[ti].translate(dx, dy);
+                        }
+                        writeLog("STEP 10 D1 중심 정렬: dx=" + dx.toFixed(1) + " dy=" + dy.toFixed(1));
+                    } else {
+                        writeLog("STEP 10 D1 중심 정렬 생략 (오차 1pt 미만)");
                     }
-                    alignElementToPiece(
-                        individualItems[idx],
-                        origCenter,
-                        designPieces[pieceIdx],
-                        basePieces[pieceIdx],
-                        linearScaleApplied
-                    );
-                    placedCount++;
+
+                    // --- D1 Step 5: 최종 bounds 로그 ---
+                    var finalBounds = calculateUnionBoundsOfItems(individualItems);
+                    writeLog("STEP 10 D1 최종 요소 bounds=["
+                        + finalBounds[0].toFixed(1) + "," + finalBounds[1].toFixed(1) + ","
+                        + finalBounds[2].toFixed(1) + "," + finalBounds[3].toFixed(1) + "]"
+                        + " size=" + (finalBounds[2] - finalBounds[0]).toFixed(1) + "x"
+                        + (finalBounds[1] - finalBounds[3]).toFixed(1));
+
+                    $.writeln("[grading.jsx] [Phase 2 / D1] 아트보드 clamp+중심 정렬 완료: "
+                        + individualItems.length + "개 요소");
+                } else {
+                    // ===== 레거시 Phase 2: alignElementToPiece 조각별 정렬 (롤백용 보존) =====
+                    var placedCount = 0;
+                    var skippedCount = 0;
+                    for (var idx = 0; idx < individualItems.length; idx++) {
+                        var pieceIdx = elementPieceIndex[idx];
+                        // (S3) 인덱스 범위 체크
+                        if (pieceIdx < 0 || pieceIdx >= basePieces.length) {
+                            skippedCount++;
+                            continue;
+                        }
+                        var origCenter = elementOriginalCenters[idx];
+                        if (!origCenter) {
+                            skippedCount++;
+                            continue;
+                        }
+                        alignElementToPiece(
+                            individualItems[idx],
+                            origCenter,
+                            designPieces[pieceIdx],
+                            basePieces[pieceIdx],
+                            linearScaleApplied
+                        );
+                        placedCount++;
+                    }
+                    $.writeln("[grading.jsx] [Phase 2] 개별 정렬 완료: 배치=" + placedCount
+                        + ", 스킵=" + skippedCount + " / 총 " + individualItems.length);
+                    // [DEBUG LOG] 개별 정렬 결과 — S에서 0개, 3XL에서 과대 배치 등 원인 파악
+                    writeLog("STEP 10 개별 정렬: 배치=" + placedCount
+                        + ", 스킵=" + skippedCount
+                        + ", 총=" + individualItems.length
+                        + ", linearScaleApplied=" + linearScaleApplied.toFixed(4));
                 }
-                $.writeln("[grading.jsx] [Phase 2] 개별 정렬 완료: 배치=" + placedCount
-                    + ", 스킵=" + skippedCount + " / 총 " + individualItems.length);
-                // [DEBUG LOG] 개별 정렬 결과 — S에서 0개, 3XL에서 과대 배치 등 원인 파악
-                writeLog("STEP 10 개별 정렬: 배치=" + placedCount
-                    + ", 스킵=" + skippedCount
-                    + ", 총=" + individualItems.length
-                    + ", linearScaleApplied=" + linearScaleApplied.toFixed(4));
                 // 배치된 요소 전체의 bounds 측정 (layerDesign 기준)
                 try {
                     var lMin = Infinity, tMax = -Infinity, rMax = -Infinity, bMin = Infinity;
