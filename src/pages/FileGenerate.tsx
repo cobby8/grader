@@ -42,6 +42,10 @@ import {
 } from "../stores/generationStore";
 import type { PatternPreset } from "../types/pattern";
 import type { DesignFile } from "../types/design";
+// Drive/Local 프리셋 구분 없이 조각의 사이즈별 SVG 문자열을 해석하는 헬퍼.
+// 왜 필요한가: Drive 프리셋은 svgBySize가 비어 있고 svgPathBySize만 있으므로,
+// 기존처럼 svgBySize에 직접 접근하면 "SVG 데이터 없음" 에러로 실패한다.
+import { resolveSvgContent } from "../services/svgResolver";
 import type {
   GenerationRequest,
   GenerationResult,
@@ -284,12 +288,19 @@ function FileGenerate() {
 
       try {
         // 2-a) 타겟 사이즈의 SVG 데이터를 가져온다
-        // 프리셋의 첫 번째 조각(pieces[0])에서 svgBySize를 찾는다
-        // 왜 pieces[0]인가: 현재 MVP에서는 단일 조각(앞판)만 사용하기 때문
+        // 프리셋의 첫 번째 조각(pieces[0])에서 사이즈별 SVG를 찾는다.
+        // 왜 pieces[0]인가: 현재 MVP에서는 단일 조각(앞판)만 사용하기 때문.
+        //
+        // 왜 resolveSvgContent인가: Local 프리셋은 svgBySize(인라인 문자열),
+        // Drive 프리셋은 svgPathBySize(파일 절대경로)에 데이터를 보관한다.
+        // 한 곳에서 통합 해석해 Drive/Local 어느 쪽이든 동일하게 동작하도록 한다.
         let targetSvgData: string | undefined;
         for (const piece of pst.pieces) {
-          if (piece.svgBySize && piece.svgBySize[targetSize]) {
-            targetSvgData = piece.svgBySize[targetSize];
+          // 해당 조각에 타겟 사이즈 데이터가 있으면 가져온다 (없으면 undefined).
+          // Drive 경로인 경우 svgCacheStore가 내부적으로 파일을 읽어 캐시한다.
+          const svg = await resolveSvgContent(piece, targetSize);
+          if (svg) {
+            targetSvgData = svg;
             break;
           }
         }

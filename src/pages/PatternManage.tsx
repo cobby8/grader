@@ -29,6 +29,10 @@ import {
   getNextOrder,
 } from "../stores/categoryStore";
 import CategoryTree, { type SelectedCategory } from "../components/CategoryTree";
+import DriveImportModal, {
+  type DriveImportResult,
+} from "../components/DriveImportModal";
+import { loadSettings } from "../stores/settingsStore";
 
 /** 편집 모드 상태 타입 */
 type EditMode = "list" | "create" | "edit";
@@ -118,6 +122,22 @@ function PatternManage() {
   const [isDragOver, setIsDragOver] = useState(false);
   const dropZoneRef = useRef<HTMLDivElement>(null);
 
+  // === Drive 가져오기 모달 상태 ===
+  // 왜 별도 상태인가: 모달 열림/닫힘만 관리하고 실제 데이터는 모달 컴포넌트가 자체 관리.
+  const [showDriveImport, setShowDriveImport] = useState(false);
+  // Settings의 driveSyncEnabled 값 — 가져오기 버튼 표시 여부 결정
+  const [driveSyncEnabled, setDriveSyncEnabledState] = useState(false);
+
+  // === Settings에서 Drive 동기화 활성 여부 로드 ===
+  // 왜 별도 useEffect인가: Settings는 presets와 독립이라 병렬 로드 가능.
+  useEffect(() => {
+    loadSettings().then((result) => {
+      if (result.success) {
+        setDriveSyncEnabledState(result.data.driveSyncEnabled);
+      }
+    });
+  }, []);
+
   // === 앱 시작 시 프리셋 + 카테고리 로드 ===
   useEffect(() => {
     Promise.all([loadPresets(), loadCategories()])
@@ -203,6 +223,55 @@ function PatternManage() {
       alert(`저장 실패: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, [isLoadSuccess]);
+
+  // === Drive 가져오기 결과 병합 ===
+  // 모달이 stableId 중복 체크 + 카테고리 트리 매핑까지 끝낸 후 신규 항목만 전달한다.
+  // 여기서는 단순히 기존 배열에 concat하고 영속화한다.
+  const handleDriveImport = useCallback(
+    async (result: DriveImportResult) => {
+      if (!isLoadSuccess) {
+        alert("데이터 로드 실패 상태에서는 가져올 수 없습니다.");
+        return;
+      }
+      // 카테고리 먼저 (프리셋이 categoryId를 참조하므로)
+      if (result.newCategories.length > 0) {
+        const updatedCats = [...categories, ...result.newCategories];
+        setCategories(updatedCats);
+        try {
+          await saveCategories(updatedCats);
+        } catch (err) {
+          alert(`카테고리 저장 실패: ${err instanceof Error ? err.message : String(err)}`);
+          return;
+        }
+      }
+      if (result.newPresets.length > 0) {
+        const updatedPresets = [...presets, ...result.newPresets];
+        setPresets(updatedPresets);
+        try {
+          await savePresets(updatedPresets);
+        } catch (err) {
+          alert(`프리셋 저장 실패: ${err instanceof Error ? err.message : String(err)}`);
+          return;
+        }
+      }
+
+      // 사용자에게 요약 안내 (alert로 단순화 — 토스트 시스템이 없으므로)
+      const lines = [
+        `가져오기 완료`,
+        `- 신규 프리셋: ${result.newPresets.length}개`,
+        `- 신규 카테고리: ${result.newCategories.length}개`,
+      ];
+      if (result.skippedCount > 0) {
+        lines.push(`- 스킵(중복): ${result.skippedCount}개`);
+      }
+      if (result.warnings.length > 0) {
+        lines.push(`- 경고: ${result.warnings.length}건 (콘솔 확인)`);
+        console.warn("[Drive 가져오기 경고]", result.warnings);
+      }
+      alert(lines.join("\n"));
+    },
+    [isLoadSuccess, categories, presets]
+  );
 
   // === 카테고리별 프리셋 수 계산 (트리 표시용) ===
   const presetCountByCategory = new Map<string, number>();
@@ -702,11 +771,21 @@ function PatternManage() {
               </div>
             )}
 
-            {/* 프리셋 추가 버튼 */}
+            {/* 프리셋 추가 버튼 + Drive 가져오기 버튼 */}
             <div className="preset-actions">
               <button className="btn btn--primary" onClick={handleCreate}>
                 + 새 프리셋 추가
               </button>
+              {/* Drive 동기화가 활성화된 경우만 가져오기 버튼 표시 */}
+              {driveSyncEnabled && (
+                <button
+                  className="btn"
+                  onClick={() => setShowDriveImport(true)}
+                  title="설정에 등록된 Drive 폴더에서 패턴을 스캔합니다"
+                >
+                  📥 Drive에서 가져오기
+                </button>
+              )}
             </div>
 
             {/* 프리셋이 없을 때 안내 */}
@@ -730,7 +809,22 @@ function PatternManage() {
                 {filteredPresets.map((preset) => (
                   <div key={preset.id} className="preset-card">
                     <div className="preset-card__header">
-                      <h3 className="preset-card__name">{preset.name}</h3>
+                      <h3 className="preset-card__name">
+                        {preset.name}
+                        {/* Drive 출처 프리셋 식별 뱃지 (1개 이상의 piece가 svgSource="drive"면 표시) */}
+                        {preset.pieces.some((p) => p.svgSource === "drive") && (
+                          <span
+                            className="preset-card__drive-badge"
+                            title={
+                              preset.driveFolder
+                                ? `Drive 폴더: ${preset.driveFolder}`
+                                : "Drive 출처"
+                            }
+                          >
+                            DRIVE
+                          </span>
+                        )}
+                      </h3>
                     </div>
                     <div className="preset-card__body">
                       <div className="preset-card__info">
@@ -813,6 +907,16 @@ function PatternManage() {
             )}
           </main>
         </div>
+
+        {/* Drive 가져오기 모달 (showDriveImport일 때만 마운트) */}
+        {showDriveImport && (
+          <DriveImportModal
+            existingCategories={categories}
+            existingPresets={presets}
+            onClose={() => setShowDriveImport(false)}
+            onImport={handleDriveImport}
+          />
+        )}
       </div>
     );
   }

@@ -177,7 +177,10 @@
       "Bash(tasklist)",
       "Bash(powershell:*)",
       "Bash(tasklist //FI \"IMAGENAME eq grader.exe\")",
-      "Bash(tasklist //FI \"IMAGENAME eq node.exe\")"
+      "Bash(tasklist //FI \"IMAGENAME eq node.exe\")",
+      "Bash(echo \"exitcode=$?\")",
+      "Bash(grep -n \"fsScope\\\\|fs:scope\\\\|G:\\\\\\\\\\\\\\\\\\\\|capabilities\\\\|Settings.tsx\\\\|PatternManage\\\\|5단계\\\\|6단계\\\\|7단계\\\\|병합\" \"C:/0. Programing/grader/PLAN-GDRIVE-SYNC.md\")",
+      "Bash(echo \"EXIT=$?\")"
     ]
   }
 }

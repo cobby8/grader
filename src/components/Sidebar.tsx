@@ -13,6 +13,13 @@ const navItems = [
   { path: "/generate", step: "4", label: "파일 생성",    icon: "📄" },
 ];
 
+// 워크플로우와 분리된 보조 메뉴 (설정 등)
+// 왜 분리하나: "1~4 단계"는 작업 흐름이고, 설정은 환경 구성. 사용자가 헷갈리지 않도록
+// 시각적으로 별도 그룹으로 묶는다.
+const auxItems = [
+  { path: "/settings", label: "설정", icon: "⚙" },
+];
+
 function Sidebar() {
   return (
     <aside className="sidebar">
@@ -28,6 +35,27 @@ function Sidebar() {
             }
           >
             <span className="sidebar__link-step">{item.step}</span>
+            <span className="sidebar__link-icon">{item.icon}</span>
+            <span>{item.label}</span>
+          </NavLink>
+        ))}
+      </nav>
+
+      {/* 보조 메뉴 (설정 등) */}
+      <div className="sidebar__section-title" style={{ marginTop: 16 }}>
+        도구
+      </div>
+      <nav className="sidebar__nav">
+        {auxItems.map((item) => (
+          <NavLink
+            key={item.path}
+            to={item.path}
+            className={({ isActive }) =>
+              `sidebar__link${isActive ? " sidebar__link--active" : ""}`
+            }
+          >
+            {/* 단계 번호 자리는 비워둬서 정렬 일관성 유지 */}
+            <span className="sidebar__link-step"></span>
             <span className="sidebar__link-icon">{item.icon}</span>
             <span>{item.label}</span>
           </NavLink>

@@ -10,15 +10,40 @@
     "fs:default",
     {
       "identifier": "fs:allow-exists",
-      "allow": [{ "path": "$APPDATA/**" }]
+      "allow": [
+        { "path": "$APPDATA/**" },
+        { "path": "G:/**" },
+        { "path": "H:/**" },
+        { "path": "C:/Users/**" }
+      ]
     },
     {
       "identifier": "fs:allow-read-text-file",
-      "allow": [{ "path": "$APPDATA/**" }, { "path": "**/*.svg" }]
+      "allow": [
+        { "path": "$APPDATA/**" },
+        { "path": "**/*.svg" },
+        { "path": "G:/**" },
+        { "path": "H:/**" },
+        { "path": "C:/Users/**" }
+      ]
     },
     {
       "identifier": "fs:allow-write-text-file",
-      "allow": [{ "path": "$APPDATA/**" }]
+      "allow": [
+        { "path": "$APPDATA/**" },
+        { "path": "G:/**/*.meta.json" },
+        { "path": "H:/**/*.meta.json" },
+        { "path": "C:/Users/**/*.meta.json" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-read-dir",
+      "allow": [
+        { "path": "$APPDATA/**" },
+        { "path": "G:/**" },
+        { "path": "H:/**" },
+        { "path": "C:/Users/**" }
+      ]
     },
     {
       "identifier": "fs:allow-mkdir",

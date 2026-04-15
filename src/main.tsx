@@ -12,6 +12,7 @@ import PatternManage from "./pages/PatternManage";
 import DesignUpload from "./pages/DesignUpload";
 import SizeSelect from "./pages/SizeSelect";
 import FileGenerate from "./pages/FileGenerate";
+import Settings from "./pages/Settings";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
@@ -25,6 +26,8 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
           <Route path="design" element={<DesignUpload />} />
           <Route path="size" element={<SizeSelect />} />
           <Route path="generate" element={<FileGenerate />} />
+          {/* 설정 페이지 (워크플로우와 별개) */}
+          <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
     </BrowserRouter>
