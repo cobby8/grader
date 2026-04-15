@@ -3,13 +3,17 @@
  *
  * 왜 이 페이지가 필요한가:
  *   - 기존 "디자인 등록" 흐름은 AI/PDF 파일을 앱 저장소(AppData)에 복사해 재고처럼 쌓는 구조였다.
- *   - 바이브 코더 사용자는 "1회성 작업"을 원한다 → 작업 폴더와 기준 AI만 고르면 바로 그레이딩 시작.
+ *   - 바이브 코더 사용자는 "1회성 작업"을 원한다 → 기준 AI 파일만 고르면 바로 그레이딩 시작.
  *   - 이 페이지는 세션(sessionStorage)만 생성하고, 파일 복사/등록 없이 경로만 기억한다.
  *
+ * UX 단순화 (2026-04-15):
+ *   - 기존엔 폴더 + AI 파일을 따로 선택 → 번거로움
+ *   - 이제는 **AI 파일 하나만 선택** → 파일의 부모 폴더가 자동으로 작업 폴더가 됨
+ *   - 사용자는 파일만 고르면 되고, 작업 폴더는 확인용으로만 표시
+ *
  * 역할:
- *   1. 작업 폴더(결과물 저장 위치) 선택
- *   2. 기준 AI 파일(그레이딩 원본) 선택
- *   3. 두 값이 모두 채워지면 "다음: 패턴 선택" 버튼 활성화 → /pattern 이동
+ *   1. 기준 AI 파일 선택 (부모 폴더가 자동으로 작업 폴더가 됨)
+ *   2. "다음: 패턴 선택" 버튼 활성화 → /pattern 이동
  *
  * 주의:
  *   - stat(파일 크기 조회)는 tauri fs 권한이 없으면 실패할 수 있다. 표시용일 뿐이므로 조용히 무시.
@@ -20,10 +24,22 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { stat } from "@tauri-apps/plugin-fs";
 import { loadWorkSession, saveWorkSession } from "../stores/sessionStore";
 
+/**
+ * 파일 경로에서 부모 폴더 경로를 추출한다.
+ * Windows(\)와 Unix(/) 구분자 모두 지원.
+ * 비유: "서울시 강남구 역삼동 123번지" 에서 "123번지"를 떼면 "서울시 강남구 역삼동"이 남는 것과 같다.
+ */
+function getParentFolder(filePath: string): string {
+  const lastBackslash = filePath.lastIndexOf("\\");
+  const lastSlash = filePath.lastIndexOf("/");
+  const lastSep = Math.max(lastBackslash, lastSlash);
+  return lastSep > 0 ? filePath.substring(0, lastSep) : filePath;
+}
+
 function WorkSetup() {
   const navigate = useNavigate();
 
-  // 선택된 작업 폴더 절대경로
+  // 선택된 작업 폴더 절대경로 (AI 파일 선택 시 자동으로 부모 폴더로 설정)
   const [workFolder, setWorkFolder] = useState<string>("");
   // 선택된 기준 AI 파일 절대경로
   const [baseAiPath, setBaseAiPath] = useState<string>("");
@@ -42,22 +58,10 @@ function WorkSetup() {
     }
   }, []);
 
-  /** 폴더 선택 다이얼로그 — Tauri dialog 플러그인 사용 */
-  async function handlePickFolder() {
-    setError("");
-    try {
-      const dir = await open({
-        directory: true,
-        multiple: false,
-        title: "작업 폴더 선택",
-      });
-      if (dir) setWorkFolder(dir as string);
-    } catch (e) {
-      setError(`폴더 선택 오류: ${e}`);
-    }
-  }
-
-  /** 기준 AI 파일 선택 — .ai 확장자만 필터 */
+  /**
+   * 기준 AI 파일 선택 — .ai 확장자만 필터.
+   * 선택된 파일의 부모 폴더가 자동으로 작업 폴더가 된다.
+   */
   async function handlePickAi() {
     setError("");
     try {
@@ -65,13 +69,20 @@ function WorkSetup() {
         multiple: false,
         title: "기준 AI 파일 선택",
         filters: [{ name: "Adobe Illustrator", extensions: ["ai"] }],
+        // 이전 세션의 작업 폴더가 있으면 그 위치에서 탐색 시작
+        defaultPath: workFolder || undefined,
       });
       if (!file) return;
-      setBaseAiPath(file as string);
+      const filePath = file as string;
+      setBaseAiPath(filePath);
+
+      // 핵심: 선택된 파일의 부모 폴더를 자동으로 작업 폴더로 설정
+      const parentFolder = getParentFolder(filePath);
+      setWorkFolder(parentFolder);
 
       // 파일 크기 조회 — 실패해도 UI 크기 표시만 안 나올 뿐이므로 조용히 무시
       try {
-        const info = await stat(file as string);
+        const info = await stat(filePath);
         setBaseAiSize(info.size);
       } catch {
         /* fs 권한 없음 등. 표시용이라 무시 */
@@ -83,8 +94,8 @@ function WorkSetup() {
 
   /** "다음" 버튼 — 세션 저장 후 /pattern 이동 */
   function handleNext() {
-    if (!workFolder || !baseAiPath) {
-      setError("작업 폴더와 기준 AI 파일을 모두 선택해주세요.");
+    if (!baseAiPath || !workFolder) {
+      setError("기준 AI 파일을 선택해주세요.");
       return;
     }
     saveWorkSession({
@@ -99,25 +110,11 @@ function WorkSetup() {
     <div className="page">
       <h1 className="page__title">작업 선택</h1>
       <p className="page__description">
-        그레이딩할 작업의 폴더와 기준 디자인 AI 파일을 선택하세요.
-        결과물은 작업 폴더에 자동 저장됩니다.
+        그레이딩할 기준 AI 파일을 선택하세요. 파일이 있는 폴더가 자동으로 작업 폴더로 지정되며,
+        결과물은 해당 폴더에 자동 저장됩니다.
       </p>
 
-      {/* 작업 폴더 선택 */}
-      <section className="work-section">
-        <label className="work-label">📁 작업 폴더</label>
-        <div className="work-input-row">
-          <input
-            className="work-input"
-            value={workFolder}
-            readOnly
-            placeholder="폴더를 선택하세요"
-          />
-          <button className="btn" onClick={handlePickFolder}>찾기</button>
-        </div>
-      </section>
-
-      {/* 기준 AI 파일 선택 */}
+      {/* 기준 AI 파일 선택 — 사용자가 실제로 조작하는 유일한 입력 */}
       <section className="work-section">
         <label className="work-label">🎨 기준 AI 파일</label>
         <div className="work-input-row">
@@ -136,6 +133,25 @@ function WorkSetup() {
         )}
       </section>
 
+      {/* 작업 폴더 자동 표시 — 사용자 확인용 (AI 파일 선택 시 자동 채워짐) */}
+      <section className="work-section">
+        <label className="work-label">📁 작업 폴더 (자동)</label>
+        <div className="work-input-row">
+          <input
+            className="work-input"
+            value={workFolder}
+            readOnly
+            placeholder="AI 파일을 먼저 선택하세요"
+            style={{ backgroundColor: workFolder ? undefined : "var(--color-bg-content, #f5f5f5)" }}
+          />
+        </div>
+        {workFolder && (
+          <div className="work-hint">
+            결과물이 이 폴더에 저장됩니다.
+          </div>
+        )}
+      </section>
+
       {error && <div className="design-error">{error}</div>}
 
       {/* 하단 다음 버튼 — size-footer 클래스는 기존 SizeSelect와 동일한 고정 푸터 스타일 재활용 */}
@@ -143,7 +159,7 @@ function WorkSetup() {
         <button
           className="btn btn--primary btn--large"
           onClick={handleNext}
-          disabled={!workFolder || !baseAiPath}
+          disabled={!baseAiPath || !workFolder}
         >
           다음: 패턴 선택 →
         </button>
