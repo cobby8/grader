@@ -1073,24 +1073,10 @@ function PatternManage() {
                         ✓
                       </div>
                     )}
-                    {/* 간소화된 카드 — 패턴명(+DRIVE 뱃지) / 조각 수(실제 SVG 파싱) / 사이즈 범위 */}
+                    {/* 간소화된 카드 — 패턴명 / 조각 수(실제 SVG 파싱) / 사이즈 범위
+                        Drive vs Local 구분은 사용자 요청으로 표시하지 않음 (UI 통일) */}
                     <div className="preset-card__title-row">
-                      <h3 className="preset-card__name">
-                        {preset.name}
-                        {/* Drive 출처 프리셋 식별 뱃지 */}
-                        {preset.pieces.some((p) => p.svgSource === "drive") && (
-                          <span
-                            className="preset-card__drive-badge"
-                            title={
-                              preset.driveFolder
-                                ? `Drive 폴더: ${preset.driveFolder}`
-                                : "Drive 출처"
-                            }
-                          >
-                            DRIVE
-                          </span>
-                        )}
-                      </h3>
+                      <h3 className="preset-card__name">{preset.name}</h3>
                     </div>
                     <div className="preset-card__meta-row">
                       {/* 조각 수: 실제 SVG 내부 path/polyline/polygon 개수

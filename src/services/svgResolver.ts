@@ -68,21 +68,32 @@ export function resolveSvgContentSync(
 }
 
 /**
- * SVG 문자열 안의 "조각 수"(도형 개수)를 센다.
+ * SVG 문자열 안의 "조각 수"를 센다.
  *
  * 왜 필요한가:
  *   패턴 카드 UI에 "조각 N개"를 실제 SVG 내용 기반으로 표시하기 위함.
- *   기존에는 PatternPiece 배열 길이(= 등록된 조각 수)로 표시했으나, 실제로는
- *   하나의 SVG 파일 안에 앞판/뒷판 등 여러 개의 path가 들어있는 경우가 많다.
+ *   옷 패턴 한 장(SVG 파일) 안에 앞판/뒷판/소매 등 여러 조각이 들어있는 경우
+ *   사용자가 "이 패턴은 재단 조각이 몇 개짜리인지" 알고 싶어 한다.
+ *
+ * 핵심 문제 (개선 이유):
+ *   Illustrator는 여러 닫힌 도형을 하나의 <path>로 묶을 수 있다.
+ *   예: `<path d="M10,10 L20,20 Z  M30,30 L40,40 Z">` → 실제 조각은 2개지만
+ *       태그 개수로 세면 1개.
+ *   따라서 **<path>의 `d` 속성 안의 M/m 명령어(서브패스 시작점) 개수**를 세야
+ *   실제 조각 수가 나온다.
  *
  * 비유:
- *   옷 패턴 한 장(SVG 파일)에 그려진 "재단선 조각"이 몇 개인지 센다.
- *   — 재단선 = <path>, <polyline>, <polygon> 태그.
+ *   하나의 전지(<path>)에 재단선을 여러 번 그려둔 것과 같다.
+ *   전지 수가 아니라 "재단선이 몇 번 시작됐는가(Move to)"를 세야 조각 수가 맞다.
  *
  * 구현:
- *   - DOMParser로 SVG XML을 파싱하고, <path>/<polyline>/<polygon> 태그 합계 반환.
- *   - `<g>` 그룹 안의 path도 querySelectorAll이 재귀 탐색하므로 포함됨.
- *   - 파싱 실패 또는 빈 문자열이면 0 반환.
+ *   - DOMParser로 SVG XML 파싱
+ *   - 각 <path>의 `d`에서 정규식 `/[Mm]/g` 매치 개수 = 해당 path의 조각 수
+ *     · d 속성이 없거나 비어있으면 0으로 취급
+ *     · 최소 1을 보장하지는 않음 (빈 path는 조각 아님)
+ *   - <polyline>, <polygon>은 태그 하나 = 조각 1개 (M 명령어가 의미 없음)
+ *   - <g> 그룹 내부도 querySelectorAll이 재귀 탐색하므로 자연 포함
+ *   - 파싱 실패 시 0 반환
  *
  * @param svgContent SVG 파일 내용(문자열)
  * @returns 조각 수 (0 이상 정수)
@@ -93,12 +104,23 @@ export function countSvgPieces(svgContent: string): number {
     const parser = new DOMParser();
     // image/svg+xml 파서로 정확히 해석 (text/html은 태그 대소문자 잃음)
     const doc = parser.parseFromString(svgContent, "image/svg+xml");
-    // 파싱 에러 검사 — DOMParser는 실패해도 예외를 안 던지고 <parsererror> 삽입
+    // 파싱 에러 검사 — DOMParser는 실패해도 예외 없이 <parsererror> 삽입
     const parserError = doc.querySelector("parsererror");
     if (parserError) return 0;
-    // 조각으로 간주할 태그들 — 닫힌 도형은 모두 "한 조각"으로 본다
-    const shapes = doc.querySelectorAll("path, polyline, polygon");
-    return shapes.length;
+
+    let pieceCount = 0;
+
+    // <path>: d 속성의 M/m(Move to) 명령어 개수만큼 서브패스 = 조각
+    doc.querySelectorAll("path").forEach((pathEl) => {
+      const d = pathEl.getAttribute("d") || "";
+      const moveMatches = d.match(/[Mm]/g);
+      pieceCount += moveMatches ? moveMatches.length : 0;
+    });
+
+    // <polyline>, <polygon>: 태그 하나가 한 조각
+    pieceCount += doc.querySelectorAll("polyline, polygon").length;
+
+    return pieceCount;
   } catch {
     // DOMParser 자체가 없는 환경 등 (Node test 시) — 안전한 기본값
     return 0;
