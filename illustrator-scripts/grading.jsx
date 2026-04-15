@@ -1365,6 +1365,28 @@ function main() {
         }
         // 주의: designDoc은 STEP 6까지 살려둔다. clipboard가 유효하려면 원본 문서 존재가 안전하다.
 
+        // ===== STEP 4B: "교체용요소" 레이어 선택적 탐색 =====
+        // 왜 선택적인가:
+        //   - 구버전 디자인 AI에는 이 레이어가 없을 수 있다 (호환성).
+        //   - 없으면 조용히 스킵 + 경고 로그.
+        // 왜 지금 copy하지 않나:
+        //   - clipboard에 "요소"가 이미 들어있다 (STEP 8에서 paste해야 함).
+        //   - 여기서 copy하면 "요소"가 덮어쓰인다.
+        //   - 따라서 STEP 8B (요소 paste 완료 후 + designDoc close 전)에서 copy/paste.
+        var refLayer = null;   // designDoc의 "교체용요소" 레이어 (AI 파일 한정)
+        if (isAiFile) {
+            try {
+                refLayer = designDoc.layers.getByName("교체용요소");
+                writeLog("STEP 4B 교체용요소 레이어 발견: pageItems=" + refLayer.pageItems.length);
+                $.writeln("[grading.jsx] '교체용요소' 레이어 발견 — STEP 8B에서 copy 예정");
+            } catch (eRef) {
+                refLayer = null;
+                writeLog("STEP 4B 교체용요소 레이어 없음 (건너뜀)");
+                $.writeln("[grading.jsx] '교체용요소' 레이어 없음 (건너뜀)");
+            }
+        }
+
+
         // ===== STEP 5: 패턴 SVG 열기 → 아트보드 크기 측정 → CMYK 베이스 문서 생성 =====
         // 왜 순서가 이러한가:
         //   1) SVG를 열어야 아트보드 크기(pt)를 정확히 알 수 있다.
@@ -1455,6 +1477,54 @@ function main() {
                 + ", layerDesign.pageItems=" + layerDesign.pageItems.length);
         } catch (ePasteLog) { /* 무시 */ }
 
+        // ===== STEP 8B: "교체용요소" copy → baseDoc의 "교체용요소" 레이어에 paste =====
+        // 왜 이 시점에 하나:
+        //   - STEP 8에서 "요소" paste가 끝났으므로 clipboard 재사용 가능.
+        //   - designDoc이 아래에서 close되기 직전이라 copy 가능한 마지막 타이밍.
+        // 위치는 건드리지 않는다:
+        //   - 이 레이어는 아트보드 밖(위쪽)에 있는 백넘버 참조 숫자다.
+        //   - paste는 원본 좌표를 유지하므로 이동 없음 (scale만 STEP 9B에서 적용).
+        var baseRefLayer = null;  // baseDoc의 "교체용요소" 레이어
+        if (refLayer && refLayer.pageItems.length > 0) {
+            try {
+                // designDoc을 다시 활성 문서로 전환 (copy 대상 선택 위해)
+                app.activeDocument = designDoc;
+                designDoc.selection = null;
+                // refLayer의 모든 pageItem을 선택
+                for (var r = 0; r < refLayer.pageItems.length; r++) {
+                    refLayer.pageItems[r].selected = true;
+                }
+                if (designDoc.selection && designDoc.selection.length > 0) {
+                    app.executeMenuCommand("copy");
+                    $.writeln("[grading.jsx] '교체용요소' " + designDoc.selection.length + "개 copy 완료");
+
+                    // baseDoc에 "교체용요소" 레이어 확보 (이미 있으면 재사용)
+                    app.activeDocument = baseDoc;
+                    try {
+                        baseRefLayer = baseDoc.layers.getByName("교체용요소");
+                    } catch (eLook) {
+                        baseRefLayer = baseDoc.layers.add();
+                        baseRefLayer.name = "교체용요소";
+                    }
+                    baseDoc.activeLayer = baseRefLayer;
+                    app.executeMenuCommand("paste");
+                    writeLog("STEP 4B 교체용요소 paste 완료: baseRefLayer.pageItems=" + baseRefLayer.pageItems.length);
+                    $.writeln("[grading.jsx] '교체용요소' → baseDoc 레이어에 paste 완료 ("
+                        + baseRefLayer.pageItems.length + "개)");
+                } else {
+                    $.writeln("[grading.jsx] 경고: '교체용요소' 선택 가능한 아이템 없음 — 스킵");
+                    baseRefLayer = null;
+                }
+            } catch (eRefPaste) {
+                // 기존 흐름을 방해하지 않도록 에러 삼키고 경고만
+                writeLog("[WARN] STEP 4B 교체용요소 copy/paste 실패: " + eRefPaste.message);
+                $.writeln("[grading.jsx] 경고: 교체용요소 처리 실패 (" + eRefPaste.message + ") — 기존 흐름 계속");
+                baseRefLayer = null;
+                // 활성 문서를 baseDoc으로 복원 (아래 close 로직이 designDoc 전제)
+                try { app.activeDocument = baseDoc; } catch (eAct) {}
+            }
+        }
+
         // 이제 designDoc 닫아도 안전 (clipboard 사용 완료)
         if (designDoc) {
             try {
@@ -1517,6 +1587,39 @@ function main() {
                 writeLog("[WARN] STEP 9 면적 계산 불가: baseArea=" + baseArea
                     + ", targetArea=" + targetArea
                     + ", pastedGroup=" + (pastedGroup ? "있음" : "null"));
+            }
+
+            // ===== STEP 9B: "교체용요소" 중심점 기준 scale만 적용 =====
+            // 왜 Transformation.CENTER인가:
+            //   - 이 레이어는 아트보드 밖(위쪽)에 있는 백넘버 참조 숫자다.
+            //   - 디자이너가 편집용으로 남겨두는 것 → 위치는 원본 그대로 유지해야 함.
+            //   - resize의 기본(Transformation.DOCUMENTORIGIN)은 원점 기준이라 위치가 이동함.
+            //   - CENTER는 각 객체의 자기 중심 기준이라 scale만 적용되고 위치 이동 없음.
+            // 왜 개별 아이템 순회인가:
+            //   - 레이어 전체를 한 번에 resize하면 레이어 묶음의 중심 기준으로 스케일되어
+            //     여러 아이템 사이의 상대 위치가 바뀔 수 있다.
+            //   - 각 아이템 독립적으로 자기 중심 기준 scale → 각자 제자리에서 크기만 변함.
+            if (baseRefLayer && baseRefLayer.pageItems.length > 0 && linearScaleApplied !== 1.0) {
+                var scalePctRef = linearScaleApplied * 100;
+                for (var ri = 0; ri < baseRefLayer.pageItems.length; ri++) {
+                    var refItem = baseRefLayer.pageItems[ri];
+                    // resize 파라미터:
+                    //   (scaleX%, scaleY%, changePositions, changeFillPatterns, changeFillGradients,
+                    //    changeStrokePattern, changeLineWidths%, Transformation)
+                    refItem.resize(
+                        scalePctRef, scalePctRef,
+                        true, true, true, true,
+                        scalePctRef,
+                        Transformation.CENTER
+                    );
+                }
+                writeLog("STEP 9B 교체용요소 scale 적용: " + scalePctRef.toFixed(1) + "% (중심점 기준, "
+                    + baseRefLayer.pageItems.length + "개)");
+                $.writeln("[grading.jsx] '교체용요소' scale 적용: " + scalePctRef.toFixed(1) + "% (위치 유지)");
+            } else {
+                var skipReason = !baseRefLayer ? "레이어 없음"
+                    : (baseRefLayer.pageItems.length === 0 ? "빈 레이어" : "scale=1.0");
+                writeLog("STEP 9B 교체용요소 scale 생략 (" + skipReason + ")");
             }
 
             // ===== STEP 10 (Phase 2): 조각별 개별 정렬 =====
