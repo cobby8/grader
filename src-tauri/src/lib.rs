@@ -301,10 +301,49 @@ fn run_illustrator_script(
 }
 
 /// illustrator-scripts/ 폴더의 절대 경로를 찾는다.
-/// 개발 모드: 프로젝트 루트/illustrator-scripts/
-/// 프로덕션: 리소스 디렉토리/illustrator-scripts/
+///
+/// 왜 탐색 순서가 중요한가:
+///   - dev 모드(`cargo tauri dev`)에서 Tauri는 프로젝트 루트의 illustrator-scripts/를
+///     `src-tauri/target/debug/illustrator-scripts/`로 **자동 스테이징(복사)** 한다.
+///   - 그런데 이 복사본은 최신 수정과 항상 동기화되지 않아, grading.jsx를 고쳐도
+///     **구버전이 실행되는 문제**가 발생한다.
+///   - exe 부모를 먼저 보면 target/debug 안쪽의 구버전이 먼저 잡혀 버린다.
+///   - 따라서 dev 빌드에서는 CARGO_MANIFEST_DIR(src-tauri) 부모의 원본 폴더를
+///     **1순위로** 체크해야 한다.
+///
+/// 새 탐색 순서 (get_python_engine_dir와 동일 패턴):
+///   1. 환경변수 `GRADER_ILLUSTRATOR_SCRIPTS_DIR` 수동 오버라이드
+///   2. dev 빌드: CARGO_MANIFEST_DIR 부모의 illustrator-scripts/ 우선
+///      (grading.jsx 존재 여부로 유효성 검증)
+///   3. 실행 파일 기준 역추적 (기존 로직)
+///   4. resource_dir 기반 (프로덕션 번들)
 fn get_illustrator_scripts_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    // 실행 파일 경로에서 역추적하여 프로젝트 루트 탐색
+    // 1) 환경변수 오버라이드 — 디버깅/임시 스크립트 폴더를 쓰고 싶을 때
+    if let Ok(override_path) = std::env::var("GRADER_ILLUSTRATOR_SCRIPTS_DIR") {
+        let p = PathBuf::from(&override_path);
+        // grading.jsx 유무로 유효한 폴더인지 확인
+        if p.join("grading.jsx").exists() {
+            return Ok(p);
+        }
+    }
+
+    // 2) dev 빌드: CARGO_MANIFEST_DIR 부모(= 프로젝트 루트) 기준 고정
+    //    Tauri의 target/debug 자동 스테이징 복사본보다 **원본**을 우선시한다.
+    #[cfg(debug_assertions)]
+    {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let scripts_dir = PathBuf::from(manifest_dir)
+            .parent()
+            .map(|p| p.join("illustrator-scripts"));
+        if let Some(scripts_dir) = scripts_dir {
+            // grading.jsx가 실제로 있는지까지 확인 (폴더만 있고 비어있을 수도)
+            if scripts_dir.join("grading.jsx").exists() {
+                return Ok(scripts_dir);
+            }
+        }
+    }
+
+    // 3) 실행 파일 기준 역추적 (기존 로직 유지)
     let exe_path = std::env::current_exe()
         .map_err(|e| format!("실행 파일 경로를 찾을 수 없습니다: {}", e))?;
 
@@ -319,7 +358,7 @@ fn get_illustrator_scripts_dir(app: &tauri::AppHandle) -> Result<PathBuf, String
         }
     }
 
-    // 폴백: 리소스 디렉토리 확인 (번들 배포용)
+    // 4) 폴백: 리소스 디렉토리 확인 (번들 배포용)
     if let Ok(resource_dir) = app.path().resource_dir() {
         let scripts_dir = resource_dir.join("illustrator-scripts");
         if scripts_dir.exists() {

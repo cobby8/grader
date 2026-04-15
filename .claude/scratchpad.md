@@ -67,6 +67,46 @@ grader/
 
 ## 구현 기록 (developer)
 
+### [2026-04-15] illustrator-scripts 경로 dev 분기 (venv 수정 패턴)
+
+#### 배경
+- Tauri가 dev 모드에서 `src-tauri/target/debug/illustrator-scripts/`의 자동 스테이징된 구버전을 실행
+- 사용자가 `illustrator-scripts/grading.jsx`를 수정해도 target/debug 복사본은 동기화되지 않아 **구버전이 실행**됨 → 디버그 로그 파일이 생성되지 않는 문제 발생
+- 이전 `get_python_engine_dir` 수정(커밋 bc4a79a)과 **동일 패턴**으로 근본 해결
+
+#### 변경
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| `src-tauri/src/lib.rs` | `get_illustrator_scripts_dir` 함수에 환경변수 오버라이드 + dev 분기 추가 (약 30줄 증가) | 수정 |
+
+**수정 포인트** (lib.rs L303~):
+1. **환경변수 오버라이드**: `GRADER_ILLUSTRATOR_SCRIPTS_DIR` 지정 시 `grading.jsx` 존재 확인 후 반환
+2. **dev 분기** (`#[cfg(debug_assertions)]`): `env!("CARGO_MANIFEST_DIR")`의 부모(= 프로젝트 루트)의 `illustrator-scripts/` 우선 (grading.jsx 유효성 확인)
+3. **기존 로직 유지**: exe 역추적 루프 + resource_dir 폴백 그대로
+
+#### 검증
+- `cargo check` PASS (10.99초, warning 0)
+- 이전 venv 수정과 **정확히 동일 패턴** (1. 환경변수 → 2. CARGO_MANIFEST_DIR 부모 → 3. exe 역추적 → 4. resource_dir)
+
+💡 tester 참고:
+- **테스트 방법**:
+  1. dev.bat 재시작 (Rust 재컴파일 필요)
+  2. grading.jsx 내용 의도적으로 수정 (예: writeLog 문구 추가)
+  3. OrderGenerate 실행 → 수정된 내용 반영 확인
+- **정상 동작**: target/debug 복사본과 무관하게 **프로젝트 루트**의 최신 grading.jsx 실행됨
+- **주의**: production 빌드(release)에는 영향 없음 (cfg(debug_assertions) 덕분)
+
+⚠️ reviewer 참고:
+- `get_python_engine_dir`와 **구조적 일관성** 확인 부탁 (탐색 순서/주석 스타일)
+- dev 분기의 `grading.jsx` 존재 확인은 **의도된 방어 로직** — 빈 폴더나 잘못된 스테이징을 거르기 위함 (venv 쪽은 `engine.exists()`만 검사하지만, illustrator-scripts는 파일 단위 검증이 더 안전)
+- **production 로직 변경 없음** — Phase 5 배포 작업에서 통합 검토 예정
+
+#### 즉시 조치 (PM)
+- target/debug/illustrator-scripts/grading.jsx 수동 복사 완료 → 재시작 없이 당장 테스트 가능
+- Rust 수정분은 **다음 dev.bat 재시작** 후부터 항상 자동 반영
+
+---
+
 ### [2026-04-15] grading.jsx 디버그 로그 파일 추가
 
 📝 구현한 기능: ExtendScript Toolkit 없이 사이즈별 이상 원인을 파악할 수 있도록 `grading.jsx`에 파일 기반 디버그 로그 추가 (원인 확정용 임시 조치).
