@@ -86,6 +86,59 @@ function jsonStringify(obj) {
     return "null";
 }
 
+// ===== 디버그 로그 파일 (임시 디버그용, Phase 5+에서 제거 예정) =====
+// 왜 필요한가:
+//   - ExtendScript Toolkit 없이는 $.writeln 출력을 실시간으로 볼 수 없다.
+//   - 사용자가 S/3XL/4XL 등 사이즈별 이상 동작 원인을 파악하려면
+//     주요 계산 값(baseArea, targetArea, scale 등)이 파일로 남아야 한다.
+//   - config.resultJsonPath와 같은 폴더에 grading-log.txt를 append로 저장한다.
+//     → 여러 사이즈 실행 로그가 누적됨 → 이 파일 하나만 공유하면 분석 가능.
+var _logFilePath = null;  // main() 초반 config 읽은 뒤 설정됨
+var _logBuffer = [];      // flushLog() 호출 시 한 번에 파일에 기록
+
+/**
+ * 로그 한 줄 기록. $.writeln도 함께 호출해서 기존 콘솔 출력도 유지.
+ * 실패 시에도 절대 스크립트를 멈추지 않는다 (try/catch로 감쌈).
+ */
+function writeLog(msg) {
+    try {
+        // toISOString은 ES5+ 기능이라 ExtendScript에서 없을 수 있다 → toString 폴백
+        var now = new Date();
+        var ts;
+        try {
+            ts = now.toISOString();
+        } catch (eTs) {
+            ts = now.toString();
+        }
+        var line = "[" + ts + "] " + msg;
+        try { $.writeln(line); } catch (eWl) { /* 무시 */ }
+        _logBuffer.push(line);
+    } catch (eWriteLog) {
+        // 로그 기록 자체 실패는 무시 (기능에 영향 없음)
+    }
+}
+
+/**
+ * 버퍼에 쌓인 로그를 파일에 append한다.
+ * main() 종료 직전(try/finally의 finally) + 주요 분기 에러 시 호출.
+ */
+function flushLog() {
+    try {
+        if (!_logFilePath) return;        // 초기화 전이면 스킵
+        if (_logBuffer.length === 0) return;
+        var f = new File(_logFilePath);
+        f.encoding = "UTF-8";
+        // append 모드: 여러 사이즈 실행 시 로그 누적
+        if (f.open("a")) {
+            f.write(_logBuffer.join("\n") + "\n");
+            f.close();
+            _logBuffer = [];  // 중복 쓰기 방지 위해 비움
+        }
+    } catch (eFlush) {
+        // flush 실패는 무시 (파일 권한/경로 문제 등)
+    }
+}
+
 // ===== 파일 읽기/쓰기 헬퍼 =====
 
 /**
@@ -776,6 +829,15 @@ function importSvgPathsToDoc(svgDoc, targetDoc, mainColor, layerFill, layerPatte
     // Phase 2에서 요소를 각 조각별로 개별 정렬할 때 매핑 대상으로 사용한다.
     var basePieces = [];
 
+    // [DEBUG LOG] 타겟 SVG 문서 요약 (레이어 수 + 첫 아트보드 크기)
+    try {
+        var svgAbDbg = svgDoc.artboards[0].artboardRect;
+        writeLog("importSvgPathsToDoc 시작: svgDoc=" + svgDoc.name
+            + " layers=" + svgDoc.layers.length
+            + " artboard=[" + svgAbDbg.join(",") + "]"
+            + " size=" + (svgAbDbg[2] - svgAbDbg[0]).toFixed(1) + "x" + (svgAbDbg[1] - svgAbDbg[3]).toFixed(1));
+    } catch (eLogSvg) { /* 무시 */ }
+
     // 원본 SVG의 모든 레이어를 순회
     for (var li = 0; li < svgDoc.layers.length; li++) {
         var srcLayer = svgDoc.layers[li];
@@ -792,7 +854,18 @@ function importSvgPathsToDoc(svgDoc, targetDoc, mainColor, layerFill, layerPatte
                     path.closed = true;
                 }
                 // 타겟 면적 합산 (STEP 6의 스케일링 기준)
-                targetArea += Math.abs(path.area);
+                var _pathArea = Math.abs(path.area);
+                targetArea += _pathArea;
+                // [DEBUG LOG] 50pt 이상 통과한 path 상세 (사이즈별 조각 수/면적 분포 확인)
+                try {
+                    var _pb = path.geometricBounds;
+                    writeLog("  path[layer=" + li + ",idx=" + pi + "] w="
+                        + Math.abs(path.width).toFixed(1)
+                        + " h=" + Math.abs(path.height).toFixed(1)
+                        + " area=" + _pathArea.toFixed(1)
+                        + " bounds=[" + _pb[0].toFixed(1) + "," + _pb[1].toFixed(1)
+                        + "," + _pb[2].toFixed(1) + "," + _pb[3].toFixed(1) + "]");
+                } catch (eLp) { /* 무시 */ }
 
                 // 1) fill용 사본을 targetDoc의 배경 레이어로 복제
                 //    duplicate(targetContainer, ElementPlacement) 로 문서 간 복제 가능
@@ -848,6 +921,11 @@ function importSvgPathsToDoc(svgDoc, targetDoc, mainColor, layerFill, layerPatte
     // basePieces를 X 오름차순으로 정렬 → designPieces와 동일 순서 가정
     // (사용자 승인: SVG 몸판 조각과 디자인 AI 조각 순서가 X 오름차순으로 일치한다는 가정)
     basePieces.sort(function (a, b) { return a.cx - b.cx; });
+
+    // [DEBUG LOG] 합산 결과 — baseArea와 비교해 스케일 이상 감지
+    writeLog("importSvgPathsToDoc 완료: filledCount=" + filledCount
+        + " (50pt 이상), targetArea=" + targetArea.toFixed(2) + " pt^2"
+        + ", basePieces=" + basePieces.length + "개");
 
     return { filledCount: filledCount, targetArea: targetArea, basePieces: basePieces };
 }
@@ -1101,6 +1179,25 @@ function main() {
     var resultPath = config.resultJsonPath;
     // allowRgbDesign: true가 아니면 false로 취급 (엄격 모드 기본)
     var allowRgbDesign = (config.allowRgbDesign === true);
+
+    // ===== 디버그 로그 파일 경로 초기화 =====
+    // 왜 여기서 하나: config.resultJsonPath를 읽은 직후여야 경로를 만들 수 있다.
+    // resultJsonPath(예: illustrator-scripts/result.json)와 같은 폴더에 grading-log.txt 저장.
+    // append 모드라 사이즈별 실행이 누적된다 → 사용자가 이 파일 하나만 공유하면 됨.
+    try {
+        if (config.resultJsonPath) {
+            var resultFile = new File(config.resultJsonPath);
+            _logFilePath = resultFile.parent.fsName + "\\grading-log.txt";
+            writeLog("=== grading.jsx 시작 ===");
+            writeLog("config: designAiPath=" + (config.designAiPath || "(없음)"));
+            writeLog("config: designPdfPath=" + (config.designPdfPath || "(없음)"));
+            writeLog("config: patternSvgPath=" + (config.patternSvgPath || "(없음)"));
+            writeLog("config: outputPath=" + (config.outputPath || "(없음)"));
+            writeLog("config: targetSize=" + (config.targetSize || "(미설정)"));
+        }
+    } catch (eLogInit) {
+        // 로그 초기화 실패는 무시 (로그 없이 진행 가능)
+    }
     // patternLineColor: "auto" | "white" | "black" | "keep"
     // 왜 기본 "auto"인가: 배경 밝기에 따라 흰/검을 자동 선택해서 패턴선 가시성을 보장.
     // UI 노출 없이 config.json으로만 제어 (사용자 결정 Q1=A).
@@ -1148,8 +1245,11 @@ function main() {
                 baseArea = baseResult.totalArea;
                 basePieceCount = baseResult.pieceCount;
                 $.writeln("[grading.jsx] 기준 패턴 면적: " + baseArea.toFixed(0) + " pt² (" + basePieceCount + "개 조각)");
+                // [DEBUG LOG] 기준 몸판 면적 — 원인 분석 핵심 값
+                writeLog("STEP 2A 기준 baseArea=" + baseArea.toFixed(2) + " pt^2, basePieceCount=" + basePieceCount);
             } catch (e) {
                 $.writeln("[grading.jsx] 경고: '패턴선' 레이어 면적 계산 실패: " + e.message);
+                writeLog("[WARN] STEP 2A 기준 면적 계산 실패: " + e.message);
             }
         }
 
@@ -1337,6 +1437,12 @@ function main() {
         baseDoc.activeLayer = layerDesign;
         app.executeMenuCommand("paste");
         $.writeln("[grading.jsx] 디자인 요소를 '디자인 요소' 레이어에 붙여넣기 완료");
+        // [DEBUG LOG] paste 직후 베이스 문서 pageItems 수 — 요소가 실제로 들어왔는지 확인
+        try {
+            writeLog("STEP 8 paste 직후: baseDoc.pageItems=" + baseDoc.pageItems.length
+                + ", baseDoc.selection.length=" + (baseDoc.selection ? baseDoc.selection.length : 0)
+                + ", layerDesign.pageItems=" + layerDesign.pageItems.length);
+        } catch (ePasteLog) { /* 무시 */ }
 
         // 이제 designDoc 닫아도 안전 (clipboard 사용 완료)
         if (designDoc) {
@@ -1372,18 +1478,34 @@ function main() {
                     + " (기준:" + baseArea.toFixed(0) + " → 타겟:" + targetArea.toFixed(0) + ")");
                 $.writeln("[grading.jsx] 선형 스케일: " + linearScale.toFixed(4)
                     + " (" + (linearScale * 100).toFixed(1) + "%)");
+                // [DEBUG LOG] 스케일 계산 핵심 값 — 사이즈별 이상 검증용
+                writeLog("STEP 9 스케일: areaRatio=" + areaRatio.toFixed(4)
+                    + ", linearScale=" + linearScale.toFixed(4)
+                    + " (baseArea=" + baseArea.toFixed(0)
+                    + ", targetArea=" + targetArea.toFixed(0) + ")");
 
                 if (Math.abs(linearScale - 1.0) > 0.005) {
                     var scalePct = linearScale * 100;
                     pastedGroup.resize(scalePct, scalePct, true, true, true, true);
                     $.writeln("[grading.jsx] 요소 스케일 적용: " + scalePct.toFixed(1) + "%");
                     linearScaleApplied = linearScale;
+                    // [DEBUG LOG] 스케일 적용 후 그룹 bounds
+                    try {
+                        var _psgb = pastedGroup.geometricBounds;
+                        writeLog("STEP 9 스케일 적용 후 pastedGroup bounds=["
+                            + _psgb[0].toFixed(1) + "," + _psgb[1].toFixed(1)
+                            + "," + _psgb[2].toFixed(1) + "," + _psgb[3].toFixed(1) + "]");
+                    } catch (eGbLog) { /* 무시 */ }
                 } else {
                     $.writeln("[grading.jsx] 스케일 차이 0.5% 미만 — 원본 크기 유지");
                     linearScaleApplied = 1.0;
+                    writeLog("STEP 9 스케일 생략 (차이 0.5% 미만)");
                 }
             } else {
                 $.writeln("[grading.jsx] 면적 계산 불가(기준/타겟 중 하나 0) — 원본 크기 유지");
+                writeLog("[WARN] STEP 9 면적 계산 불가: baseArea=" + baseArea
+                    + ", targetArea=" + targetArea
+                    + ", pastedGroup=" + (pastedGroup ? "있음" : "null"));
             }
 
             // ===== STEP 10 (Phase 2): 조각별 개별 정렬 =====
@@ -1472,9 +1594,39 @@ function main() {
                 }
                 $.writeln("[grading.jsx] [Phase 2] 개별 정렬 완료: 배치=" + placedCount
                     + ", 스킵=" + skippedCount + " / 총 " + individualItems.length);
+                // [DEBUG LOG] 개별 정렬 결과 — S에서 0개, 3XL에서 과대 배치 등 원인 파악
+                writeLog("STEP 10 개별 정렬: 배치=" + placedCount
+                    + ", 스킵=" + skippedCount
+                    + ", 총=" + individualItems.length
+                    + ", linearScaleApplied=" + linearScaleApplied.toFixed(4));
+                // 배치된 요소 전체의 bounds 측정 (layerDesign 기준)
+                try {
+                    var lMin = Infinity, tMax = -Infinity, rMax = -Infinity, bMin = Infinity;
+                    var hasAny = false;
+                    for (var _dbi = 0; _dbi < layerDesign.pageItems.length; _dbi++) {
+                        var _dbGb = layerDesign.pageItems[_dbi].geometricBounds;
+                        if (_dbGb[0] < lMin) lMin = _dbGb[0];
+                        if (_dbGb[1] > tMax) tMax = _dbGb[1];
+                        if (_dbGb[2] > rMax) rMax = _dbGb[2];
+                        if (_dbGb[3] < bMin) bMin = _dbGb[3];
+                        hasAny = true;
+                    }
+                    if (hasAny) {
+                        writeLog("STEP 10 최종 요소 전체 bounds=["
+                            + lMin.toFixed(1) + "," + tMax.toFixed(1)
+                            + "," + rMax.toFixed(1) + "," + bMin.toFixed(1) + "]"
+                            + " size=" + (rMax - lMin).toFixed(1) + "x" + (tMax - bMin).toFixed(1));
+                    } else {
+                        writeLog("STEP 10 최종 요소 전체 bounds: 없음 (layerDesign 비어있음)");
+                    }
+                } catch (eBoundsLog) { /* 무시 */ }
             }
         } else {
             $.writeln("[grading.jsx] 경고: 붙여넣은 요소가 없음 — 디자인 파일 확인 필요");
+            // [DEBUG LOG] S 사이즈 증상 — paste 후 선택된 요소 0개
+            writeLog("[WARN] STEP 8 붙여넣은 요소 없음: baseDoc.selection="
+                + (baseDoc.selection ? baseDoc.selection.length : "null")
+                + ", layerDesign.pageItems=" + layerDesign.pageItems.length);
         }
 
         // 선택 해제
@@ -1616,6 +1768,8 @@ function main() {
 
     } catch (err) {
         $.writeln("[grading.jsx] 오류: " + err.message);
+        // [DEBUG LOG] 에러 발생 지점 기록 (스택은 ExtendScript에 없지만 메시지는 유용)
+        writeLog("[ERROR] " + err.message);
 
         // 열린 문서 정리 (역순 close)
         try {
@@ -1630,6 +1784,13 @@ function main() {
 
         writeErrorResult(resultPath, err.message);
     }
+
+    // ===== 디버그 로그 파일 저장 (성공/실패 모두) =====
+    // 왜 try/finally 대신 여기서 호출하나:
+    //   - 기존 try/catch 구조를 건드리지 않고 최소 변경으로 flush 보장.
+    //   - 위 catch에서 return/throw가 없으므로 정상 흐름이 여기에 도달.
+    writeLog("=== grading.jsx 종료 ===\n");
+    flushLog();
 }
 
 // ===== 실행 =====

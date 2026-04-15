@@ -67,6 +67,101 @@ grader/
 
 ## 구현 기록 (developer)
 
+### [2026-04-15] grading.jsx 디버그 로그 파일 추가
+
+📝 구현한 기능: ExtendScript Toolkit 없이 사이즈별 이상 원인을 파악할 수 있도록 `grading.jsx`에 파일 기반 디버그 로그 추가 (원인 확정용 임시 조치).
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| `illustrator-scripts/grading.jsx` | writeLog/flushLog 헬퍼 + 주요 계산값 로깅 (~161줄 증가) | 수정 |
+
+**변경 포인트**:
+- 상단 헬퍼: `_logFilePath`, `_logBuffer`, `writeLog()`, `flushLog()` (ES3 호환, try/catch로 실패 무시)
+- main() 초반: `config.resultJsonPath` 기반으로 `grading-log.txt` 경로 결정 + 시작 로그 (config 전체 기록)
+- STEP 2A: baseArea + basePieceCount 로깅
+- `importSvgPathsToDoc()`: SVG 문서 요약, 50pt 이상 각 path (w/h/area/bounds), 합산 결과 로깅
+- STEP 8 paste 직후: pageItems/selection/layerDesign 개수 로깅
+- STEP 9 스케일: areaRatio, linearScale, 적용 후 bounds 로깅
+- STEP 10 개별 정렬: 배치/스킵/총 개수 + 최종 요소 전체 bounds 로깅
+- catch 블록 + 정상 종료: [ERROR] + 종료 마커 + flushLog 호출
+- 파일 저장 모드: **append** ("a") — 사이즈별 실행 누적
+
+**로그 파일 위치**: `resultJsonPath`와 같은 폴더에 `grading-log.txt`
+- 예: `C:\0. Programing\grader\illustrator-scripts\grading-log.txt`
+- 사용자가 이 파일 한 개만 공유하면 모든 사이즈 실행 정보 확인 가능
+
+💡 tester 참고:
+- **테스트 방법**: 문제 사이즈(S, 3XL, 4XL)를 포함해 3~4개 사이즈를 OrderGenerate로 연속 실행
+- **정상 동작**: `illustrator-scripts/grading-log.txt`가 생성되고, 각 실행마다 시작~종료 블록이 누적됨
+- **확인 지표**:
+  - S: STEP 8 "붙여넣은 요소 없음" 경고 + selection=0/null 여부
+  - 3XL/4XL: STEP 7 targetArea가 XL/2XL 대비 과도하게 큰지, STEP 9 linearScale이 1.3+ 인지
+  - path별 area 목록에서 "아트보드 전체 덮는 사각형" 의심 path 찾기
+- **주의**: 한글/공백 경로에서 File("UTF-8", "a") 동작 여부 확인
+
+⚠️ reviewer 참고:
+- ES3 호환 유지 (var, 함수 선언만, toISOString은 try/catch로 폴백)
+- 기존 `$.writeln`은 모두 유지, writeLog는 **추가**만 함 (로직 무변경)
+- writeLog 자체가 실패해도 스크립트는 계속 진행 (바깥 try/catch)
+- **추후 제거**: 원인 확정 후 이 디버그 로그 전체 제거 (Phase 5+ 또는 원인 커밋 후 별도 revert)
+
+### [2026-04-15] 3XL 좌표 문제 조사
+
+**증상**: 13개 사이즈 중 3XL만 요소(숫자 "1234"/"7890"/로고/라벨 등)가 몸판 범위 밖으로 과도하게 크게 튀어나옴. 몸판(파란 영역)은 3XL 크기로 정상. 4XL/5XL은 정상 추정.
+
+**스케일 로직 흐름 (grading.jsx)**:
+1. STEP 2A: 디자인 AI "패턴선" 레이어 50pt 이상 path들의 `path.area` 절대값 합산 → `baseArea` (단 한 번, 사이즈 무관)
+2. STEP 7 `importSvgPathsToDoc`: 타겟 SVG의 50pt 이상 path `area` 합산 → `targetArea` + `basePieces` bbox 수집
+3. STEP 9: `linearScale = sqrt(targetArea / baseArea)` → `pastedGroup.resize(linearScale*100, ..., true,true,true,true)`
+4. STEP 10: 요소 그룹 해제 → 각 요소를 `basePieces[pieceIdx].center + (origRelOffset * linearScale)` 위치로 translate
+
+**3XL 특수 조건 없음**: 코드에 사이즈 이름에 따른 분기 전혀 없음. `SIZE_LIST` 인덱스도 grading.jsx 내부에서 쓰지 않음. 3XL.svg 파일 하나를 config.patternSvgPath로 받아서 그대로 처리.
+
+**원인 후보 (우선순위)**:
+
+1. **3XL.svg 파일 자체의 이상** (최고 확률)
+   - 원본 SVG viewBox 또는 path 좌표가 다른 사이즈보다 **엄청 큰 숫자 단위**를 쓰고 있을 가능성
+   - `svgDoc.artboards[0].artboardRect`로 베이스 문서 크기가 결정되므로 viewBox가 이상하면 몸판 실측치는 맞지만 path 내부 좌표가 엉뚱할 수 있음
+   - 예: 다른 사이즈는 mm 단위, 3XL만 inch 단위로 export 됐거나, Illustrator export 시 scale factor가 다르게 들어감
+   - `targetArea`가 비정상적으로 커지면 `linearScale = sqrt(targetArea/baseArea)`가 과도하게 커져 → 요소가 과하게 확대됨
+   - **몸판은 정상 크기로 보이는데 요소만 크다**는 것이 결정적 단서 → 몸판 path는 `area` 계산만 문제, 렌더링은 정상일 가능성 (벡터는 좌표계 스케일만 다를 수 있음)
+
+2. **3XL.svg의 path 하나가 비정상적으로 크거나 열린 경로**
+   - `importSvgPathsToDoc`는 50pt 이상 path 모두 `targetArea`에 합산
+   - 만약 3XL.svg에 "전체 아트보드를 덮는 배경 사각형" 같은 path가 하나 들어있다면, 또는 path가 닫히지 않아서 `path.closed = true`로 강제 닫을 때 면적이 폭발적으로 커질 수 있음
+   - `calcLayerArea`/`importSvgPathsToDoc` 모두 `if (!path.closed) { path.closed = true; }` 강제 처리 → 복잡한 열린 경로는 예기치 않은 area 발생
+
+3. **basePieces와 designPieces 매핑 실패 + 폴백 비활성화**
+   - 만약 3XL.svg의 조각 수가 디자인 AI와 같으면(S1 통과) 개별 정렬 경로로 진입하는데, 인덱스 매핑이 엉뚱하면 엉뚱한 조각 중심으로 이동
+   - 하지만 "요소가 몸판 위로 튀어나간다"는 것은 `linearScale`이 과도하다는 신호에 더 가까움 (매핑 오류라면 엉뚱한 조각에 붙긴 해도 크기는 맞을 것)
+
+4. **3XL의 Drive SVG 파일과 디자인 AI 패턴선 레이어의 "기준 사이즈" 불일치** (희박)
+   - `baseArea`는 한 번만 계산되고 모든 사이즈 공용 → 여기선 영향 없음 (사이즈마다 재계산 안 함)
+
+**3XL을 의심할 수밖에 없는 이유**:
+- grading.jsx는 3XL 이름을 한 번도 사용하지 않음 → 코드 분기에서 3XL만 다르게 취급할 수 없음
+- config.json의 `patternSvgPath`만 다르게 들어감 → **Drive의 3XL SVG 파일 자체**가 유일한 독립 변수
+- 사용자가 직접 3XL.svg를 다른 사이즈와 비교하는 것이 가장 빠른 확인법
+
+**사용자 확인 요청**:
+1. 어떤 프리셋(패턴)에서 발생? 모든 프리셋? 특정 디자인(V넥 등)?
+2. 3XL.svg를 Illustrator나 브라우저로 직접 열어서 아트보드 크기가 다른 사이즈(2XL/4XL)와 비슷한지
+3. 3XL.svg의 path 수가 다른 사이즈와 동일한지 (조각 수)
+4. Illustrator 콘솔(`$.writeln` 로그) 중 3XL 실행 시:
+   - `[grading.jsx] 기준 패턴 면적: X pt² (N개 조각)` (baseArea)
+   - `[grading.jsx] 타겟 패턴 면적: Y pt² (M개 조각)` (targetArea)
+   - `[grading.jsx] 면적 비율: Z`
+   - `[grading.jsx] 선형 스케일: W (W*100%)`
+   - → 2XL 실행 때 값과 비교하면 3XL의 `면적 비율`이 돌발적으로 튈 것으로 추정
+
+**수정 방향 (원인 확정 후)**:
+- 원인 1/2 (SVG 파일 자체): 디자이너가 3XL.svg를 재 export / 또는 코드에 "이상치 방어 로직" 추가 — `linearScale`이 이웃 사이즈 대비 이상하게 튀면 경고 + 수동 확인 요청
+- `linearScale` clamp (예: 2.0 초과 시 경고/차단)는 방어적 패치로 유용하지만 근본 원인 규명이 먼저
+
+**코드 수정 없음 — 조사만 진행.**
+
+---
+
 ### [2026-04-15] 작업 흐름 재설계 Phase 4 (OrderGenerate 통합) — 계획 제안
 
 #### 기존 분석
@@ -328,6 +423,163 @@ if (!aiExePath) {
 
 검증: `npx tsc --noEmit` PASS / `cargo check` PASS / `npm run build` PASS (dist 308KB gzip 95.5KB)
 
+### [2026-04-15] 3XL/4XL 좌표 + XL 요소 누락 조사
+
+#### 증상 요약 (사용자 실측)
+- **증상 A**: 3XL, 4XL 출력물에서 요소(숫자 1234/7890/20/로고/라벨)가 몸판 상단/좌우로 튀어나가고 과도하게 큼. 몸판(파란 영역) 크기는 정상. 5XL은 언급 없음.
+- **증상 B**: 기준 AI = XL, 타겟 = XL 그레이딩 시 결과 EPS에 **몸판만 있고 요소가 전혀 없음**.
+
+#### 조사한 파일
+- `src/pages/OrderGenerate.tsx` (955줄): 사이즈 루프 + config.json 생성 로직 (라인 543~624)
+- `illustrator-scripts/grading.jsx` (1636줄): STEP 1~11-D 전체 흐름
+  - `calcLayerArea` (663~680)
+  - `importSvgPathsToDoc` (772~853)
+  - `extractPatternPieces` (866~904)
+  - `alignElementToPiece` (993~1013)
+  - STEP 2A baseArea 계산 (1137~1154)
+  - STEP 4 요소 copy + 매핑 사전 수집 (1184~1255)
+  - STEP 5 SVG 열기 (1257~1278)
+  - STEP 7 importSvgPathsToDoc 호출 (1296~1308)
+  - STEP 8 paste (1333~1339)
+  - STEP 9 linearScale 적용 (1368~1387)
+  - STEP 10 개별 정렬 / 폴백 (1389~1478)
+
+#### OrderGenerate의 config.json 구성 (증상 B 단서)
+
+루프 (라인 543~590):
+```
+for targetSize in selectedSizes:
+  targetSvgData = resolveSvgContent(piece, targetSize)   // Drive SVG 또는 Local 인라인
+  tempSvgPath = scriptsDir\temp_pattern_{targetSize}.svg
+  write(tempSvgPath, targetSvgData)
+  config = {
+    patternSvgPath: tempSvgPath,
+    outputPath: workFolder\{baseAiName}_{targetSize}.eps,
+    resultJsonPath,
+    patternLineColor: "auto",
+    designAiPath: session.baseAiPath,   // ← 항상 같은 AI 파일
+  }
+```
+
+**결정적 관찰**: OrderGenerate의 사이즈 루프는 **baseSize를 config.json에 전달하지 않는다**. designAiPath는 사용자가 /work에서 고른 단 하나의 AI 파일 고정. `baseSize` state는 드롭다운 UI용으로만 존재하고, config에도 grading.jsx에도 **전혀 쓰이지 않는다**.
+
+→ **"기준 사이즈"는 실질적으로 baseAiPath 파일의 패턴선 레이어 면적으로 결정된다** (grading.jsx STEP 2A). baseSize 드롭다운은 현재 의미 없는 UI.
+
+#### 증상 B (XL = XL에서 요소 누락) — 원인 후보
+
+grading.jsx는 `basePieces == designAiPath` 동일성 체크 없음. 그래도 실패할 수 있는 경로:
+
+**가설 B1 (최유력): STEP 2A가 "요소"를 "패턴선"으로 오인 포함 — X**
+- calcLayerArea는 layer.pathItems만 순회. "패턴선" 레이어에 있는 path만 대상.
+- 만약 XL AI 파일이 "요소"까지 모두 "패턴선" 레이어에 들어있다면? → 가능성 있음
+- 하지만 이건 증상 B와 직접 연결되지 않음 (요소 누락 원인은 따로)
+
+**가설 B2 (최유력): STEP 4의 designPieces 매핑 안전장치 S1/S3가 모든 요소를 스킵**
+- XL AI 파일의 "패턴선" 조각 수 vs 타겟 XL SVG 조각 수가 다르면 useFallback=true → alignToBodyCenter 경로로 가서 요소가 "몸판 중앙"으로 이동만 함 (요소 누락 아님)
+- 폴백이 요소를 "몸판 중앙" 한 곳에 모아놓기만 할 뿐이라 **요소는 보여야 함**
+- 그런데 사용자 증상은 "아예 없음"
+
+**가설 B3 (매우 유력): baseAiPath가 실제로 Drive의 XL SVG와 다른 파일**
+- OrderGenerate에서 `designAiPath = session.baseAiPath` (AI 파일)
+- `patternSvgPath = temp_pattern_XL.svg` (Drive에서 해석된 SVG)
+- 두 파일은 **원천적으로 다른 파일**이므로 "same file" 이슈 아님
+- 하지만 사용자가 /work에서 **AI 파일로 Drive에 있는 SVG 파일을 잘못 선택**했다면? — 타입은 .ai여야 하므로 확장자 필터에서 차단됨. 가능성 낮음.
+
+**가설 B4 (가장 유력): AI 파일의 "요소" 레이어가 비어있거나 다른 이름**
+- STEP 4 (1200~1248): `elemLayer = designDoc.layers.getByName("요소")`. 없으면 throw.
+- **있는데 pageItems.length === 0이면 copy 실패** → clipboard 비어있음 → STEP 8 paste에서 baseDoc.selection이 null → "붙여넣은 요소가 없음" 로그
+- 이러면 **몸판만 보존되고 요소는 정말 아무것도 안 들어감** = 증상 B와 완전 일치
+- XL AI가 "기준" 파일이라면 디자이너가 요소를 아직 안 그렸거나, 레이어 이름이 한글 "요소"가 아니라 다른 이름(예: "Elements", "디자인요소")일 수 있음
+
+**가설 B5 (가능): XL SVG의 조각 수가 요소 매핑을 모두 -1로 만들고, 스킵 카운트=전체**
+- `findBestMatchingPiece`는 (1) 교집합 면적 최대 (2) 중심 거리 최소 폴백
+- 중심 거리 폴백은 pieces가 1개 이상이면 반드시 0 이상 인덱스를 반환 → -1 가능성 낮음
+- 그래도 `elementPieceIndex[i] === -1` 조건이 모든 요소에 맞으면 전부 스킵되긴 함
+- **하지만 이 경우도 "요소가 아예 없다"가 아니라 "요소는 paste되지만 위치만 엉뚱"이라 증상 B와는 다름**
+
+**가설 B6 (가능): XL.ai 파일 자체가 손상 또는 열기 실패**
+- 에러는 catch → result.json에 기록 → OrderGenerate가 "에러"로 표시
+- 사용자가 "에러"로 보였는지 "성공인데 요소 없음"인지 확인 필요
+
+→ **가설 B4가 가장 설명력 높음**. 사용자 확인 필수.
+
+#### 증상 A (3XL/4XL 요소 과대) — 원인 후보
+
+**가설 A1 (최유력): 3XL.svg/4XL.svg viewBox 단위가 다른 사이즈와 다름**
+- 사용자가 3XL.svg 파일을 새로 추가했다고 함 → 새 파일만 단위/좌표계가 다를 가능성
+- STEP 5에서 `svgDoc.artboards[0].artboardRect`로 아트보드 크기 측정 → **CMYK 베이스 문서 크기는 SVG 아트보드 기준**
+- STEP 7 `importSvgPathsToDoc`는 path.area를 누적 → **path 좌표 단위가 비정상이면 targetArea가 비정상**
+- 몸판이 정상 크기인 이유: `path.duplicate`는 원본 좌표 그대로 복제. 아트보드가 커도 path 좌표가 같이 커졌으면 몸판은 시각적으로 맞게 보임
+- 요소가 과대한 이유: `linearScale = sqrt(targetArea / baseArea)`에서 targetArea가 과대하면 linearScale 폭발 → STEP 9의 `pastedGroup.resize(linearScale*100)`이 요소를 크게 확대
+- 위치가 상단으로 튀어나가는 이유: `alignElementToPiece`에서 `relX * linearScale`이 과대하면 요소 중심이 basePiece 중심에서 멀어짐. linearScale=2~3배면 요소가 조각 밖 원래 조각 중심 반경 × 스케일만큼 멀어짐
+
+**가설 A2 (유력): 3XL/4XL SVG에 "배경 사각형 path"가 하나 들어있어 targetArea 폭발**
+- importSvgPathsToDoc는 50pt 이상 path를 모두 targetArea에 누적
+- 아트보드 전체를 덮는 보이지 않는 path 하나만 있어도 targetArea가 실제보다 2~3배 커짐
+- 3XL.svg를 Illustrator로 열어 "숨겨진 path"가 있는지 육안 확인 필요
+
+**가설 A3 (가능): 열린 경로 강제 닫기로 인한 면적 폭발**
+- `if (!path.closed) { path.closed = true; }` 강제 처리
+- 3XL/4XL SVG에 복잡한 열린 경로(예: 시접선, 가이드선)가 있으면 엉뚱한 면적이 합산될 수 있음
+- path.width/height 50pt 필터를 통과한 열린 path가 있으면 합산됨
+
+**가설 A4 (배제): 5XL은 정상**
+- 가설 A1/A2가 맞다면 5XL도 같이 문제일 가능성이 높은데, 5XL은 "언급 없음" → 진짜 정상인지 미확인 상태
+- 사용자에게 5XL 결과 확인 요청 필요
+
+#### 추가 발견 (부수적)
+
+**부수 이슈 1**: OrderGenerate의 `baseSize` 드롭다운은 실제로 아무 동작도 하지 않음
+- config에도 안 들어가고, grading.jsx도 baseSize를 모름
+- grading.jsx의 "기준"은 `designAiPath`의 "패턴선" 레이어 → 사용자가 /work에서 고른 AI 파일이 곧 기준
+- **이건 UX 버그**: 사용자가 "기준 사이즈를 XL로" 드롭다운을 바꿔도 실제 결과에 아무 영향 없음. 기준 사이즈를 바꾸려면 /work에서 AI 파일 자체를 바꿔야 함.
+- 이번 조사 범위 밖이지만 PM에게 보고하여 Phase 5+에서 설계 재검토 권장
+
+**부수 이슈 2**: `calcLayerArea`의 path.area 계산은 복잡한 복합 path(여러 subpath)에서도 호출됨
+- SVG에서 `<path d="M10,10... M200,200...">`처럼 여러 subpath가 한 path로 묶이면 path.area는 전체 합
+- 조각 수 카운트와 면적 합이 어긋날 수 있음 (지금은 증상과 관련 없어 보임)
+
+#### 수정 방향 (원인 확정 후)
+
+**증상 B (가설 B4 확인 시)**:
+- `/work`에서 AI 파일 선택 시 "요소" 레이어 존재/비어있음 미리 검증 (Rust/Python 유틸 또는 사전 열기)
+- 아니면 grading.jsx에서 "요소" 레이어 비어있을 때 명확한 에러 메시지로 종료 (현재는 경고만 찍고 진행 → 요소 없는 EPS 저장)
+
+**증상 A (가설 A1/A2 확인 시)**:
+- 단기: 디자이너에게 3XL/4XL.svg 재 export 요청 (viewBox 단위 통일)
+- 중기: grading.jsx에 linearScale clamp 추가 (예: 이웃 사이즈 대비 ±30% 초과 시 경고 + 원본 크기 유지)
+- 장기: 사이즈 그룹 전체의 linearScale 분포를 먼저 계산하고 이상치 탐지
+
+**부수 이슈 1 (별건)**:
+- baseSize를 config에 전달해서 grading.jsx가 쓰도록 스키마 확장
+- 아니면 baseSize UI를 제거하고 "AI 파일의 사이즈를 자동 감지"만 표시
+
+#### 사용자에게 요청 (로그/스크린샷 수집)
+
+1. **증상 A 범위 확정 (결정적)**: 13개 사이즈를 모두 XL 기준으로 돌려 결과물을 한 줄로 나열 — "XS/S/M/L 정상, XL/2XL 정상, 3XL/4XL 이상, 5XL ??"
+2. **3XL.svg 와 XL.svg 비교** (결정적):
+   - Illustrator로 각각 열어 "파일 > 문서 설정" 또는 "아트보드 옵션"에서 폭/높이(pt) 기록
+   - "창 > 레이어" 패널에서 레이어 구조와 path 개수 비교
+   - 3XL.svg만 아트보드 전체 크기 path(보이지 않는 사각형)가 있는지 육안 확인
+3. **Illustrator 콘솔 로그 수집** (결정적):
+   - 3XL 그레이딩 1회 실행 후 Illustrator 콘솔에서 `[grading.jsx]` 시작 라인 전체 복사
+   - 핵심: `기준 패턴 면적 / 타겟 패턴 면적 / 면적 비율 / 선형 스케일` 숫자 4개
+   - 같은 로그를 XL 그레이딩에서도 수집 → 비교
+4. **증상 B의 XL EPS 파일 열기** (결정적):
+   - Illustrator에서 `{baseAiName}_XL.eps` 열기 → 레이어 패널 확인
+   - "디자인 요소" 레이어가 **비어있는지** / **숨겨져 있는지** / **범위 밖으로 나가있는지** 3가지 중 어느 것인지
+   - 그레이딩 결과 로그의 `붙여넣은 요소 수:` 값 확인
+5. **XL AI 파일 레이어 확인** (증상 B 최종 확인):
+   - /work에서 선택한 기준 AI 파일을 Illustrator로 직접 열기
+   - 레이어 패널에 **정확히 "요소"라는 이름**의 레이어가 있는지
+   - "요소" 레이어에 path/text/group이 실제로 들어있는지
+
+#### 결론
+
+- **코드 수정 없음** (요청대로 조사만)
+- 증상 A와 B는 서로 다른 원인 가능성이 높음 → 가설 A1/A2 + 가설 B4가 가장 설명력 있음
+- 결정적 판단에는 사용자 Illustrator 콘솔 로그 + AI/SVG 파일 육안 확인 필수
+
 ---
 
 ## 테스트 결과 (tester)
@@ -339,6 +591,9 @@ if (!aiExePath) {
 ## 수정 요청
 | 요청자 | 대상 파일 | 문제 설명 | 상태 |
 |--------|----------|----------|------|
+| user | grading.jsx / 3XL.svg | 3XL 사이즈 1개에서 요소가 몸판 벗어나 과하게 큼. 다른 12개 사이즈는 정상 추정 | 🔍 조사 중 (원인 후보 수집, 추가 정보 대기) |
+| user | 3XL.svg / 4XL.svg | 3XL.svg 추가 후에도 3XL·4XL 요소(숫자/로고/라벨)가 몸판 상단으로 튀어나가고 과하게 큼. 5XL은 언급 없음 | 🔍 조사 중 (SVG 파일 자체 검증 대기) |
+| user | grading.jsx / OrderGenerate | 기준 AI = XL로 XL 타겟 그레이딩 시 요소가 하나도 안 들어옴 (몸판만 있음) | 🔍 조사 중 (Illustrator 로그 필요) |
 
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
@@ -356,3 +611,5 @@ if (!aiExePath) {
 | 2026-04-15 | developer | Phase 3 즐겨찾기 (favoritesStore + ⭐ 토글 + 필터) | tsc/build PASS |
 | 2026-04-15 | developer | Phase 4 OrderGenerate 통합 (SizeSelect+FileGenerate → 1페이지) | tsc/build PASS |
 | 2026-04-15 | developer | OrderGenerate 버그수정(Rust path) + 기준사이즈 자동 + 구글시트 URL 지원 | tsc/cargo/build PASS |
+| 2026-04-15 | debugger | 3XL/4XL 좌표 + XL 요소 누락 조사 (코드 수정 없음, 사용자 로그 요청) | 조사 보고 |
+| 2026-04-15 | developer | grading.jsx 디버그 로그 파일 기록 추가 (임시, 원인 확정용) | 구현 완료 |
