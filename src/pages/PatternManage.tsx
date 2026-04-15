@@ -783,7 +783,14 @@ function PatternManage() {
     const keys = new Set<string>();
     if (piece.svgBySize) Object.keys(piece.svgBySize).forEach((k) => keys.add(k));
     if (piece.svgPathBySize) Object.keys(piece.svgPathBySize).forEach((k) => keys.add(k));
-    return Array.from(keys);
+    // SIZE_LIST에 정의된 순서대로 정렬 (5XS → 5XL 방향, 작은→큰 순)
+    // 이유: Set 반복 순서는 삽입 순서라 무작위로 보일 수 있음. 사용자가 카드에서
+    // "5XS, 4XS, ..., 5XL" 순으로 보기를 원함. SIZE_LIST에 없는 값은 뒤로.
+    return Array.from(keys).sort((a, b) => {
+      const idxA = SIZE_LIST.indexOf(a as typeof SIZE_LIST[number]);
+      const idxB = SIZE_LIST.indexOf(b as typeof SIZE_LIST[number]);
+      return (idxA === -1 ? 99 : idxA) - (idxB === -1 ? 99 : idxB);
+    });
   };
 
   // === 사이즈 배지 텍스트 생성 ===
