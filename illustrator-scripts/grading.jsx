@@ -305,6 +305,138 @@ function cloneColor(color) {
     return color;
 }
 
+// ===== 패턴선 자동 색상 전환 (WCAG 대비비 기반) =====
+
+/**
+ * CMYK 색상을 sRGB 선형 휘도(L)로 변환한다.
+ * 왜 선형 휘도인가:
+ *   - WCAG 2.x 대비비 공식은 선형 휘도(상대휘도)를 기준으로 한다.
+ *   - 단순 평균 밝기와 달리 인간 시각의 채널별 민감도(녹색 높음)를 반영한다.
+ *
+ * 계산 과정:
+ *   1) CMYK → 근사 RGB: R=(1-C/100)*(1-K/100), G/B 동형 (M/Y 사용)
+ *   2) 각 채널 sRGB 역감마: v <= 0.03928 ? v/12.92 : pow((v+0.055)/1.055, 2.4)
+ *   3) 상대휘도: L = 0.2126*Rlin + 0.7152*Glin + 0.0722*Blin
+ *
+ * @param {CMYKColor} cmykColor - 입력 CMYK 색 (c/m/y/k는 0~100)
+ * @return {Number} 0~1 범위의 선형 휘도
+ */
+function cmykToLinearLuminance(cmykColor) {
+    // (1) CMYK → 근사 RGB (0~1)
+    var c = cmykColor.cyan / 100;
+    var m = cmykColor.magenta / 100;
+    var y = cmykColor.yellow / 100;
+    var k = cmykColor.black / 100;
+    var r = (1 - c) * (1 - k);
+    var g = (1 - m) * (1 - k);
+    var b = (1 - y) * (1 - k);
+
+    // (2) sRGB 역감마 보정 (채널 개별)
+    var rLin = (r <= 0.03928) ? (r / 12.92) : Math.pow((r + 0.055) / 1.055, 2.4);
+    var gLin = (g <= 0.03928) ? (g / 12.92) : Math.pow((g + 0.055) / 1.055, 2.4);
+    var bLin = (b <= 0.03928) ? (b / 12.92) : Math.pow((b + 0.055) / 1.055, 2.4);
+
+    // (3) 가중합 — WCAG 2.x 상대휘도 계수
+    return 0.2126 * rLin + 0.7152 * gLin + 0.0722 * bLin;
+}
+
+/**
+ * 배경 CMYK 색에 대해 흰/검 중 더 높은 WCAG 대비비를 주는 쪽을 반환한다.
+ * 왜 WCAG 대비비인가:
+ *   - 단순 L=0.5 임계값은 에지 케이스(중간 밝기, 채도 높은 색)에서 잘못된 판정.
+ *   - 대비비 비교는 "더 잘 보이는 쪽"을 수식으로 직접 고르기에 임계값 튜닝 불필요.
+ *
+ * @param {CMYKColor|null} bgCmykColor - 배경(몸판) 색. null이면 판정 불가 → null 반환
+ * @return {CMYKColor|null} 선택된 stroke 색 (흰=CMYK(0,0,0,0) 또는 검=CMYK(0,0,0,100))
+ */
+function pickPatternStrokeColor(bgCmykColor) {
+    // 배경 색이 없으면 판정 불가 → 호출부에서 keep 폴백으로 처리
+    if (!bgCmykColor) {
+        return null;
+    }
+
+    // 배경의 선형 휘도
+    var lBg = cmykToLinearLuminance(bgCmykColor);
+
+    // WCAG 대비비: (L_brighter + 0.05) / (L_darker + 0.05)
+    // 흰색(L=1)과 배경 비교 — 흰이 항상 배경보다 밝거나 같다고 가정하고 계산
+    var contrastWhite = (1.0 + 0.05) / (lBg + 0.05);
+    // 검정(L=0)과 배경 비교 — 배경이 항상 검정보다 밝거나 같다고 가정
+    var contrastBlack = (lBg + 0.05) / (0.0 + 0.05);
+
+    // 큰 쪽 선택 (대비 높은 = 더 잘 보이는 선 색)
+    if (contrastWhite >= contrastBlack) {
+        var white = new CMYKColor();
+        white.cyan = 0;
+        white.magenta = 0;
+        white.yellow = 0;
+        white.black = 0;
+        return white;
+    }
+    var black = new CMYKColor();
+    black.cyan = 0;
+    black.magenta = 0;
+    black.yellow = 0;
+    black.black = 100;
+    return black;
+}
+
+/**
+ * 컨테이너 내부를 재귀 순회하며 모든 path의 stroke 색을 newColor로 덮어쓴다.
+ * 왜 재귀인가:
+ *   - layerPattern 내부에 GroupItem / CompoundPathItem 중첩이 있을 수 있다.
+ *   - 플랫하게 pathItems만 보면 중첩된 path를 놓친다.
+ *
+ * 스킵 규칙 (Phase 1 보수안):
+ *   - fill은 절대 건드리지 않는다 (별표 등 기호 보존)
+ *   - stroked === false면 스킵 (선이 없는 path)
+ *   - strokeColor.typename이 "CMYKColor"/"RGBColor"/"GrayColor"(단색) 일 때만 덮어쓰기
+ *   - Gradient/Pattern/NoColor는 스킵 (복합 색 덮어쓰기 위험)
+ *
+ * @param {Object} container - pageItems/pathItems를 가진 컨테이너 (Layer, GroupItem, CompoundPathItem)
+ * @param {CMYKColor} newColor - 적용할 stroke 색
+ * @return {Number} 실제로 덮어쓴 path 개수 (통계용)
+ */
+function applyPatternStrokeColorRecursive(container, newColor) {
+    var applied = 0;
+    // pageItems를 돌면서 typename별 분기
+    var items = container.pageItems;
+    for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        var tn = item.typename;
+
+        if (tn === "PathItem") {
+            // 선 있는 단색 stroke만 덮어쓰기
+            if (item.stroked && item.strokeColor) {
+                var stn = item.strokeColor.typename;
+                if (stn === "CMYKColor" || stn === "RGBColor" || stn === "GrayColor") {
+                    item.strokeColor = cloneCMYKColor(newColor);
+                    applied++;
+                }
+                // Gradient/Pattern/NoColor는 스킵
+            }
+        } else if (tn === "CompoundPathItem") {
+            // CompoundPath 내부 pathItems 직접 순회 (pageItems 없음)
+            var compPaths = item.pathItems;
+            for (var j = 0; j < compPaths.length; j++) {
+                var cp = compPaths[j];
+                if (cp.stroked && cp.strokeColor) {
+                    var cstn = cp.strokeColor.typename;
+                    if (cstn === "CMYKColor" || cstn === "RGBColor" || cstn === "GrayColor") {
+                        cp.strokeColor = cloneCMYKColor(newColor);
+                        applied++;
+                    }
+                }
+            }
+        } else if (tn === "GroupItem") {
+            // 그룹은 재귀
+            applied += applyPatternStrokeColorRecursive(item, newColor);
+        }
+        // 기타(TextFrame/PlacedItem 등)는 스킵
+    }
+    return applied;
+}
+
 // ===== AI 레이어 기반 색상 추출 =====
 
 /**
@@ -914,6 +1046,10 @@ function main() {
     var resultPath = config.resultJsonPath;
     // allowRgbDesign: true가 아니면 false로 취급 (엄격 모드 기본)
     var allowRgbDesign = (config.allowRgbDesign === true);
+    // patternLineColor: "auto" | "white" | "black" | "keep"
+    // 왜 기본 "auto"인가: 배경 밝기에 따라 흰/검을 자동 선택해서 패턴선 가시성을 보장.
+    // UI 노출 없이 config.json으로만 제어 (사용자 결정 Q1=A).
+    var patternLineColorMode = (config && config.patternLineColor) ? config.patternLineColor : "auto";
 
     // 작업 중 참조할 문서 핸들들 (에러 시 정리를 위해 상위 스코프에 선언)
     var designDoc = null;  // 디자인 AI/PDF (메타 추출 후 바로 close)
@@ -1313,6 +1449,52 @@ function main() {
             $.writeln("[grading.jsx] 안전망 RGB→CMYK: " + safetyConverted + "개 색 변환");
         } else {
             $.writeln("[grading.jsx] 안전망 RGB→CMYK: 변환 대상 없음 (이미 CMYK)");
+        }
+
+        // ===== STEP 11-A+ : 패턴선 자동 색상 전환 (Phase 1: stroke만) =====
+        // 왜 여기인가:
+        //   - 이 시점에 layerPattern은 아직 독립 레이어로 살아있고, 중첩 구조 그대로.
+        //   - STEP 11-B에서 finalLayer로 통합되면 컨테이너 순회 대상이 달라진다.
+        //   - 한 블록으로 격리되어 있어 롤백도 이 구간만 지우면 끝.
+        //
+        // 모드별 동작:
+        //   - "keep": 원본 유지 (아무 것도 하지 않음)
+        //   - "white": 고정 흰
+        //   - "black": 고정 검
+        //   - "auto": WCAG 대비비로 흰/검 자동 선택 (mainColor 없으면 keep 폴백)
+        var chosenStrokeColor = null;
+        var actuallyApplied = false;
+        if (patternLineColorMode === "white") {
+            chosenStrokeColor = new CMYKColor();
+            chosenStrokeColor.cyan = 0;
+            chosenStrokeColor.magenta = 0;
+            chosenStrokeColor.yellow = 0;
+            chosenStrokeColor.black = 0;
+        } else if (patternLineColorMode === "black") {
+            chosenStrokeColor = new CMYKColor();
+            chosenStrokeColor.cyan = 0;
+            chosenStrokeColor.magenta = 0;
+            chosenStrokeColor.yellow = 0;
+            chosenStrokeColor.black = 100;
+        } else if (patternLineColorMode === "auto") {
+            // mainColor가 CMYK면 WCAG 판정, 아니면 keep 폴백
+            if (mainColor && mainColor.typename === "CMYKColor") {
+                chosenStrokeColor = pickPatternStrokeColor(mainColor);
+            } else {
+                chosenStrokeColor = null; // keep 폴백
+            }
+        }
+        // "keep" 또는 auto에서 판정 실패 → chosenStrokeColor는 null → 스킵
+
+        if (chosenStrokeColor) {
+            var appliedCount = applyPatternStrokeColorRecursive(layerPattern, chosenStrokeColor);
+            actuallyApplied = (appliedCount > 0);
+            var colorLabel = (chosenStrokeColor.black >= 100) ? "black(K100)" : "white(0)";
+            $.writeln("[PATTERN LINE] mode=" + patternLineColorMode
+                + " color=" + colorLabel
+                + " applied=" + appliedCount + " path(s)");
+        } else {
+            $.writeln("[PATTERN LINE] mode=" + patternLineColorMode + " applied=skip (keep original)");
         }
 
         // ===== STEP 11-B (10번 작업): 레이어 z-order 통합 =====

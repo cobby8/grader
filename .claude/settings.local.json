@@ -163,7 +163,11 @@
       "Bash(cmd //c 'call \"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\\\\2022\\\\BuildTools\\\\VC\\\\Auxiliary\\\\Build\\\\vcvarsall.bat\" x64 && set \"PATH=%USERPROFILE%\\\\.cargo\\\\bin;%PATH%\" && cargo check')",
       "Bash(cmd:*)",
       "Bash(taskkill //f //pid 55232)",
-      "Bash(python-engine/venv/Scripts/python -c ':*)"
+      "Bash(python-engine/venv/Scripts/python -c ':*)",
+      "Bash(git push:*)",
+      "Bash(wc:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)"
     ]
   }
 }

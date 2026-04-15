@@ -320,6 +320,7 @@ function FileGenerate() {
           patternSvgPath: tempSvgPath,           // 타겟 사이즈 SVG (틀)
           outputPath: outputFilePath,            // 출력 파일 경로 (.eps — 확장자로 형식 자동 판별)
           resultJsonPath: resultJsonPath,         // 결과 마커 파일 경로
+          patternLineColor: "auto",               // 패턴선 색 자동 전환 (배경 밝기 따라 흰/검). UI 노출 없음 — 필요 시 "keep"/"white"/"black"로 수동 덮어쓰기
         };
         if (isAiFile) {
           // AI 파일: 레이어 기반 처리 (요소 레이어만 복사, 몸판에서 색상 추출)
