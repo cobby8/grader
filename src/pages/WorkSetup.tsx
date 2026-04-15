@@ -23,6 +23,7 @@ import { useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { stat } from "@tauri-apps/plugin-fs";
 import { loadWorkSession, saveWorkSession } from "../stores/sessionStore";
+import { extractSizeFromFilename } from "../types/pattern";
 
 /**
  * 파일 경로에서 부모 폴더 경로를 추출한다.
@@ -98,9 +99,13 @@ function WorkSetup() {
       setError("기준 AI 파일을 선택해주세요.");
       return;
     }
+    // 파일명에서 사이즈 자동 추출 (예: "농구_V넥_XL.ai" → "XL")
+    // 추출 실패 시 undefined로 저장 → OrderGenerate가 기본값 "L"로 보정
+    const detectedSize = extractSizeFromFilename(baseAiPath);
     saveWorkSession({
       workFolder,
       baseAiPath,
+      baseSize: detectedSize || undefined,
       createdAt: Date.now(),
     });
     navigate("/pattern");

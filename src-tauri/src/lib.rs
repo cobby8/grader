@@ -44,15 +44,52 @@ fn list_svg_files(dir_path: String) -> Result<Vec<String>, String> {
 }
 
 /// Python 엔진 폴더의 절대 경로를 찾는다.
-/// 개발 시에는 프로젝트 루트 기준으로 `python-engine/` 폴더를 찾는다.
-/// - tauri 개발 모드: src-tauri의 부모 폴더 = 프로젝트 루트
+///
+/// 왜 탐색 순서가 중요한가:
+///   - dev 모드(`cargo tauri dev`)에서 실행 파일은 `src-tauri/target/debug/grader.exe`에 생성된다.
+///   - 여기서 부모를 따라 올라가면 **프로젝트 루트(= src-tauri의 상위)**가 있다.
+///   - 그런데 과거 로직은 exe의 부모를 먼저 `python-engine`과 합쳐보면서
+///     `src-tauri/target/debug/python-engine`, `src-tauri/target/python-engine` 같은
+///     **존재하지 않는 경로를 우선 체크**했다. 평소엔 문제없지만, 사용자가 실수로
+///     target/ 안쪽에 python-engine 폴더를 만들면 그것이 우선 잡혀 엔진이 꼬인다.
+///   - 또한 resource_dir이 dev에서 src-tauri를 가리키는 경우가 있어, 프로덕션용 fallback이
+///     dev에서 먼저 매칭될 위험이 있었다.
+///
+/// 새 탐색 순서:
+///   1. 환경변수 `GRADER_PYTHON_ENGINE_DIR` 가 지정돼 있고 존재하면 그걸 사용 (수동 오버라이드)
+///   2. dev 빌드(`debug_assertions`)에서는 `CARGO_MANIFEST_DIR`(src-tauri 경로)의 상위에 있는
+///      `python-engine`을 1순위로 체크 → 프로젝트 루트 기준 절대 경로 고정
+///   3. 실행 파일에서 위로 최대 4단계 올라가며 `python-engine` 탐색 (기존 로직 유지)
+///   4. resource_dir 기반 (프로덕션 번들)
 fn get_python_engine_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    // 현재 실행 파일의 경로를 기준으로 역추적
-    // dev 모드: src-tauri/target/debug/grader.exe → 프로젝트 루트 = 3단계 상위
+    // 1) 환경변수 오버라이드 — 디버깅/대체 엔진 폴더를 쓰고 싶을 때
+    if let Ok(override_path) = std::env::var("GRADER_PYTHON_ENGINE_DIR") {
+        let p = PathBuf::from(&override_path);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    // 2) dev 빌드에서는 CARGO_MANIFEST_DIR 기준으로 프로젝트 루트를 결정
+    //    CARGO_MANIFEST_DIR는 컴파일 타임에 src-tauri 폴더의 절대 경로가 박힌다.
+    //    그 부모가 곧 프로젝트 루트이고, 거기에 python-engine 폴더가 있다.
+    #[cfg(debug_assertions)]
+    {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let engine = PathBuf::from(manifest_dir)
+            .parent()
+            .map(|p| p.join("python-engine"));
+        if let Some(engine) = engine {
+            if engine.exists() {
+                return Ok(engine);
+            }
+        }
+    }
+
+    // 3) 실행 파일 기준 역추적 (기존 로직)
     let exe_path = std::env::current_exe()
         .map_err(|e| format!("실행 파일 경로를 찾을 수 없습니다: {}", e))?;
 
-    // 개발 모드에서는 src-tauri/target/debug 기준, 3단계 위로
     let mut candidate = exe_path.clone();
     for _ in 0..4 {
         if let Some(parent) = candidate.parent() {
@@ -64,7 +101,7 @@ fn get_python_engine_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         }
     }
 
-    // 폴백: 리소스 디렉토리 확인 (번들 배포용)
+    // 4) 폴백: 리소스 디렉토리 (번들 배포용)
     if let Ok(resource_dir) = app.path().resource_dir() {
         let engine = resource_dir.join("python-engine");
         if engine.exists() {

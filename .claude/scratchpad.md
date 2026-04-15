@@ -268,6 +268,66 @@ if (!aiExePath) {
 
 검증: `npx tsc --noEmit` PASS / `npm run build` PASS (dist 304KB gzip 94KB)
 
+### [2026-04-15] OrderGenerate 버그 수정 + 기준 사이즈 자동 + 구글 시트
+
+📝 구현한 기능:
+1. Python 엔진 경로 탐색 버그 수정 (dev 모드에서 엉뚱한 폴더 매칭 방지)
+2. AI 파일명에서 사이즈 자동 추출 → OrderGenerate의 기준 사이즈 드롭다운 초기값으로 반영
+3. OrderGenerate에 구글 시트 URL 입력 → CSV fetch → 간단 휴리스틱으로 사이즈/수량 추출
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| `src-tauri/src/lib.rs` | `get_python_engine_dir` 개선: ①환경변수 `GRADER_PYTHON_ENGINE_DIR` 오버라이드 ②`#[cfg(debug_assertions)]`에서 `CARGO_MANIFEST_DIR`의 상위 기준 1순위 탐색 ③기존 exe 역추적/resource_dir 폴백 유지 | 수정 |
+| `src/types/session.ts` | `WorkSession.baseSize?: string` 추가 (파일명 파싱 힌트) | 수정 |
+| `src/types/pattern.ts` | `extractSizeFromFilename(fileName)` 신규 — 확장자/경로 제거 후 토큰화, 뒤에서부터 SIZE_LIST 매칭 | 수정 |
+| `src/pages/WorkSetup.tsx` | `handleNext`에서 `extractSizeFromFilename(baseAiPath)` 호출 → session.baseSize 저장 | 수정 |
+| `src/pages/OrderGenerate.tsx` | ①세션 로드 시 `s.baseSize`를 baseSize 초기값으로 사용 ②`toCsvExportUrl()` + `parseCsvSizes()` 순수 헬퍼 추가 ③`sheetUrl/sheetLoading` 상태 + `handleSheetImport()` 추가 ④`.sheet-url-row` input + 가져오기 버튼 UI ⑤`resetOrderToManual`에 sheetUrl 초기화 추가 | 수정 |
+| `src/App.css` | `.sheet-url-row` + `.sheet-url-input` 스타일 추가 | 수정 |
+
+핵심 로직:
+- **Rust 경로 탐색 우선순위**: ENV 오버라이드 → dev: `CARGO_MANIFEST_DIR/../python-engine` → exe 역추적 → resource_dir. dev 빌드에서는 컴파일 타임에 src-tauri 절대 경로가 박히므로, target/debug 위치에 관계없이 프로젝트 루트를 정확히 찾는다.
+- **사이즈 파싱**: `"농구_V넥_XL.ai"` → 확장자 제거 → `_`/공백/`-`/`.`로 토큰 분해 → 뒤에서부터 SIZE_LIST 매칭(대소문자 무시) → `"XL"`. 관습상 사이즈가 뒤쪽에 있어 뒤→앞 스캔. 실패 시 null → 세션 저장 안 하고 OrderGenerate가 기본 "L"로 보정.
+- **구글 시트 URL 처리**:
+  - `toCsvExportUrl`: `/spreadsheets/d/{KEY}/edit?gid={GID}` → `/spreadsheets/d/{KEY}/export?format=csv&gid={GID}`. gid 없으면 0.
+  - `parseCsvSizes`: 2D 그리드 스캔 → 각 셀이 SIZE_LIST 매칭되면 우측 같은 행 → 없으면 아래 같은 열에서 "가장 가까운 양의 정수"를 수량으로. 중복 매칭은 합산.
+  - 프리셋에 없는 사이즈는 경고 메시지만 출력 후 제외.
+  - CORS: docs.google.com 공개 시트 export는 공유 설정이 "링크가 있는 모든 사용자 뷰어"일 때만 동작.
+
+💡 tester 참고:
+- **⚠️ dev.bat 재시작 필수** (lib.rs 수정 → Rust 재컴파일)
+- **작업 1 (Rust) 테스트**:
+  - `dev.bat` 재시작 후 파이썬 호출이 필요한 기능(엑셀 주문서 업로드 등)을 실행 → 정상 동작해야 함
+  - 환경변수 테스트(선택): `set GRADER_PYTHON_ENGINE_DIR=C:/other/python-engine` 후 재시작 시 그 경로가 우선됨
+- **작업 2 (기준 사이즈 자동) 테스트**:
+  - `/work`에서 파일명이 `..._XL.ai`, `..._M.ai`, `..._2XL.ai` 같은 AI 파일 선택
+  - `/pattern` → 프리셋 선택 → `/generate` 진입 시 기준 사이즈 드롭다운 초기값이 파일명 토큰과 일치해야 함
+  - 파일명에 사이즈 토큰이 없으면(예: `농구유니폼.ai`) 기존대로 "L"(또는 프리셋 첫 사이즈)로 보정
+  - 프리셋에 등록되지 않은 사이즈가 추출되면 자동 보정 useEffect가 다른 값으로 대체 (깜빡임 가능)
+- **작업 3 (구글 시트) 테스트**:
+  - 테스트 시트 예: S=3, M=5, L=7, XL=2 같은 단순 표
+  - 공유 설정을 "링크가 있는 모든 사용자 뷰어"로 변경
+  - 시트 URL 붙여넣기 → "시트에서 가져오기" → 체크박스 자동 체크 + 수량 뱃지 표시
+  - "총 N장" 요약이 시트 합계와 일치해야 함
+  - 잘못된 URL: 에러 메시지 "유효한 구글 시트 URL이 아닙니다..."
+  - 권한 없는 시트: "HTTP 403/401..." 에러 → 공유 설정 안내 메시지
+  - 사이즈가 없는 시트: "시트에서 사이즈를 찾지 못했습니다..." → 엑셀 업로드 권장 안내
+- **정상 동작**:
+  - 구글 시트와 엑셀은 상호 배타 아님 — 둘 중 마지막으로 사용한 것이 덮어씀
+  - "주문서 초기화" 클릭 시 sheetUrl input까지 비워짐
+- **주의할 입력**:
+  - 숫자 셀에 따옴표가 있거나 `"1,234"` 같은 천단위 쉼표가 들어있으면 `parsePositiveInt`가 제거 후 파싱 (소수점은 거부)
+  - 같은 사이즈가 여러 셀에 있으면 합산됨 (분산 입력 대응이지만, 사용자에게는 "왜 합쳐졌지" 혼란 가능 — Phase 5+에서 재검토)
+  - 비공개 시트는 HTML 로그인 페이지가 돌아와서 사이즈 0건으로 끝남
+
+⚠️ reviewer 참고:
+- **production 경로 로직(exe 역추적/resource_dir)은 건드리지 않음** — Phase 5 번들 배포 준비 때 재검토
+- `parseCsvSizes`는 MVP용 간단 휴리스틱 — Python order_parser의 가로/세로/표형 자동감지를 JS로 포팅하지 않음. Phase 5+에서 필요 시 확장.
+- `OrderParseResult.detectedFormat`에 `"auto"` 값이 없어 `"unknown"`으로 매핑했음. 요약 바에는 "자동감지"로 표시됨.
+- 시트 fetch는 Tauri의 브라우저 fetch를 그대로 사용 — 별도 Rust 커맨드 추가 없음(CORS 문제는 공개 시트면 docs.google.com이 허용)
+- `extractSizeFromFilename`은 pattern.ts에 위치 — SIZE_LIST 상수와 같은 파일이라 응집도 높음. svgResolver는 SVG 전용 유지.
+
+검증: `npx tsc --noEmit` PASS / `cargo check` PASS / `npm run build` PASS (dist 308KB gzip 95.5KB)
+
 ---
 
 ## 테스트 결과 (tester)
@@ -295,3 +355,4 @@ if (!aiExePath) {
 | 2026-04-15 | pm | 11개 커밋 push + scratchpad 정리 + Phase 3 착수 | 완료 |
 | 2026-04-15 | developer | Phase 3 즐겨찾기 (favoritesStore + ⭐ 토글 + 필터) | tsc/build PASS |
 | 2026-04-15 | developer | Phase 4 OrderGenerate 통합 (SizeSelect+FileGenerate → 1페이지) | tsc/build PASS |
+| 2026-04-15 | developer | OrderGenerate 버그수정(Rust path) + 기준사이즈 자동 + 구글시트 URL 지원 | tsc/cargo/build PASS |

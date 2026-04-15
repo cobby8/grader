@@ -1591,6 +1591,30 @@ html, body, #root {
   opacity: 0.5;
 }
 
+/* 구글 시트 URL 입력 행 — 엑셀 업로드의 대안. */
+/* 왜 별도 스타일: 기존 size-actions는 버튼 묶음용이라 input에 맞지 않는다. */
+.sheet-url-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0 12px;
+}
+
+.sheet-url-input {
+  flex: 1;
+  min-width: 0; /* flex 안에서 input이 부모를 넘지 않도록 */
+  padding: 6px 10px;
+  border: 1px solid var(--color-border, #d0d7de);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  background-color: #fff;
+}
+
+.sheet-url-input:disabled {
+  background-color: var(--color-bg-content, #f5f5f5);
+  color: var(--color-text-muted);
+}
+
 /* 엑셀 파싱 결과 요약 바 */
 .order-summary {
   margin: 8px 0 12px;

@@ -150,6 +150,47 @@ export function getSizeRangeText(sizes: string[]): string {
 }
 
 /**
+ * 파일명에서 사이즈 토큰을 추출한다.
+ *
+ * 왜 필요한가:
+ *   - 기준 AI 파일명은 보통 "농구_V넥_XL.ai" 같은 규칙을 따른다.
+ *   - 여기서 "XL"만 쏙 뽑아내면 OrderGenerate의 기준 사이즈 드롭다운 초기값으로 쓸 수 있다.
+ *   - 사용자가 매번 드롭다운을 조작할 필요가 줄어든다.
+ *
+ * 매칭 규칙 (간단 휴리스틱):
+ *   1) 확장자 제거
+ *   2) 구분자(_ - 공백 .)로 토큰 분해
+ *   3) SIZE_LIST에 등록된 사이즈와 대소문자 무시 비교하여
+ *      "뒤에서부터 가장 먼저 매칭되는 토큰"을 반환
+ *      (마지막 토큰에 사이즈가 붙는 관습을 따르기 위함)
+ *   4) 매칭 실패 시 null
+ *
+ * 예:
+ *   "농구_V넥_XL.ai"        → "XL"
+ *   "sample-M-v2.ai"         → "M"
+ *   "축구 유니폼 2xl.ai"      → "2XL"  (대소문자 무시, 정규화해서 반환)
+ *   "prefix_XS_suffix.ai"    → "XS"
+ *   "그냥아무이름.ai"         → null
+ */
+export function extractSizeFromFilename(fileName: string): string | null {
+  if (!fileName) return null;
+  // 경로가 들어와도 파일명만 추출
+  const parts = fileName.replace(/\\/g, "/").split("/");
+  const base = parts[parts.length - 1] || fileName;
+  // 확장자 제거
+  const noExt = base.replace(/\.[^/.]+$/, "");
+  // 구분자 토큰화
+  const tokens = noExt.split(/[_\-\s.]+/).filter(Boolean);
+  // 뒤에서부터 SIZE_LIST 매칭
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const upper = tokens[i].toUpperCase();
+    const hit = SIZE_LIST.find((s) => s === upper);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
  * 기준 아트보드 크기 (mm) — 회사 표준 디자인 PDF 아트보드
  *
  * 패턴 SVG의 아트보드가 이보다 작을 수 있으므로,

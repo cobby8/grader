@@ -71,6 +71,133 @@ function sanitizeFileName(name: string): string {
   );
 }
 
+/**
+ * 구글 시트 URL을 CSV export URL로 변환한다.
+ *
+ * 왜 이렇게 하나:
+ *   - 구글 시트 공유 링크는 보통 `https://docs.google.com/spreadsheets/d/{KEY}/edit?gid={GID}#gid={GID}` 형태다.
+ *   - 여기서 `/export?format=csv&gid={GID}` 로 바꾸면 인증 없이 "링크가 있는 모든 사용자: 뷰어"
+ *     공유 설정만으로 CSV를 fetch할 수 있다.
+ *
+ * 반환:
+ *   - 유효한 URL이면 CSV export URL 문자열
+ *   - 아니면 null (UI에서 에러 표시)
+ */
+function toCsvExportUrl(url: string): string | null {
+  if (!url) return null;
+  const trimmed = url.trim();
+  // KEY 추출: /d/KEY/ 패턴
+  const keyMatch = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (!keyMatch) return null;
+  const key = keyMatch[1];
+  // GID 추출: gid=숫자 (없으면 0 = 첫 번째 시트)
+  const gidMatch = trimmed.match(/[?#&]gid=(\d+)/);
+  const gid = gidMatch ? gidMatch[1] : "0";
+  return `https://docs.google.com/spreadsheets/d/${key}/export?format=csv&gid=${gid}`;
+}
+
+/**
+ * CSV 문자열에서 사이즈-수량 정보를 간단히 추출한다 (MVP 휴리스틱).
+ *
+ * 왜 단순 휴리스틱인가:
+ *   - Python order_parser는 가로/세로/표형 등 다양한 레이아웃을 자동감지한다.
+ *   - JS로 그걸 전부 포팅하려면 시간이 많이 든다 → 일단 "SIZE 토큰 주변 숫자" 정도만 잡자.
+ *
+ * 전략 (2패스):
+ *   1) 모든 셀을 훑으면서 각 셀이 SIZE_LIST에 매칭되는지 체크.
+ *   2) 매칭된 셀의 오른쪽 같은 행 / 아래쪽 같은 열에서 **가장 가까운 양의 정수**를 찾는다.
+ *      (오른쪽 우선: 가로형 레이아웃이 더 흔함)
+ *   3) 같은 사이즈가 여러 번 매칭되면 값을 더한다 (분산 입력 대응).
+ *
+ * 반환: Map<사이즈, 수량>. 매칭 0건이면 빈 Map.
+ */
+function parseCsvSizes(csv: string): Map<string, number> {
+  const result = new Map<string, number>();
+  if (!csv) return result;
+
+  // 아주 단순한 CSV 파서 — 따옴표 내부 쉼표를 처리한다.
+  // 왜 라이브러리 안 쓰나: 대부분의 주문 시트는 따옴표/이스케이프를 거의 쓰지 않고,
+  //   사용자가 복사한 단순 텍스트라 이 정도면 충분하다.
+  function splitLine(line: string): string[] {
+    const cells: string[] = [];
+    let cur = "";
+    let inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuote && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuote = !inQuote;
+        }
+      } else if (ch === "," && !inQuote) {
+        cells.push(cur);
+        cur = "";
+      } else {
+        cur += ch;
+      }
+    }
+    cells.push(cur);
+    return cells.map((c) => c.trim());
+  }
+
+  const lines = csv.split(/\r?\n/).filter((l) => l.length > 0);
+  const grid = lines.map(splitLine);
+
+  // 숫자 파싱 헬퍼 — 정수만 인정 (소수점/쉼표 섞인 값 제외)
+  function parsePositiveInt(cell: string): number | null {
+    if (!cell) return null;
+    const cleaned = cell.replace(/[,\s]/g, "");
+    if (!/^\d+$/.test(cleaned)) return null;
+    const n = parseInt(cleaned, 10);
+    return n > 0 ? n : null;
+  }
+
+  // 정규화 헬퍼: SIZE_LIST 매칭 (대소문자 무시)
+  function matchSize(cell: string): string | null {
+    const upper = cell.toUpperCase().trim();
+    return SIZE_LIST.find((s) => s === upper) || null;
+  }
+
+  // 2D 스캔
+  for (let r = 0; r < grid.length; r++) {
+    const row = grid[r];
+    for (let c = 0; c < row.length; c++) {
+      const size = matchSize(row[c]);
+      if (!size) continue;
+
+      // 우측 같은 행에서 가까운 숫자
+      let qty: number | null = null;
+      for (let cc = c + 1; cc < row.length; cc++) {
+        const n = parsePositiveInt(row[cc]);
+        if (n !== null) {
+          qty = n;
+          break;
+        }
+      }
+      // 없으면 아래 같은 열에서 가까운 숫자
+      if (qty === null) {
+        for (let rr = r + 1; rr < grid.length; rr++) {
+          const cell = grid[rr][c];
+          if (cell === undefined) break;
+          const n = parsePositiveInt(cell);
+          if (n !== null) {
+            qty = n;
+            break;
+          }
+        }
+      }
+      if (qty !== null) {
+        // 중복 매칭은 합산
+        result.set(size, (result.get(size) || 0) + qty);
+      }
+    }
+  }
+
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // 컴포넌트
 // ---------------------------------------------------------------------------
@@ -92,6 +219,10 @@ function OrderGenerate() {
   const [orderResult, setOrderResult] = useState<OrderParseResult | null>(null);
   const [orderLoading, setOrderLoading] = useState(false);
   const [sizeQuantities, setSizeQuantities] = useState<Map<string, number>>(new Map());
+
+  // 구글 시트 URL 입력 (엑셀 업로드의 대안)
+  const [sheetUrl, setSheetUrl] = useState<string>("");
+  const [sheetLoading, setSheetLoading] = useState(false);
 
   // 실행 상태
   const [results, setResults] = useState<GenerationResult[]>([]);
@@ -124,6 +255,14 @@ function OrderGenerate() {
         // 선택했던 프리셋이 사라진 경우 → 다시 선택하러 보냄
         navigate("/pattern");
         return;
+      }
+
+      // 세션에 저장돼 있던 baseSize(파일명에서 파싱된 값)를 초기값으로 사용
+      // 왜 여기서 하나: OrderGenerate의 baseSize useState는 기본 "L"로 출발하는데,
+      //   세션에 XL 같은 힌트가 있으면 그걸 우선 반영해서 사용자가 조작할 필요를 줄인다.
+      //   (단, "프리셋에 등록돼 있는지" 검증은 아래 보정 useEffect가 처리)
+      if (s.baseSize) {
+        setBaseSize(s.baseSize);
       }
 
       setSession(s);
@@ -248,6 +387,88 @@ function OrderGenerate() {
     setOrderResult(null);
     setSizeQuantities(new Map());
     setSelectedSizes(new Set());
+    // 시트 URL 입력도 같이 비워준다 (엑셀/시트 모두 초기화의 대칭성)
+    setSheetUrl("");
+  }
+
+  // -------------------------------------------------------------------------
+  // 구글 시트 URL → CSV fetch → 간단 파싱 (엑셀 업로드의 대안, MVP)
+  // -------------------------------------------------------------------------
+  async function handleSheetImport() {
+    const url = sheetUrl.trim();
+    if (!url) {
+      setGlobalError("구글 시트 URL을 입력해주세요.");
+      return;
+    }
+    const csvUrl = toCsvExportUrl(url);
+    if (!csvUrl) {
+      setGlobalError(
+        "유효한 구글 시트 URL이 아닙니다. 예: https://docs.google.com/spreadsheets/d/.../edit?gid=0"
+      );
+      return;
+    }
+
+    setSheetLoading(true);
+    setGlobalError("");
+
+    try {
+      // 왜 fetch: Tauri는 기본적으로 브라우저 fetch를 지원한다. CORS 제한이 있을 수 있으나
+      //   docs.google.com의 export는 공개 시트에 한해 응답을 준다.
+      // 주의: 시트의 공유 설정이 "링크 있는 모든 사용자: 뷰어"여야 한다.
+      const resp = await fetch(csvUrl);
+      if (!resp.ok) {
+        throw new Error(
+          `시트를 불러올 수 없습니다 (HTTP ${resp.status}). 공유 설정이 "링크가 있는 모든 사용자"로 되어 있는지 확인해주세요.`
+        );
+      }
+      const csvText = await resp.text();
+
+      // 간단 휴리스틱 파싱
+      const qtyMap = parseCsvSizes(csvText);
+      if (qtyMap.size === 0) {
+        setGlobalError(
+          "시트에서 사이즈를 찾지 못했습니다. 시트 형식을 확인하거나 엑셀 업로드를 이용해주세요."
+        );
+        setSheetLoading(false);
+        return;
+      }
+
+      // 프리셋에 등록되지 않은 사이즈는 경고
+      const unknown = Array.from(qtyMap.keys()).filter(
+        (s) => !availablePresetSizes.includes(s)
+      );
+      if (unknown.length > 0) {
+        setGlobalError(
+          `주의: 시트의 ${unknown.join(", ")} 사이즈는 프리셋에 등록되어 있지 않아 제외됩니다.`
+        );
+      }
+
+      // 유효한 사이즈만 자동 체크
+      const valid = Array.from(qtyMap.keys()).filter((s) =>
+        availablePresetSizes.includes(s)
+      );
+      setSelectedSizes(new Set(valid));
+      setSizeQuantities(qtyMap);
+
+      // orderResult 형태로 어댑터 — 기존 요약 UI 재활용
+      const totalQty = Array.from(qtyMap.values()).reduce((a, b) => a + b, 0);
+      setOrderResult({
+        success: true,
+        sizes: Array.from(qtyMap.entries()).map(([size, quantity]) => ({
+          size,
+          quantity,
+        })),
+        totalQuantity: totalQty,
+        sourceSheet: "구글 시트",
+        detectedFormat: "unknown", // 휴리스틱 파싱이라 형식 단정 불가 → unknown으로
+      });
+    } catch (e) {
+      setGlobalError(
+        `시트 가져오기 실패: ${e instanceof Error ? e.message : String(e)}`
+      );
+    } finally {
+      setSheetLoading(false);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -529,11 +750,36 @@ function OrderGenerate() {
           </div>
         </div>
 
+        {/* 구글 시트 URL 입력 — 엑셀 업로드의 대안 */}
+        {/* 왜 별도 행: 엑셀 버튼과 공유 버튼이 한 줄에 있으면 좁아진다. URL 입력은 폭이 필요. */}
+        <div className="sheet-url-row">
+          <input
+            type="text"
+            className="sheet-url-input"
+            placeholder="또는 구글 시트 URL 붙여넣기 (공유: 링크 있는 모든 사용자 뷰어)"
+            value={sheetUrl}
+            onChange={(e) => setSheetUrl(e.target.value)}
+            disabled={sheetLoading || generating}
+          />
+          <button
+            type="button"
+            className="btn btn--small"
+            onClick={handleSheetImport}
+            disabled={sheetLoading || generating || !sheetUrl.trim()}
+          >
+            {sheetLoading ? "불러오는 중..." : "시트에서 가져오기"}
+          </button>
+        </div>
+
         {/* 주문서 파싱 요약 */}
         {orderResult && (
           <div className="order-summary">
             <div className="order-summary__header">
-              <span className="order-summary__badge">엑셀 주문서</span>
+              <span className="order-summary__badge">
+                {orderResult.sourceSheet === "구글 시트"
+                  ? "구글 시트"
+                  : "엑셀 주문서"}
+              </span>
               <span className="order-summary__info">
                 시트: {orderResult.sourceSheet} / 형식:{" "}
                 {orderResult.detectedFormat === "horizontal"
