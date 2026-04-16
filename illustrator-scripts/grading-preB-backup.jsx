@@ -377,49 +377,36 @@ function importPatternPaths(svgDoc, baseDoc, mainColor, fillLayer, patternLayer)
 }
 
 // ============================================================
-// 요소 배치 (B안: 디자인 AI 상대 위치 보존)
+// 몸판 중심 정렬 (Q2=b: 1회만)
 // ============================================================
 
-// 왜 상대 위치 보존: 디자인 AI에서 요소가 몸판의 어느 부위(가슴/배꼽 등)에 있었는지를
-// 상대 벡터로 측정해두고, SVG 몸판 중심에 linearScale만큼 확대한 벡터를 더해 최종 위치를
-// 만든다. 디자인 AI와 SVG 둘 다 "몸판 전체 bbox"를 기준점으로 쓰므로 띠 편향이 상쇄됨.
+// 왜 1회만: 조각별 독립 배치는 사이즈 커질수록 조각 간격 벌어짐이 요소 위치에 누적 전가됨.
+// 몸판 전체 bbox 중심으로 요소 그룹 중심을 한 번만 translate → 단순하고 안정적.
+function alignToBodyCenter(elementGroup, fillLayer) {
+    if (!elementGroup || !fillLayer) return;
+    var items = fillLayer.pageItems;
+    if (items.length === 0) return;
 
-// 여러 pageItem의 합집합 bbox 중심. 빈 배열/null이면 null 반환.
-function getItemsCenter(items) {
-    if (!items || items.length === 0) return null;
+    // 몸판 전체 bbox 계산
     var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (var i = 0; i < items.length; i++) {
-        var b = items[i].geometricBounds; // [L, T, R, B] (Y위가 큼)
+        var b = items[i].geometricBounds;  // [left, top, right, bottom]
         if (b[0] < minX) minX = b[0];
         if (b[1] > maxY) maxY = b[1];
         if (b[2] > maxX) maxX = b[2];
         if (b[3] < minY) minY = b[3];
     }
-    return { cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
-}
+    var bodyCx = (minX + maxX) / 2;
+    var bodyCy = (minY + maxY) / 2;
 
-// 레이어 전체 pageItems 합집합 중심
-function getLayerCenter(layer) {
-    if (!layer) return null;
-    return getItemsCenter(layer.pageItems);
-}
-
-// 요소 그룹을 SVG 몸판 중심 + (상대벡터 * 스케일) 위치로 이동
-function placeElementGroup(elementGroup, svgBodyCenter, relVec, linearScale) {
-    if (!elementGroup || !svgBodyCenter || !relVec) return;
-    // typeof 안전 체크 + 양수 보장 → 실패 시 1.0 폴백
-    var scale = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
-    var targetCx = svgBodyCenter.cx + relVec.dx * scale;
-    var targetCy = svgBodyCenter.cy + relVec.dy * scale;
+    // 요소 그룹 중심 → 몸판 중심으로 이동
     var gb = elementGroup.geometricBounds;
     var grpCx = (gb[0] + gb[2]) / 2;
     var grpCy = (gb[1] + gb[3]) / 2;
-    elementGroup.translate(targetCx - grpCx, targetCy - grpCy);
-    logWrite("[진단] 최종배치 svg몸판=(" + svgBodyCenter.cx.toFixed(1) + "," + svgBodyCenter.cy.toFixed(1)
-        + ") relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1)
-        + ") scale=" + scale.toFixed(4)
-        + " 타겟=(" + targetCx.toFixed(1) + "," + targetCy.toFixed(1) + ")"
-        + " 이동=(" + (targetCx - grpCx).toFixed(1) + "," + (targetCy - grpCy).toFixed(1) + ")");
+    elementGroup.translate(bodyCx - grpCx, bodyCy - grpCy);
+
+    logWrite("[grading-v2] 몸판 중심 정렬: 이동 dx=" + (bodyCx - grpCx).toFixed(1)
+        + " dy=" + (bodyCy - grpCy).toFixed(1));
 }
 
 // ============================================================
@@ -533,24 +520,6 @@ function main() {
             logWrite("[grading-v2] 요소 레퍼런스 수집: " + elemItems.length + "개");
         }
 
-        // B안: 디자인 AI의 (요소중심 - 몸판중심) 상대 벡터 측정
-        // 왜 지금: designDoc이 아직 열려있어야 geometricBounds 접근 가능.
-        // SVG 쪽에서 이 벡터에 linearScale을 곱해 최종 배치 위치를 만든다.
-        var relVec = { dx: 0, dy: 0 }; // 폴백 기본값 (측정 실패 시 중앙정렬과 동일)
-        if (hasBody && hasElements) {
-            var dBody = getLayerCenter(designDoc.layers.getByName("몸판"));
-            var dElem = getItemsCenter(elemItems); // elemItems 배열 직접 사용
-            if (dBody && dElem) {
-                relVec.dx = dElem.cx - dBody.cx;
-                relVec.dy = dElem.cy - dBody.cy;
-                logWrite("[진단] 디자인AI 몸판중심=(" + dBody.cx.toFixed(1) + "," + dBody.cy.toFixed(1)
-                    + ") 요소중심=(" + dElem.cx.toFixed(1) + "," + dElem.cy.toFixed(1)
-                    + ") 상대벡터=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")");
-            } else {
-                logWrite("[진단] 디자인AI 중심 측정 실패 → relVec=(0,0) 폴백 (현행 B안 = 기존 중앙정렬)");
-            }
-        }
-
         // ===== STEP 3: 새 CMYK 문서 생성 (아트보드 = 패턴 SVG 크기) =====
         // SVG를 먼저 열어 아트보드 크기를 읽어야 새 문서 크기 결정 가능
         var patternFile = new File(config.patternSvgPath);
@@ -621,12 +590,9 @@ function main() {
 
             // 면적 비율 스케일 (linearScale = sqrt(areaRatio))
             // 면적은 길이의 제곱에 비례 → 선형 스케일은 sqrt(면적비)
-            // 왜 if 밖에 선언: 아래 placeElementGroup 호출부에서도 linearScale 참조 필요.
-            //                  ES3는 블록 스코프 없지만 명확성 위해 미리 1.0으로 초기화.
-            var linearScale = 1.0;
             if (baseArea > 0 && targetArea > 0) {
                 var areaRatio = targetArea / baseArea;
-                linearScale = Math.sqrt(areaRatio);
+                var linearScale = Math.sqrt(areaRatio);
                 logWrite("[grading-v2] STEP 7: 면적비=" + areaRatio.toFixed(4)
                     + " 선형스케일=" + linearScale.toFixed(4)
                     + " (" + (linearScale * 100).toFixed(1) + "%)");
@@ -641,18 +607,8 @@ function main() {
                 logWrite("[grading-v2] 면적 계산 불가 - 스케일 생략");
             }
 
-            // B안: SVG 몸판중심 + (디자인AI 상대벡터 * linearScale) 위치로 이동
-            // 왜 fillLayer 합집합: 디자인 AI에서도 몸판 레이어 전체 합집합으로 측정 → 대칭
-            var svgBodyCenter = getLayerCenter(fillLayer);
-            if (!svgBodyCenter) {
-                logWrite("[진단] SVG 몸판중심 없음 - 배치 생략");
-            } else {
-                // typeof 안전 체크 후 폴백 처리
-                var scaleForPlace = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
-                logWrite("[진단] SVG 몸판중심=(" + svgBodyCenter.cx.toFixed(1) + "," + svgBodyCenter.cy.toFixed(1) + ")"
-                    + " 사용 스케일=" + scaleForPlace.toFixed(4));
-                placeElementGroup(pastedGroup, svgBodyCenter, relVec, scaleForPlace);
-            }
+            // Q2=b: 몸판 중심 1회 정렬 (조각별 X)
+            alignToBodyCenter(pastedGroup, fillLayer);
         } else {
             logWrite("[grading-v2] 요소 없음 - 스케일/정렬 생략");
         }
