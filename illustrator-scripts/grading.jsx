@@ -74,6 +74,46 @@ function writeTextFile(filePath, content) {
 }
 
 // ============================================================
+// 로그 (파일 출력 + $.writeln 병행)
+// ============================================================
+
+// 왜 파일 출력: ExtendScript Toolkit 없으면 $.writeln 결과 안 보임.
+// config.outputPath 옆에 grading-debug.log 저장 → 사용자가 노트패드로 확인.
+var _logFile = null;
+var _logFileInitialized = false;
+
+function initLogFile(outputPath) {
+    try {
+        // outputPath 부모 폴더 계산
+        var parent = outputPath.replace(/[\\\/][^\\\/]+$/, "");
+        if (!parent || parent === outputPath) parent = outputPath;
+        var logPath = parent + "\\grading-debug.log";
+        _logFile = new File(logPath);
+        _logFile.encoding = "UTF-8";
+        // 매 실행마다 덮어쓰기 (append 아님)
+        _logFile.open("w");
+        _logFile.write("=== grading-v2 실행 로그 (" + new Date().toString() + ") ===\n");
+        _logFile.close();
+        _logFileInitialized = true;
+    } catch (e) {
+        _logFileInitialized = false;
+    }
+}
+
+function logWrite(msg) {
+    // $.writeln도 유지 (ExtendScript Toolkit 연결 시 도움)
+    try { $.writeln(msg); } catch (e1) {}
+    // 파일 append
+    if (_logFileInitialized && _logFile) {
+        try {
+            _logFile.open("a");
+            _logFile.write(msg + "\n");
+            _logFile.close();
+        } catch (e2) {}
+    }
+}
+
+// ============================================================
 // 결과 기록
 // ============================================================
 
@@ -165,7 +205,7 @@ function extractBodyColor(designDoc) {
     try {
         bodyLayer = designDoc.layers.getByName("몸판");
     } catch (e) {
-        $.writeln("[grading-v2] '몸판' 레이어 없음");
+        logWrite("[grading-v2] '몸판' 레이어 없음");
         return null;
     }
 
@@ -173,7 +213,7 @@ function extractBodyColor(designDoc) {
     for (var i = 0; i < bodyLayer.pathItems.length; i++) {
         var p = bodyLayer.pathItems[i];
         if (p.filled && p.fillColor && p.fillColor.typename !== "NoColor") {
-            $.writeln("[grading-v2] 몸판 색 발견 (pathItems[" + i + "])");
+            logWrite("[grading-v2] 몸판 색 발견 (pathItems[" + i + "])");
             return toCMYK(p.fillColor);
         }
     }
@@ -188,14 +228,14 @@ function extractBodyColor(designDoc) {
             for (var gi = 0; gi < it.pathItems.length; gi++) {
                 var gp = it.pathItems[gi];
                 if (gp.filled && gp.fillColor && gp.fillColor.typename !== "NoColor") {
-                    $.writeln("[grading-v2] 몸판 색 발견 (그룹 내부)");
+                    logWrite("[grading-v2] 몸판 색 발견 (그룹 내부)");
                     return toCMYK(gp.fillColor);
                 }
             }
         }
     }
 
-    $.writeln("[grading-v2] 몸판에서 채워진 path 못 찾음");
+    logWrite("[grading-v2] 몸판에서 채워진 path 못 찾음");
     return null;
 }
 
@@ -258,28 +298,48 @@ function importPatternPaths(svgDoc, baseDoc, mainColor, fillLayer, patternLayer)
     for (var li = 0; li < svgDoc.layers.length; li++) {
         var src = svgDoc.layers[li];
 
+        // [진단] 레이어 전체 통계: 어떤 종류의 아이템이 몇 개 있는지 파악
+        logWrite("[진단] SVG 레이어[" + li + "] 이름=" + src.name
+            + " pathItems=" + src.pathItems.length
+            + " compoundPathItems=" + src.compoundPathItems.length
+            + " groupItems=" + src.groupItems.length
+            + " pageItems=" + src.pageItems.length);
+
+        // [진단] 각 pageItem 타입 스캔 (PathItem/CompoundPathItem/GroupItem 구분용)
+        for (var di = 0; di < src.pageItems.length; di++) {
+            var it = src.pageItems[di];
+            var w = 0, h = 0;
+            try { w = it.width; h = it.height; } catch (eWH) {}
+            var fl = false, cl = false;
+            try { fl = it.filled; } catch (eF) {}
+            try { cl = it.closed; } catch (eC) {}
+            logWrite("[진단]   [" + di + "] typename=" + it.typename
+                + " w=" + w.toFixed(1) + " h=" + h.toFixed(1)
+                + " filled=" + fl + " closed=" + cl);
+        }
+
         // 역순: duplicate/move가 인덱스 변경해도 안전
         var pathN = src.pathItems.length;
         for (var pi = pathN - 1; pi >= 0; pi--) {
             var path = src.pathItems[pi];
 
+            // [진단] 각 path의 크기/채움여부/50pt 통과 여부
+            logWrite("[진단]   path[" + pi + "] w=" + Math.abs(path.width).toFixed(1)
+                + " h=" + Math.abs(path.height).toFixed(1)
+                + " filled=" + path.filled
+                + " 50pt통과=" + (Math.abs(path.width) > 50 && Math.abs(path.height) > 50));
+
             if (Math.abs(path.width) > 50 && Math.abs(path.height) > 50) {
                 if (!path.closed) path.closed = true;
                 targetArea += Math.abs(path.area);
 
-                // 1) fill용 복제
+                // 1) fill용 복제 - 몸판은 항상 mainColor(디자인 AI 몸판 색)로 통일
+                // 왜 통일: SVG export 시 사이즈별로 fillColor가 들쭉날쭉(흰색으로 찍히기도 함)이라
+                //          원본 색을 따라가면 4XL 같은 사이즈에서 색 누락 발생.
+                //          단일 mainColor로 고정하면 모든 사이즈에서 일관된 결과.
                 var fillCopy = path.duplicate(fillLayer, ElementPlacement.PLACEATEND);
-
-                // "베인 색상 안 채우기" 로직:
-                //   이미 filled인 path는 원본 색상 유지 (CMYK로 정규화만)
-                //   filled 아니면 mainColor로 채움
-                if (path.filled && path.fillColor && path.fillColor.typename !== "NoColor") {
-                    fillCopy.filled = true;
-                    fillCopy.fillColor = toCMYK(path.fillColor);
-                } else {
-                    fillCopy.filled = true;
-                    fillCopy.fillColor = cloneCMYK(mainColor);
-                }
+                fillCopy.filled = true;
+                fillCopy.fillColor = cloneCMYK(mainColor);
                 fillCopy.stroked = false;
 
                 // 2) stroke용 복제 (패턴 선)
@@ -308,6 +368,10 @@ function importPatternPaths(svgDoc, baseDoc, mainColor, fillLayer, patternLayer)
             src.groupItems[gi].duplicate(patternLayer, ElementPlacement.PLACEATEND);
         }
     }
+
+    // [진단] 함수 종료 직전 최종 결과 (몸판 색상 채움 count + 누적 면적)
+    logWrite("[진단] importPatternPaths 결과: filledCount=" + filledCount
+        + " targetArea=" + targetArea.toFixed(1));
 
     return { filledCount: filledCount, targetArea: targetArea };
 }
@@ -341,7 +405,7 @@ function alignToBodyCenter(elementGroup, fillLayer) {
     var grpCy = (gb[1] + gb[3]) / 2;
     elementGroup.translate(bodyCx - grpCx, bodyCy - grpCy);
 
-    $.writeln("[grading-v2] 몸판 중심 정렬: 이동 dx=" + (bodyCx - grpCx).toFixed(1)
+    logWrite("[grading-v2] 몸판 중심 정렬: 이동 dx=" + (bodyCx - grpCx).toFixed(1)
         + " dy=" + (bodyCy - grpCy).toFixed(1));
 }
 
@@ -353,7 +417,7 @@ function readConfig() {
     var scriptFile = new File($.fileName);
     var folder = scriptFile.parent;
     var configPath = folder.fsName + "\\config.json";
-    $.writeln("[grading-v2] config: " + configPath);
+    logWrite("[grading-v2] config: " + configPath);
 
     var config = jsonParse(readTextFile(configPath));
 
@@ -363,9 +427,12 @@ function readConfig() {
     if (!config.outputPath) throw new Error("config.outputPath 필요");
     if (!config.resultJsonPath) throw new Error("config.resultJsonPath 필요");
 
-    $.writeln("[grading-v2] 디자인 AI: " + config.designAiPath);
-    $.writeln("[grading-v2] 패턴 SVG: " + config.patternSvgPath);
-    $.writeln("[grading-v2] 출력: " + config.outputPath);
+    logWrite("[grading-v2] 디자인 AI: " + config.designAiPath);
+    logWrite("[grading-v2] 패턴 SVG: " + config.patternSvgPath);
+    logWrite("[grading-v2] 출력: " + config.outputPath);
+
+    // 로그 파일 초기화 (outputPath 부모 폴더에 grading-debug.log)
+    initLogFile(config.outputPath);
 
     return config;
 }
@@ -375,7 +442,7 @@ function readConfig() {
 // ============================================================
 
 function main() {
-    $.writeln("[grading-v2] 시작 (사용자 초기 7단계 흐름)");
+    logWrite("[grading-v2] 시작 (사용자 초기 7단계 흐름)");
 
     // 상위 스코프 문서 핸들 (catch에서 정리용)
     var designDoc = null;
@@ -392,11 +459,11 @@ function main() {
         if (!designFile.exists) throw new Error("디자인 AI 파일 없음: " + config.designAiPath);
 
         designDoc = app.open(designFile);
-        $.writeln("[grading-v2] STEP 1: 디자인 열림 - " + designDoc.name);
+        logWrite("[grading-v2] STEP 1: 디자인 열림 - " + designDoc.name);
 
         // CMYK 체크 (경고만, 계속 진행)
         if (designDoc.documentColorSpace !== DocumentColorSpace.CMYK) {
-            $.writeln("[grading-v2] 경고: 디자인이 CMYK 모드 아님");
+            logWrite("[grading-v2] 경고: 디자인이 CMYK 모드 아님");
         }
 
         // 레이어 존재 확인
@@ -409,9 +476,9 @@ function main() {
             if (ln === "패턴선") hasPatternLine = true;
             if (ln === "요소") hasElements = true;
         }
-        if (!hasBody) $.writeln("[grading-v2] 경고: '몸판' 레이어 없음");
-        if (!hasPatternLine) $.writeln("[grading-v2] 경고: '패턴선' 레이어 없음");
-        if (!hasElements) $.writeln("[grading-v2] 경고: '요소' 레이어 없음");
+        if (!hasBody) logWrite("[grading-v2] 경고: '몸판' 레이어 없음");
+        if (!hasPatternLine) logWrite("[grading-v2] 경고: '패턴선' 레이어 없음");
+        if (!hasElements) logWrite("[grading-v2] 경고: '요소' 레이어 없음");
 
         // 몸판 색상 추출
         var mainColor = extractBodyColor(designDoc);
@@ -419,9 +486,9 @@ function main() {
             // 폴백: 검정
             mainColor = new CMYKColor();
             mainColor.cyan = 0; mainColor.magenta = 0; mainColor.yellow = 0; mainColor.black = 100;
-            $.writeln("[grading-v2] 경고: 몸판 색 추출 실패, 기본 검정 사용");
+            logWrite("[grading-v2] 경고: 몸판 색 추출 실패, 기본 검정 사용");
         } else {
-            $.writeln("[grading-v2] 몸판 색 CMYK: C" + mainColor.cyan.toFixed(1)
+            logWrite("[grading-v2] 몸판 색 CMYK: C" + mainColor.cyan.toFixed(1)
                 + " M" + mainColor.magenta.toFixed(1)
                 + " Y" + mainColor.yellow.toFixed(1)
                 + " K" + mainColor.black.toFixed(1));
@@ -435,10 +502,10 @@ function main() {
                 var patternLineLayer = designDoc.layers.getByName("패턴선");
                 var baseResult = calcLayerArea(patternLineLayer);
                 baseArea = baseResult.area;
-                $.writeln("[grading-v2] STEP 2: 기준 면적=" + baseArea.toFixed(0)
+                logWrite("[grading-v2] STEP 2: 기준 면적=" + baseArea.toFixed(0)
                     + "pt² (" + baseResult.count + "개 조각)");
             } catch (e) {
-                $.writeln("[grading-v2] 기준 면적 계산 실패: " + e.message);
+                logWrite("[grading-v2] 기준 면적 계산 실패: " + e.message);
             }
         }
 
@@ -450,7 +517,7 @@ function main() {
             for (var ei = 0; ei < elemLayer.pageItems.length; ei++) {
                 elemItems.push(elemLayer.pageItems[ei]);
             }
-            $.writeln("[grading-v2] 요소 레퍼런스 수집: " + elemItems.length + "개");
+            logWrite("[grading-v2] 요소 레퍼런스 수집: " + elemItems.length + "개");
         }
 
         // ===== STEP 3: 새 CMYK 문서 생성 (아트보드 = 패턴 SVG 크기) =====
@@ -462,7 +529,7 @@ function main() {
         var svgAb = svgDoc.artboards[0].artboardRect;
         var svgWidth = svgAb[2] - svgAb[0];
         var svgHeight = svgAb[1] - svgAb[3];
-        $.writeln("[grading-v2] STEP 3: SVG 아트보드 " + svgWidth.toFixed(1)
+        logWrite("[grading-v2] STEP 3: SVG 아트보드 " + svgWidth.toFixed(1)
             + "x" + svgHeight.toFixed(1) + "pt");
 
         baseDoc = createCmykDoc(svgWidth, svgHeight);
@@ -482,14 +549,14 @@ function main() {
         var importResult = importPatternPaths(svgDoc, baseDoc, mainColor, fillLayer, patternLayer);
         var filledCount = importResult.filledCount;
         var targetArea = importResult.targetArea;
-        $.writeln("[grading-v2] STEP 4-5: " + filledCount + "개 조각 임포트, 타겟 면적="
+        logWrite("[grading-v2] STEP 4-5: " + filledCount + "개 조각 임포트, 타겟 면적="
             + targetArea.toFixed(0) + "pt²");
 
-        if (filledCount === 0) $.writeln("[grading-v2] 경고: 50pt 이상 조각 없음");
+        if (filledCount === 0) logWrite("[grading-v2] 경고: 50pt 이상 조각 없음");
 
         // SVG 원본 닫기 (path는 이미 duplicate 완료)
         try { svgDoc.close(SaveOptions.DONOTSAVECHANGES); svgDoc = null; }
-        catch (eSvg) { $.writeln("[grading-v2] SVG close 실패: " + eSvg.message); }
+        catch (eSvg) { logWrite("[grading-v2] SVG close 실패: " + eSvg.message); }
 
         // 빈 기본 레이어 제거
         try { if (defaultLayer.pageItems.length === 0) defaultLayer.remove(); } catch (eDef) {}
@@ -503,11 +570,11 @@ function main() {
             var dup = elemItems[di].duplicate(designLayer, ElementPlacement.PLACEATEND);
             pastedItems.push(dup);
         }
-        $.writeln("[grading-v2] STEP 6: " + pastedItems.length + "개 요소 복제");
+        logWrite("[grading-v2] STEP 6: " + pastedItems.length + "개 요소 복제");
 
         // 이제 designDoc 닫아도 안전
         try { designDoc.close(SaveOptions.DONOTSAVECHANGES); designDoc = null; }
-        catch (eD) { $.writeln("[grading-v2] 디자인 close 실패: " + eD.message); }
+        catch (eD) { logWrite("[grading-v2] 디자인 close 실패: " + eD.message); }
 
         // ===== STEP 7: 스케일 + 몸판 중심 1회 정렬 (Q2=b) =====
         if (pastedItems.length > 0) {
@@ -526,7 +593,7 @@ function main() {
             if (baseArea > 0 && targetArea > 0) {
                 var areaRatio = targetArea / baseArea;
                 var linearScale = Math.sqrt(areaRatio);
-                $.writeln("[grading-v2] STEP 7: 면적비=" + areaRatio.toFixed(4)
+                logWrite("[grading-v2] STEP 7: 면적비=" + areaRatio.toFixed(4)
                     + " 선형스케일=" + linearScale.toFixed(4)
                     + " (" + (linearScale * 100).toFixed(1) + "%)");
 
@@ -537,13 +604,13 @@ function main() {
                     pastedGroup.resize(pct, pct, true, true, true, true, pct, Transformation.CENTER);
                 }
             } else {
-                $.writeln("[grading-v2] 면적 계산 불가 - 스케일 생략");
+                logWrite("[grading-v2] 면적 계산 불가 - 스케일 생략");
             }
 
             // Q2=b: 몸판 중심 1회 정렬 (조각별 X)
             alignToBodyCenter(pastedGroup, fillLayer);
         } else {
-            $.writeln("[grading-v2] 요소 없음 - 스케일/정렬 생략");
+            logWrite("[grading-v2] 요소 없음 - 스케일/정렬 생략");
         }
 
         baseDoc.selection = null;
@@ -570,12 +637,12 @@ function main() {
         try { designLayer.remove(); } catch (e2) {}
         try { patternLayer.remove(); } catch (e3) {}
 
-        $.writeln("[grading-v2] 레이어 통합 완료");
+        logWrite("[grading-v2] 레이어 통합 완료");
 
         // ===== STEP 8: EPS 저장 =====
         var outputFile = new File(config.outputPath);
         baseDoc.saveAs(outputFile, createEpsOptions());
-        $.writeln("[grading-v2] STEP 8: EPS 저장 완료 - " + config.outputPath);
+        logWrite("[grading-v2] STEP 8: EPS 저장 완료 - " + config.outputPath);
 
         // ===== STEP 9: result.json =====
         baseDoc.close(SaveOptions.DONOTSAVECHANGES);
@@ -583,10 +650,10 @@ function main() {
 
         writeSuccessResult(resultPath, config.outputPath,
             "그레이딩 완료 (v2, " + filledCount + "개 조각 + " + pastedItems.length + "개 요소)");
-        $.writeln("[grading-v2] 완료!");
+        logWrite("[grading-v2] 완료!");
 
     } catch (err) {
-        $.writeln("[grading-v2] 오류: " + err.message);
+        logWrite("[grading-v2] 오류: " + err.message);
 
         // 열린 문서 정리 (역순)
         try { if (designDoc) designDoc.close(SaveOptions.DONOTSAVECHANGES); } catch (eD) {}
