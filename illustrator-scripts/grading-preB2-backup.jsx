@@ -404,128 +404,22 @@ function getLayerCenter(layer) {
     return getItemsCenter(layer.pageItems);
 }
 
-// ============================================================
-// B-2안: 몸판 조각별 개별 요소 배치
-// ============================================================
-
-// 왜 band/bodies 분리: 디자인 AI "몸판" 레이어에는 몸판 본체 조각(body) 외에도
-// 소매단/밑단 같은 띠(band)가 함께 들어있을 수 있다. 띠는 중심이 치우쳐 있어
-// 요소 소속 판정의 기준으로 쓰면 왜곡이 생긴다. 높이 < 500pt 조각은 띠로 분류해 제외하고,
-// 남은 큰 조각만 x중심 오름차순으로 정렬해 idx를 부여한다.
-// 이렇게 하면 디자인 AI와 SVG 양쪽에서 "좌→우 순서"가 레이어 내 path 순서와 무관하게
-// 고정되므로 designBodies[i] ↔ svgBodies[i] 인덱스 매칭이 안정적이다.
-var BODY_BAND_HEIGHT_THRESHOLD = 500; // 높이 < 500pt 는 band(띠)로 분류
-
-// 몸판 레이어의 pathItems를 band/bodies로 분류 + x중심 오름차순 정렬 + idx 부여
-function classifyBodyPieces(layer) {
-    var result = { bands: [], bodies: [], source: "", pieceCount: 0 };
-    if (!layer) return result;
-
-    for (var i = 0; i < layer.pathItems.length; i++) {
-        var p = layer.pathItems[i];
-        // geometricBounds = [L, T, R, B] (일러스트 좌표: Y 위가 큼)
-        var b = p.geometricBounds;
-        var w = Math.abs(b[2] - b[0]);
-        var h = Math.abs(b[1] - b[3]);
-        var cx = (b[0] + b[2]) / 2;
-        var cy = (b[1] + b[3]) / 2;
-        var areaSize = w * h;
-
-        var piece = { cx: cx, cy: cy, bbox: b, areaSize: areaSize };
-
-        if (h < BODY_BAND_HEIGHT_THRESHOLD) {
-            // 띠(band): 낮고 긴 조각
-            result.bands.push(piece);
-        } else {
-            // body: 본체 조각 후보
-            result.bodies.push(piece);
-        }
-    }
-
-    // 왜 정렬: 디자인 AI와 SVG의 레이어 내 path 순서가 다를 수 있으므로
-    //          x중심 오름차순으로 통일해 "좌→우 idx" 대응을 보장한다.
-    result.bodies.sort(function(a, b) {
-        return a.cx - b.cx;
-    });
-
-    // idx 부여 (0..N-1)
-    for (var j = 0; j < result.bodies.length; j++) {
-        result.bodies[j].idx = j;
-    }
-
-    result.pieceCount = result.bodies.length;
-    return result;
-}
-
-// 요소 1개의 소속 body 조각 인덱스 판별 (유클리드 거리 최단)
-// 반환: bodies의 idx (0..N-1) 또는 -1 (bodies 비었을 때 = fallback 트리거)
-function assignElementToPiece(elemItem, bodies) {
-    if (!bodies || bodies.length === 0) return -1;
-
-    var elemCenter = getItemsCenter([elemItem]);
-    if (!elemCenter) return -1;
-
-    var bestIdx = -1;
-    var bestDist = -1;
-    for (var i = 0; i < bodies.length; i++) {
-        var dx = elemCenter.cx - bodies[i].cx;
-        var dy = elemCenter.cy - bodies[i].cy;
-        // 왜 Math.sqrt: Math.hypot 은 ES3에 없음
-        var dist = Math.sqrt(dx * dx + dy * dy);
-        // 동률 시 더 작은 idx 우선 (결정적 동작) → 부등호 strict
-        if (bestIdx === -1 || dist < bestDist) {
-            bestIdx = bodies[i].idx; // 정렬 후 부여된 idx 그대로 사용
-            bestDist = dist;
-        }
-    }
-    return bestIdx;
-}
-
-// 요소별 메타(__pieceIdx, __relVec)에 따라 각 요소를 SVG bodies 기준 위치로 개별 translate
-// pastedItems[i] 와 elemMeta[i] 는 인덱스 1:1 대응
-function placeElementGroupPerPiece(pastedItems, elemMeta, svgBodies, fallbackCenter, linearScale) {
-    if (!pastedItems || pastedItems.length === 0) return;
+// 요소 그룹을 SVG 몸판 중심 + (상대벡터 * 스케일) 위치로 이동
+function placeElementGroup(elementGroup, svgBodyCenter, relVec, linearScale) {
+    if (!elementGroup || !svgBodyCenter || !relVec) return;
+    // typeof 안전 체크 + 양수 보장 → 실패 시 1.0 폴백
     var scale = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
-
-    for (var i = 0; i < pastedItems.length; i++) {
-        var item = pastedItems[i];
-        if (!item) continue;
-
-        var meta = (elemMeta && elemMeta[i]) ? elemMeta[i] : null;
-        var pieceIdx = meta ? meta.pieceIdx : -1;
-        var relVec = (meta && meta.relVec) ? meta.relVec : { dx: 0, dy: 0 };
-
-        // 왜 분기: svgBodies 범위 내 idx면 조각 기준 배치, 아니면 B안 폴백(합집합 중심)
-        var baseCenter = null;
-        var mode = "";
-        if (pieceIdx >= 0 && svgBodies && pieceIdx < svgBodies.length) {
-            baseCenter = svgBodies[pieceIdx];
-            mode = "piece";
-        } else {
-            baseCenter = fallbackCenter;
-            mode = "fallback";
-        }
-
-        if (!baseCenter) {
-            logWrite("[진단] 요소[" + i + "] 배치 생략: baseCenter 없음 (pieceIdx=" + pieceIdx + ")");
-            continue;
-        }
-
-        var targetCx = baseCenter.cx + relVec.dx * scale;
-        var targetCy = baseCenter.cy + relVec.dy * scale;
-
-        // 현재 item 중심 → 타겟으로 translate
-        var gb = item.geometricBounds;
-        var curCx = (gb[0] + gb[2]) / 2;
-        var curCy = (gb[1] + gb[3]) / 2;
-        item.translate(targetCx - curCx, targetCy - curCy);
-
-        logWrite("[진단] 요소[" + i + "] 배치(" + mode + "): pieceIdx=" + pieceIdx
-            + " svg중심=(" + baseCenter.cx.toFixed(1) + "," + baseCenter.cy.toFixed(1) + ")"
-            + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
-            + " scale=" + scale.toFixed(4)
-            + " 타겟=(" + targetCx.toFixed(1) + "," + targetCy.toFixed(1) + ")");
-    }
+    var targetCx = svgBodyCenter.cx + relVec.dx * scale;
+    var targetCy = svgBodyCenter.cy + relVec.dy * scale;
+    var gb = elementGroup.geometricBounds;
+    var grpCx = (gb[0] + gb[2]) / 2;
+    var grpCy = (gb[1] + gb[3]) / 2;
+    elementGroup.translate(targetCx - grpCx, targetCy - grpCy);
+    logWrite("[진단] 최종배치 svg몸판=(" + svgBodyCenter.cx.toFixed(1) + "," + svgBodyCenter.cy.toFixed(1)
+        + ") relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1)
+        + ") scale=" + scale.toFixed(4)
+        + " 타겟=(" + targetCx.toFixed(1) + "," + targetCy.toFixed(1) + ")"
+        + " 이동=(" + (targetCx - grpCx).toFixed(1) + "," + (targetCy - grpCy).toFixed(1) + ")");
 }
 
 // ============================================================
@@ -639,54 +533,21 @@ function main() {
             logWrite("[grading-v2] 요소 레퍼런스 수집: " + elemItems.length + "개");
         }
 
-        // B-2안: 몸판 조각 분류 + 요소별 소속/상대벡터 계산
+        // B안: 디자인 AI의 (요소중심 - 몸판중심) 상대 벡터 측정
         // 왜 지금: designDoc이 아직 열려있어야 geometricBounds 접근 가능.
-        // 각 요소마다 "소속 body 조각"을 판별하고, 그 조각 중심을 기준으로 개별 상대벡터를 측정.
-        // SVG 쪽에서 동일하게 조각 분류 후 각 요소를 자기 조각 기준으로 배치한다.
-        var designPieces = null;
-        var elemMeta = []; // [{ index, pieceIdx, relVec }, ...] 인덱스 = elemItems와 1:1
-        var designFallbackCenter = null; // bodies.length===0 또는 매칭 실패 시 폴백 (B안 동작)
-
+        // SVG 쪽에서 이 벡터에 linearScale을 곱해 최종 배치 위치를 만든다.
+        var relVec = { dx: 0, dy: 0 }; // 폴백 기본값 (측정 실패 시 중앙정렬과 동일)
         if (hasBody && hasElements) {
-            var designBodyLayer = designDoc.layers.getByName("몸판");
-            designPieces = classifyBodyPieces(designBodyLayer);
-            designPieces.source = "design";
-            designFallbackCenter = getLayerCenter(designBodyLayer);
-
-            // 좌→우 cx 리스트 로그 (사용자 육안 검증용)
-            var designCxList = "";
-            for (var di = 0; di < designPieces.bodies.length; di++) {
-                designCxList += (di > 0 ? ", " : "") + "body" + di + "=" + designPieces.bodies[di].cx.toFixed(1);
-            }
-            logWrite("[진단] 디자인AI 몸판 분류: bands=" + designPieces.bands.length
-                + "개 bodies=" + designPieces.bodies.length + "개 (좌→우: " + designCxList + ")");
-
-            for (var mi = 0; mi < elemItems.length; mi++) {
-                var elem = elemItems[mi];
-                var elemCenter = getItemsCenter([elem]);
-                var pieceIdx = assignElementToPiece(elem, designPieces.bodies);
-                // 소속 조각 중심 (없으면 fallback 중심)
-                var pieceCenter = (pieceIdx >= 0 && pieceIdx < designPieces.bodies.length)
-                                  ? designPieces.bodies[pieceIdx]
-                                  : designFallbackCenter;
-
-                var rv = { dx: 0, dy: 0 };
-                if (elemCenter && pieceCenter) {
-                    rv.dx = elemCenter.cx - pieceCenter.cx;
-                    rv.dy = elemCenter.cy - pieceCenter.cy;
-                }
-                elemMeta.push({ index: mi, pieceIdx: pieceIdx, relVec: rv });
-
-                // 거리 로그 (음수 = 측정 실패 표기)
-                var distLog = -1;
-                if (elemCenter && pieceCenter) {
-                    var dxL = elemCenter.cx - pieceCenter.cx;
-                    var dyL = elemCenter.cy - pieceCenter.cy;
-                    distLog = Math.sqrt(dxL * dxL + dyL * dyL);
-                }
-                logWrite("[진단] 요소[" + mi + "] 소속 body 인덱스=" + pieceIdx
-                    + " (거리=" + (distLog >= 0 ? distLog.toFixed(1) : "?") + ")"
-                    + " relVec=(" + rv.dx.toFixed(1) + "," + rv.dy.toFixed(1) + ")");
+            var dBody = getLayerCenter(designDoc.layers.getByName("몸판"));
+            var dElem = getItemsCenter(elemItems); // elemItems 배열 직접 사용
+            if (dBody && dElem) {
+                relVec.dx = dElem.cx - dBody.cx;
+                relVec.dy = dElem.cy - dBody.cy;
+                logWrite("[진단] 디자인AI 몸판중심=(" + dBody.cx.toFixed(1) + "," + dBody.cy.toFixed(1)
+                    + ") 요소중심=(" + dElem.cx.toFixed(1) + "," + dElem.cy.toFixed(1)
+                    + ") 상대벡터=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")");
+            } else {
+                logWrite("[진단] 디자인AI 중심 측정 실패 → relVec=(0,0) 폴백 (현행 B안 = 기존 중앙정렬)");
             }
         }
 
@@ -746,7 +607,7 @@ function main() {
         try { designDoc.close(SaveOptions.DONOTSAVECHANGES); designDoc = null; }
         catch (eD) { logWrite("[grading-v2] 디자인 close 실패: " + eD.message); }
 
-        // ===== STEP 7: 스케일(그룹) + 조각별 개별 배치 (B-2안) =====
+        // ===== STEP 7: 스케일 + 몸판 중심 1회 정렬 (Q2=b) =====
         if (pastedItems.length > 0) {
             // 복제된 아이템을 selection에 재등록
             baseDoc.selection = null;
@@ -754,12 +615,14 @@ function main() {
                 pastedItems[si].selected = true;
             }
 
-            // 그룹화 (요소 간 내부 비율 보존 목적으로 resize만 그룹 기준에서 1회)
+            // 그룹화 (1개든 N개든 통일 처리)
             app.executeMenuCommand("group");
             var pastedGroup = baseDoc.selection[0];
 
             // 면적 비율 스케일 (linearScale = sqrt(areaRatio))
-            // 왜 if 밖에 선언: 아래 배치 호출부에서도 linearScale 참조 필요.
+            // 면적은 길이의 제곱에 비례 → 선형 스케일은 sqrt(면적비)
+            // 왜 if 밖에 선언: 아래 placeElementGroup 호출부에서도 linearScale 참조 필요.
+            //                  ES3는 블록 스코프 없지만 명확성 위해 미리 1.0으로 초기화.
             var linearScale = 1.0;
             if (baseArea > 0 && targetArea > 0) {
                 var areaRatio = targetArea / baseArea;
@@ -771,49 +634,25 @@ function main() {
                 // 0.5% 이상 차이 있을 때만 적용
                 if (Math.abs(linearScale - 1.0) > 0.005) {
                     var pct = linearScale * 100;
-                    // Transformation.CENTER: 그룹 중심 기준 resize (요소 간 비율 유지)
+                    // Transformation.CENTER: 그룹 중심 기준 resize
                     pastedGroup.resize(pct, pct, true, true, true, true, pct, Transformation.CENTER);
                 }
             } else {
                 logWrite("[grading-v2] 면적 계산 불가 - 스케일 생략");
             }
 
-            // --- 그룹 해제 (표준 ungroup 명령) ---
-            // 왜 ungroup: 이제부터 각 요소를 pieceIdx에 따라 개별 translate해야 하므로
-            //             그룹 단위 이동을 해제한다. pastedItems 배열은 duplicate 시점의
-            //             최상위 1레벨 참조만 담고 있어 1회 ungroup 으로 우리가 만든 그룹만 해제됨.
-            app.executeMenuCommand("ungroup");
-
-            // --- SVG fillLayer 조각 분류 (디자인 AI와 동일 알고리즘) ---
-            var svgPieces = classifyBodyPieces(fillLayer);
-            svgPieces.source = "svg";
-            var svgFallback = getLayerCenter(fillLayer);
-
-            // SVG bodies cx 리스트 로그
-            var svgCxList = "";
-            for (var sci = 0; sci < svgPieces.bodies.length; sci++) {
-                svgCxList += (sci > 0 ? ", " : "") + "body" + sci + "=" + svgPieces.bodies[sci].cx.toFixed(1);
+            // B안: SVG 몸판중심 + (디자인AI 상대벡터 * linearScale) 위치로 이동
+            // 왜 fillLayer 합집합: 디자인 AI에서도 몸판 레이어 전체 합집합으로 측정 → 대칭
+            var svgBodyCenter = getLayerCenter(fillLayer);
+            if (!svgBodyCenter) {
+                logWrite("[진단] SVG 몸판중심 없음 - 배치 생략");
+            } else {
+                // typeof 안전 체크 후 폴백 처리
+                var scaleForPlace = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
+                logWrite("[진단] SVG 몸판중심=(" + svgBodyCenter.cx.toFixed(1) + "," + svgBodyCenter.cy.toFixed(1) + ")"
+                    + " 사용 스케일=" + scaleForPlace.toFixed(4));
+                placeElementGroup(pastedGroup, svgBodyCenter, relVec, scaleForPlace);
             }
-            logWrite("[진단] SVG 몸판 분류: bands=" + svgPieces.bands.length
-                + "개 bodies=" + svgPieces.bodies.length + "개 (좌→우: " + svgCxList + ")");
-
-            // 매칭 일치/불일치 판정
-            var designBodyCount = designPieces ? designPieces.bodies.length : 0;
-            var svgBodyCount = svgPieces.bodies.length;
-            var matchCount = Math.min(designBodyCount, svgBodyCount);
-            var matchStatus = (designBodyCount === svgBodyCount) ? "일치" : "불일치";
-            logWrite("[진단] 매칭 결과: designBodies=" + designBodyCount
-                + "개 svgBodies=" + svgBodyCount
-                + "개 (" + matchStatus + ", 유효 매칭=" + matchCount + "개)");
-            if (matchStatus === "불일치") {
-                logWrite("[진단] 경고: 몸판 조각 개수 불일치 (design="
-                    + designBodyCount + ", svg=" + svgBodyCount
-                    + ") → min 까지 매칭, 초과분 fallback");
-            }
-
-            // --- 요소별 개별 배치 (pieceIdx 기반) ---
-            var scaleForPlace = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
-            placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces.bodies, svgFallback, scaleForPlace);
         } else {
             logWrite("[grading-v2] 요소 없음 - 스케일/정렬 생략");
         }
