@@ -251,12 +251,26 @@ function extractBodyColor(designDoc) {
 function calcLayerArea(layer) {
     var total = 0;
     var count = 0;
+    // 직속 pathItems
     for (var i = 0; i < layer.pathItems.length; i++) {
         var p = layer.pathItems[i];
         if (Math.abs(p.width) > 50 && Math.abs(p.height) > 50) {
             if (!p.closed) p.closed = true;
             total += Math.abs(p.area);
             count++;
+        }
+    }
+    // GroupItem 내부 pathItems (재귀 1단계)
+    // 왜: ungroup이 패턴선 레이어에는 적용 안 될 수 있어서 방어적 처리
+    for (var gi = 0; gi < layer.groupItems.length; gi++) {
+        var grp = layer.groupItems[gi];
+        for (var gpi = 0; gpi < grp.pathItems.length; gpi++) {
+            var gp = grp.pathItems[gpi];
+            if (Math.abs(gp.width) > 50 && Math.abs(gp.height) > 50) {
+                if (!gp.closed) gp.closed = true;
+                total += Math.abs(gp.area);
+                count++;
+            }
         }
     }
     return { area: total, count: count };
@@ -808,6 +822,25 @@ function main() {
         var elemMeta = []; // [{ pieceType, pieceIdx, relVec }, ...] 인덱스 = elemItems와 1:1
         var designFallbackCenter = null; // bodies.length===0 또는 매칭 실패 시 폴백 (B안 동작)
 
+        // 디자인 AI 몸판 레이어 GroupItem 해제
+        // 왜: 양면 유니폼 등에서 몸판 4개 중 일부가 그룹 안에 있으면
+        //      classifyBodyPieces가 2개만 인식
+        if (hasBody) {
+            var bodyLayer = designDoc.layers.getByName("몸판");
+            app.activeDocument = designDoc;
+            for (var ubgi = 0; ubgi < 3; ubgi++) {
+                if (bodyLayer.groupItems.length === 0) break;
+                // 레이어 내 아이템만 선택하여 ungroup
+                designDoc.selection = null;
+                for (var sli = 0; sli < bodyLayer.pageItems.length; sli++) {
+                    bodyLayer.pageItems[sli].selected = true;
+                }
+                app.executeMenuCommand("ungroup");
+            }
+            designDoc.selection = null;
+            logWrite("[grading-v2] 디자인AI 몸판 ungroup: " + bodyLayer.pathItems.length + "개 path");
+        }
+
         if (hasBody && hasElements) {
             var designBodyLayer = designDoc.layers.getByName("몸판");
             designPieces = classifyBodyPieces(designBodyLayer);
@@ -946,6 +979,19 @@ function main() {
         var svgHeight = svgAb[1] - svgAb[3];
         logWrite("[grading-v2] STEP 3: SVG 아트보드 " + svgWidth.toFixed(1)
             + "x" + svgHeight.toFixed(1) + "pt");
+
+        // SVG GroupItem 해제 (양면 유니폼 등 그룹으로 묶인 SVG 대응)
+        // 왜: SVG export 시 path가 GroupItem으로 묶여있으면
+        //      importPatternPaths가 pathItems를 못 잡음 (filledCount=0)
+        // 해결: 모든 그룹을 풀어 path를 레이어 직속으로 올림
+        app.activeDocument = svgDoc;
+        for (var ugi = 0; ugi < 3; ugi++) {  // 중첩 그룹 대비 최대 3회
+            if (svgDoc.layers[0].groupItems.length === 0) break;
+            app.executeMenuCommand("selectall");
+            app.executeMenuCommand("ungroup");
+        }
+        app.selection = null;
+        logWrite("[grading-v2] SVG ungroup 완료: " + svgDoc.layers[0].pathItems.length + "개 path 노출");
 
         // 대지 사이즈 고정: 158cm × 200cm (사내 작업 기준)
         var ARTBOARD_W_CM = 158;
