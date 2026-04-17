@@ -67,7 +67,13 @@
     },
     {
       "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "$APPDATA/**" }]
+      "allow": [
+        { "path": "$APPDATA/**" },
+        { "path": "$DESKTOP/**" },
+        { "path": "G:/**" },
+        { "path": "H:/**" },
+        { "path": "C:/Users/**" }
+      ]
     }
   ]
 }

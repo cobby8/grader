@@ -273,7 +273,7 @@ function createCmykDoc(widthPt, heightPt) {
     preset.colorMode = DocumentColorSpace.CMYK;
     preset.width = widthPt;
     preset.height = heightPt;
-    preset.units = RulerUnits.Points;
+    preset.units = RulerUnits.Millimeters;
     preset.title = "grading-v2-base";
     var doc = app.documents.addDocument("Print", preset);
     // artboardRect = [left, top, right, bottom] (Y축 위가 큰 값)
@@ -495,24 +495,34 @@ function assignElementToPiece(elemItem, bodies) {
     return bestIdx;
 }
 
-// 요소별 메타(__pieceIdx, __relVec)에 따라 각 요소를 SVG bodies 기준 위치로 개별 translate
+// 요소별 메타(pieceType, pieceIdx, relVec)에 따라 각 요소를 SVG body/band 기준 위치로 개별 translate
 // pastedItems[i] 와 elemMeta[i] 는 인덱스 1:1 대응
-function placeElementGroupPerPiece(pastedItems, elemMeta, svgBodies, fallbackCenter, linearScale) {
+// svgPieces: { bodies: [...], bands: [...] } — body와 band 모두 참조 가능
+function placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces, fallbackCenter, linearScale, bandPositions) {
     if (!pastedItems || pastedItems.length === 0) return;
     var scale = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
+    // svgPieces에서 bodies/bands 꺼내기 (하위호환: 배열이 직접 들어오면 bodies로 간주)
+    var svgBodies = (svgPieces && svgPieces.bodies) ? svgPieces.bodies : (svgPieces || []);
+    var svgBands = (svgPieces && svgPieces.bands) ? svgPieces.bands : [];
 
     for (var i = 0; i < pastedItems.length; i++) {
         var item = pastedItems[i];
         if (!item) continue;
 
         var meta = (elemMeta && elemMeta[i]) ? elemMeta[i] : null;
+        var pieceType = (meta && meta.pieceType) ? meta.pieceType : "body";
         var pieceIdx = meta ? meta.pieceIdx : -1;
         var relVec = (meta && meta.relVec) ? meta.relVec : { dx: 0, dy: 0 };
 
-        // 왜 분기: svgBodies 범위 내 idx면 조각 기준 배치, 아니면 B안 폴백(합집합 중심)
+        // 왜 분기: pieceType에 따라 body 또는 band 배열에서 기준 조각을 선택
         var baseCenter = null;
         var mode = "";
-        if (pieceIdx >= 0 && svgBodies && pieceIdx < svgBodies.length) {
+        if (pieceType === "band" && pieceIdx >= 0 && pieceIdx < svgBands.length) {
+            // band 소속 요소 → svgBands 기준
+            baseCenter = svgBands[pieceIdx];
+            mode = "band";
+        } else if (pieceIdx >= 0 && pieceIdx < svgBodies.length) {
+            // body 소속 요소 → svgBodies 기준
             baseCenter = svgBodies[pieceIdx];
             mode = "piece";
         } else {
@@ -521,24 +531,73 @@ function placeElementGroupPerPiece(pastedItems, elemMeta, svgBodies, fallbackCen
         }
 
         if (!baseCenter) {
-            logWrite("[진단] 요소[" + i + "] 배치 생략: baseCenter 없음 (pieceIdx=" + pieceIdx + ")");
+            logWrite("[진단] 요소[" + i + "] 배치 생략: baseCenter 없음 (type=" + pieceType + " pieceIdx=" + pieceIdx + ")");
             continue;
         }
 
+        // X축: 중심 기준 (기존 유지)
         var targetCx = baseCenter.cx + relVec.dx * scale;
-        var targetCy = baseCenter.cy + relVec.dy * scale;
 
-        // 현재 item 중심 → 타겟으로 translate
         var gb = item.geometricBounds;
         var curCx = (gb[0] + gb[2]) / 2;
-        var curCy = (gb[1] + gb[3]) / 2;
-        item.translate(targetCx - curCx, targetCy - curCy);
 
-        logWrite("[진단] 요소[" + i + "] 배치(" + mode + "): pieceIdx=" + pieceIdx
-            + " svg중심=(" + baseCenter.cx.toFixed(1) + "," + baseCenter.cy.toFixed(1) + ")"
-            + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
-            + " scale=" + scale.toFixed(4)
-            + " 타겟=(" + targetCx.toFixed(1) + "," + targetCy.toFixed(1) + ")");
+        if (mode === "band") {
+            // band 기준: 상대좌표(relVec.dy) 복원 + bandPositions에서 좌표 직접 읽기
+            // 왜 bandPositions: geometricBounds는 translate 후 캐시되어 ~17pt 오차 발생.
+            //   placeBandsPerPiece가 계산한 정확한 이동 후 좌표를 사용한다.
+            // 왜 relVec.dy 복원: 사이즈별로 band 내 요소의 상대 위치가 보존되어야 한다.
+            if (bandPositions && pieceIdx < bandPositions.length && bandPositions[pieceIdx]) {
+                var bandPos = bandPositions[pieceIdx];
+                var svgBandBottom = bandPos.bottom;  // 이동 후 실제 하단 (캐시 문제 없음)
+                var svgBandCx = bandPos.cx;          // 이동 후 실제 중심
+
+                var targetCxBd = svgBandCx + relVec.dx * scale;   // X: 상대 오프셋
+                var targetBottomBd = svgBandBottom + relVec.dy * scale; // Y: 상대 오프셋 복원
+
+                var curCxBd = (gb[0] + gb[2]) / 2;
+                var curBottomBd = gb[3];
+                item.translate(targetCxBd - curCxBd, targetBottomBd - curBottomBd);
+            } else {
+                // bandPositions 없는 fallback: 기존 geometricBounds 방식 (안전장치)
+                var currentBandBounds = svgBands[pieceIdx].pathRef.geometricBounds;
+                var svgBandBottom = currentBandBounds[3];
+                var svgBandCx = (currentBandBounds[0] + currentBandBounds[2]) / 2;
+                var targetCxBd = svgBandCx + relVec.dx * scale;
+                var targetBottomBd = svgBandBottom + relVec.dy * scale;
+                var curCxBd = (gb[0] + gb[2]) / 2;
+                var curBottomBd = gb[3];
+                item.translate(targetCxBd - curCxBd, targetBottomBd - curBottomBd);
+            }
+
+            logWrite("[진단] 요소[" + i + "] 배치(band,상대좌표): pieceIdx=" + pieceIdx
+                + " bandBottom=" + svgBandBottom.toFixed(1)
+                + " relVec.dy=" + relVec.dy.toFixed(1)
+                + " scale=" + scale.toFixed(4)
+                + " 타겟Bottom=" + targetBottomBd.toFixed(1));
+        } else if (mode === "piece") {
+            // Y축: 하단 기준 (body 하단 + relVec.dy * scale = 요소 하단 타겟)
+            var svgBodyBottom = svgBodies[pieceIdx].bbox[3]; // SVG body 하단
+            var targetBottom = svgBodyBottom + relVec.dy * scale;
+            var curBottom = gb[3]; // 현재 요소 하단
+            item.translate(targetCx - curCx, targetBottom - curBottom);
+
+            logWrite("[진단] 요소[" + i + "] 배치(piece,하단기준): pieceIdx=" + pieceIdx
+                + " bodyBottom=" + svgBodyBottom.toFixed(1)
+                + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
+                + " scale=" + scale.toFixed(4)
+                + " 타겟Bottom=" + targetBottom.toFixed(1));
+        } else {
+            // fallback: 중심 기준 유지 (기존 동작)
+            var targetCy = baseCenter.cy + relVec.dy * scale;
+            var curCy = (gb[1] + gb[3]) / 2;
+            item.translate(targetCx - curCx, targetCy - curCy);
+
+            logWrite("[진단] 요소[" + i + "] 배치(fallback): pieceIdx=" + pieceIdx
+                + " center=(" + baseCenter.cx.toFixed(1) + "," + baseCenter.cy.toFixed(1) + ")"
+                + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
+                + " scale=" + scale.toFixed(4)
+                + " 타겟=(" + targetCx.toFixed(1) + "," + targetCy.toFixed(1) + ")");
+        }
     }
 }
 
@@ -547,7 +606,9 @@ function placeElementGroupPerPiece(pastedItems, elemMeta, svgBodies, fallbackCen
 // 왜 별도 함수: band는 그룹화/스케일 단계를 거치지 않고 fillLayer에 이미 존재하는
 //              pathRef를 그대로 translate하므로 placeElementGroupPerPiece와 API가 다르다.
 function placeBandsPerPiece(svgBands, bandMeta, svgBodies, fallbackCenter, linearScale) {
-    if (!svgBands || svgBands.length === 0) return;
+    // 이동 후 각 band의 실제 좌표를 반환 (geometricBounds 캐시 문제 회피용)
+    var bandPositions = [];
+    if (!svgBands || svgBands.length === 0) return bandPositions;
     var scale = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
     // 왜 matchCount: design bands 와 svg bands 개수가 다를 수 있어 안전하게 min까지만 매칭.
     var matchCount = Math.min(svgBands.length, bandMeta ? bandMeta.length : 0);
@@ -581,22 +642,47 @@ function placeBandsPerPiece(svgBands, bandMeta, svgBodies, fallbackCenter, linea
             continue;
         }
 
+        // X축: 중심 기준 (기존 유지)
         var targetCx = baseCenter.cx + relVec.dx * scale;
-        var targetCy = baseCenter.cy + relVec.dy * scale;
 
         // 왜 geometricBounds 재조회: 스케일/변형 이후의 현재 좌표를 반영해야
         //                            올바른 이동 벡터가 계산된다.
         var gb = svgBand.pathRef.geometricBounds;
         var curCx = (gb[0] + gb[2]) / 2;
-        var curCy = (gb[1] + gb[3]) / 2;
-        svgBand.pathRef.translate(targetCx - curCx, targetCy - curCy);
 
-        logWrite("[진단] SVG band[" + i + "] 이동(" + mode + "): pieceIdx=" + pieceIdx
-            + " svg중심=(" + baseCenter.cx.toFixed(1) + "," + baseCenter.cy.toFixed(1) + ")"
-            + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
-            + " scale=" + scale.toFixed(4)
-            + " 타겟=(" + targetCx.toFixed(1) + "," + targetCy.toFixed(1) + ")");
+        if (mode === "piece" && svgBodies && pieceIdx >= 0 && pieceIdx < svgBodies.length) {
+            // Y축: body 상단 기준 (band는 body 위에 위치하므로)
+            var svgBodyTop = svgBodies[pieceIdx].bbox[1]; // SVG body 상단 (bbox[1] = top)
+            var targetBottom = svgBodyTop + relVec.dy * scale;
+            var curBottom = gb[3]; // 현재 band 하단
+            svgBand.pathRef.translate(targetCx - curCx, targetBottom - curBottom);
+
+            // 이동 후 실제 좌표 저장 (geometricBounds 캐시 회피)
+            bandPositions[i] = { cx: targetCx, bottom: targetBottom };
+
+            logWrite("[진단] SVG band[" + i + "] 이동(piece,상단기준): pieceIdx=" + pieceIdx
+                + " bodyTop=" + svgBodyTop.toFixed(1)
+                + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
+                + " scale=" + scale.toFixed(4)
+                + " 타겟Bottom=" + targetBottom.toFixed(1));
+        } else {
+            // fallback: 중심 기준 유지 (기존 동작)
+            var targetCy = baseCenter.cy + relVec.dy * scale;
+            var curCy = (gb[1] + gb[3]) / 2;
+            svgBand.pathRef.translate(targetCx - curCx, targetCy - curCy);
+
+            // fallback도 이동 후 좌표 저장
+            var movedBottom = gb[3] + (targetCy - curCy);
+            bandPositions[i] = { cx: targetCx, bottom: movedBottom };
+
+            logWrite("[진단] SVG band[" + i + "] 이동(fallback): pieceIdx=" + pieceIdx
+                + " center=(" + baseCenter.cx.toFixed(1) + "," + baseCenter.cy.toFixed(1) + ")"
+                + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
+                + " scale=" + scale.toFixed(4)
+                + " 타겟=(" + targetCx.toFixed(1) + "," + targetCy.toFixed(1) + ")");
+        }
     }
+    return bandPositions;
 }
 
 // ============================================================
@@ -719,7 +805,7 @@ function main() {
         // 각 요소마다 "소속 body 조각"을 판별하고, 그 조각 중심을 기준으로 개별 상대벡터를 측정.
         // SVG 쪽에서 동일하게 조각 분류 후 각 요소를 자기 조각 기준으로 배치한다.
         var designPieces = null;
-        var elemMeta = []; // [{ index, pieceIdx, relVec }, ...] 인덱스 = elemItems와 1:1
+        var elemMeta = []; // [{ pieceType, pieceIdx, relVec }, ...] 인덱스 = elemItems와 1:1
         var designFallbackCenter = null; // bodies.length===0 또는 매칭 실패 시 폴백 (B안 동작)
 
         if (hasBody && hasElements) {
@@ -739,28 +825,62 @@ function main() {
             for (var mi = 0; mi < elemItems.length; mi++) {
                 var elem = elemItems[mi];
                 var elemCenter = getItemsCenter([elem]);
-                var pieceIdx = assignElementToPiece(elem, designPieces.bodies);
+
+                // bodies + bands 모두 후보로 유클리드 거리 계산하여 가장 가까운 조각에 소속
+                // 왜: 사이즈택 등이 band에 더 가까울 수 있는데 body만 보면 잘못 소속됨
+                var bestDist = -1;
+                var bestType = "body";
+                var bestIdx = -1;
+                var bestCenter = null;
+
+                if (elemCenter) {
+                    // bodies 후보
+                    for (var bi2 = 0; bi2 < designPieces.bodies.length; bi2++) {
+                        var bodyCandidate = designPieces.bodies[bi2];
+                        var dxB = elemCenter.cx - bodyCandidate.cx;
+                        var dyB = elemCenter.cy - bodyCandidate.cy;
+                        var distB = Math.sqrt(dxB * dxB + dyB * dyB);
+                        if (bestDist < 0 || distB < bestDist) {
+                            bestDist = distB;
+                            bestType = "body";
+                            bestIdx = bodyCandidate.idx;
+                            bestCenter = bodyCandidate;
+                        }
+                    }
+
+                    // bands 후보
+                    for (var bdi = 0; bdi < designPieces.bands.length; bdi++) {
+                        var bandCandidate = designPieces.bands[bdi];
+                        var dxBd = elemCenter.cx - bandCandidate.cx;
+                        var dyBd = elemCenter.cy - bandCandidate.cy;
+                        var distBd = Math.sqrt(dxBd * dxBd + dyBd * dyBd);
+                        if (bestDist < 0 || distBd < bestDist) {
+                            bestDist = distBd;
+                            bestType = "band";
+                            bestIdx = bdi; // band는 순서 인덱스 그대로
+                            bestCenter = bandCandidate;
+                        }
+                    }
+                }
+
                 // 소속 조각 중심 (없으면 fallback 중심)
-                var pieceCenter = (pieceIdx >= 0 && pieceIdx < designPieces.bodies.length)
-                                  ? designPieces.bodies[pieceIdx]
-                                  : designFallbackCenter;
+                var pieceCenter = bestCenter ? bestCenter : designFallbackCenter;
 
                 var rv = { dx: 0, dy: 0 };
                 if (elemCenter && pieceCenter) {
+                    // X축: 중심 기준 유지
                     rv.dx = elemCenter.cx - pieceCenter.cx;
-                    rv.dy = elemCenter.cy - pieceCenter.cy;
+                    // Y축: 하단 기준으로 변경 (요소 하단 - 조각 하단)
+                    var elemBottom = elem.geometricBounds[3];
+                    var pieceBottom = (bestCenter && bestCenter.bbox)
+                                     ? bestCenter.bbox[3]
+                                     : pieceCenter.cy; // fallback: 중심 기준 유지
+                    rv.dy = elemBottom - pieceBottom;
                 }
-                elemMeta.push({ index: mi, pieceIdx: pieceIdx, relVec: rv });
+                elemMeta.push({ pieceType: bestType, pieceIdx: bestIdx, relVec: rv });
 
-                // 거리 로그 (음수 = 측정 실패 표기)
-                var distLog = -1;
-                if (elemCenter && pieceCenter) {
-                    var dxL = elemCenter.cx - pieceCenter.cx;
-                    var dyL = elemCenter.cy - pieceCenter.cy;
-                    distLog = Math.sqrt(dxL * dxL + dyL * dyL);
-                }
-                logWrite("[진단] 요소[" + mi + "] 소속 body 인덱스=" + pieceIdx
-                    + " (거리=" + (distLog >= 0 ? distLog.toFixed(1) : "?") + ")"
+                logWrite("[진단] 요소[" + mi + "] 소속: type=" + bestType + " idx=" + bestIdx
+                    + " (거리=" + (bestDist >= 0 ? bestDist.toFixed(1) : "?") + ")"
                     + " relVec=(" + rv.dx.toFixed(1) + "," + rv.dy.toFixed(1) + ")");
             }
 
@@ -794,8 +914,14 @@ function main() {
                                 : designFallbackCenter;
                     var bRv = { dx: 0, dy: 0 };
                     if (bBase) {
+                        // X축: 중심 기준 유지
                         bRv.dx = bandPiece.cx - bBase.cx;
-                        bRv.dy = bandPiece.cy - bBase.cy;
+                        // Y축: body 상단 기준 (band는 body 위에 위치하므로)
+                        var bandBottom = bandPiece.bbox[3]; // band의 하단 y
+                        var bBodyTop = (bPieceIdx >= 0 && bPieceIdx < designPieces.bodies.length)
+                                       ? designPieces.bodies[bPieceIdx].bbox[1] // body 상단 (bbox[1] = top)
+                                       : bBase.cy; // fallback: 중심 기준 유지
+                        bRv.dy = bandBottom - bBodyTop;
                     }
                     bandMeta.push({ index: bi, pieceIdx: bPieceIdx, relVec: bRv });
 
@@ -887,8 +1013,8 @@ function main() {
             var linearScale = 1.0;
             // 요소 스케일 지수 보정 (K < 1이면 변화 완화, K = 1.0이면 보정 없음)
             // 사용자 관찰: 작은 사이즈에서 요소가 몸판 대비 과소, 큰 사이즈에서 과대
-            // K=0.8로 스케일 변화 20% 완화
-            var ELEMENT_SCALE_EXPONENT = 0.8;
+            // K=0.78 스케일 변화 22% 완화
+            var ELEMENT_SCALE_EXPONENT = 0.78;
             if (baseArea > 0 && targetArea > 0) {
                 var areaRatio = targetArea / baseArea;
                 linearScale = Math.sqrt(areaRatio);
@@ -949,16 +1075,16 @@ function main() {
             var adjustedForPlace = Math.pow(linearScale, ELEMENT_SCALE_EXPONENT);
             var scaleForPlace = (typeof adjustedForPlace === "number" && adjustedForPlace > 0) ? adjustedForPlace : 1.0;
             var bandScaleForPlace = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
-            placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces.bodies, svgFallback, scaleForPlace);
 
-            // --- B-3안 신규: band 개별 이동 ---
-            // 왜 요소 배치 뒤: band는 fillLayer path이므로 요소 그룹 해제(ungroup)와 무관.
-            //                 실행 순서는 요소↔band 상호 영향 없음. 로그 가독성 위해 요소 다음에 배치.
+            // --- band 개별 이동 (요소 배치보다 먼저 실행) ---
+            // 왜 먼저: band 소속 요소가 bandPositions(이동 후 실제 좌표)를 참조해야 하므로
+            //          band를 먼저 이동하고 그 결과를 placeElementGroupPerPiece에 전달한다.
+            var bandPositions = [];
             if (svgPieces.bands.length > 0 && bandMeta.length > 0) {
                 var bandMatchStatus = (bandMeta.length === svgPieces.bands.length) ? "일치" : "불일치";
                 logWrite("[진단] band 매칭 결과: designBands=" + bandMeta.length
                     + "개 svgBands=" + svgPieces.bands.length + "개 (" + bandMatchStatus + ")");
-                placeBandsPerPiece(svgPieces.bands, bandMeta, svgPieces.bodies, svgFallback, bandScaleForPlace);
+                bandPositions = placeBandsPerPiece(svgPieces.bands, bandMeta, svgPieces.bodies, svgFallback, bandScaleForPlace);
 
                 // --- patternLayer band도 동일 이동 ---
                 // 왜 필요: fillLayer band(채움)만 이동하면 patternLayer band(선)은 원래 위치에 남아
@@ -989,17 +1115,31 @@ function main() {
                         }
                         if (!ptBaseCenter) continue;
 
+                        // X축: 중심 기준 (기존 유지)
                         var ptTargetCx = ptBaseCenter.cx + ptRelVec.dx * bandScaleForPlace;
-                        var ptTargetCy = ptBaseCenter.cy + ptRelVec.dy * bandScaleForPlace;
 
                         var ptBounds = ptBand.pathRef.geometricBounds;
                         var ptCurCx = (ptBounds[0] + ptBounds[2]) / 2;
-                        var ptCurCy = (ptBounds[1] + ptBounds[3]) / 2;
 
-                        ptBand.pathRef.translate(ptTargetCx - ptCurCx, ptTargetCy - ptCurCy);
+                        if (ptPieceIdx >= 0 && svgPieces.bodies && ptPieceIdx < svgPieces.bodies.length) {
+                            // Y축: body 상단 기준 (band는 body 위에 위치하므로)
+                            var ptSvgBodyTop = svgPieces.bodies[ptPieceIdx].bbox[1]; // body 상단
+                            var ptTargetBottom = ptSvgBodyTop + ptRelVec.dy * bandScaleForPlace;
+                            var ptCurBottom = ptBounds[3]; // 현재 pattern band 하단
+                            ptBand.pathRef.translate(ptTargetCx - ptCurCx, ptTargetBottom - ptCurBottom);
 
-                        logWrite("[진단] patternLayer band[" + pbi + "] 이동: 타겟=("
-                            + ptTargetCx.toFixed(1) + "," + ptTargetCy.toFixed(1) + ")");
+                            logWrite("[진단] patternLayer band[" + pbi + "] 이동(상단기준):"
+                                + " bodyTop=" + ptSvgBodyTop.toFixed(1)
+                                + " 타겟Bottom=" + ptTargetBottom.toFixed(1));
+                        } else {
+                            // fallback: 중심 기준 유지
+                            var ptTargetCy = ptBaseCenter.cy + ptRelVec.dy * bandScaleForPlace;
+                            var ptCurCy = (ptBounds[1] + ptBounds[3]) / 2;
+                            ptBand.pathRef.translate(ptTargetCx - ptCurCx, ptTargetCy - ptCurCy);
+
+                            logWrite("[진단] patternLayer band[" + pbi + "] 이동(fallback): 타겟=("
+                                + ptTargetCx.toFixed(1) + "," + ptTargetCy.toFixed(1) + ")");
+                        }
                     }
                 } else {
                     logWrite("[진단] patternLayer band 이동 스킵: ptBands=" + ptPieces.bands.length);
@@ -1008,6 +1148,12 @@ function main() {
                 logWrite("[진단] band 이동 스킵: design bands=" + bandMeta.length
                     + ", svg bands=" + svgPieces.bands.length);
             }
+
+            // --- 요소 배치 (band 이동 후 실행) ---
+            // 왜 band 뒤: band 소속 요소가 bandPositions(이동 후 좌표)를 참조하므로
+            //              band 이동이 완료된 뒤에 실행해야 정확한 좌표를 얻는다.
+            app.redraw(); // geometricBounds 갱신 (band 외 요소용)
+            placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces, svgFallback, scaleForPlace, bandPositions);
         } else {
             logWrite("[grading-v2] 요소 없음 - 스케일/정렬 생략");
         }

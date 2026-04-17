@@ -15,6 +15,20 @@ import re
 from typing import Optional
 import openpyxl
 
+# openpyxl Custom Properties 버그 워크어라운드
+# 일부 엑셀 파일에서 Custom Document Properties의 name이 None이면 오류 발생
+# (StringProperty.name should be str but value is NoneType)
+try:
+    from openpyxl.packaging.custom import StringProperty
+    _orig_str_init = StringProperty.__init__
+    def _patched_str_init(self, *args, **kwargs):
+        if 'name' in kwargs and kwargs['name'] is None:
+            kwargs['name'] = ''
+        _orig_str_init(self, *args, **kwargs)
+    StringProperty.__init__ = _patched_str_init
+except Exception:
+    pass
+
 
 # 사이즈 키워드 목록 (긴 것부터 매칭해야 "XL" 이 "5XL" 보다 먼저 매칭되는 실수를 방지)
 SIZE_KEYWORDS = [
