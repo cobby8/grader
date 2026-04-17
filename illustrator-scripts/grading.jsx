@@ -431,7 +431,9 @@ function classifyBodyPieces(layer) {
         var cy = (b[1] + b[3]) / 2;
         var areaSize = w * h;
 
-        var piece = { cx: cx, cy: cy, bbox: b, areaSize: areaSize };
+        // 왜 pathRef 추가: B-3안에서 SVG band를 실제로 translate하려면 원본 PathItem 참조가 필요.
+        //                  디자인 AI에서는 pathRef를 사용하지 않고 cx/cy만 쓰므로 무해.
+        var piece = { cx: cx, cy: cy, bbox: b, areaSize: areaSize, pathRef: p };
 
         if (h < BODY_BAND_HEIGHT_THRESHOLD) {
             // 띠(band): 낮고 긴 조각
@@ -447,10 +449,19 @@ function classifyBodyPieces(layer) {
     result.bodies.sort(function(a, b) {
         return a.cx - b.cx;
     });
+    // 왜 bands도 정렬: B-3안에서 design bands[i] ↔ svg bands[i] 를 idx로 직접 매칭.
+    //                  양쪽 모두 x중심 오름차순 정렬해야 의미 있는 1:1 대응이 된다.
+    result.bands.sort(function(a, b) {
+        return a.cx - b.cx;
+    });
 
     // idx 부여 (0..N-1)
     for (var j = 0; j < result.bodies.length; j++) {
         result.bodies[j].idx = j;
+    }
+    // bands에도 동일하게 idx 부여 (정렬 후 좌→우 순서)
+    for (var k = 0; k < result.bands.length; k++) {
+        result.bands[k].idx = k;
     }
 
     result.pieceCount = result.bodies.length;
@@ -528,6 +539,63 @@ function placeElementGroupPerPiece(pastedItems, elemMeta, svgBodies, fallbackCen
     }
 }
 
+// SVG bands[i]를 대응 svgBody + scale된 relVec 위치로 개별 translate
+// bandMeta[i] 와 svgBands[i] 는 인덱스 1:1 대응 (둘 다 x중심 오름차순 정렬)
+// 왜 별도 함수: band는 그룹화/스케일 단계를 거치지 않고 fillLayer에 이미 존재하는
+//              pathRef를 그대로 translate하므로 placeElementGroupPerPiece와 API가 다르다.
+function placeBandsPerPiece(svgBands, bandMeta, svgBodies, fallbackCenter, linearScale) {
+    if (!svgBands || svgBands.length === 0) return;
+    var scale = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
+    // 왜 matchCount: design bands 와 svg bands 개수가 다를 수 있어 안전하게 min까지만 매칭.
+    var matchCount = Math.min(svgBands.length, bandMeta ? bandMeta.length : 0);
+
+    for (var i = 0; i < svgBands.length; i++) {
+        var svgBand = svgBands[i];
+        if (!svgBand || !svgBand.pathRef) continue;
+
+        // 메타 범위 초과 → 이 band는 디자인 AI에 대응이 없음 (그대로 두고 경고)
+        var meta = (i < matchCount) ? bandMeta[i] : null;
+        if (!meta) {
+            logWrite("[진단] SVG band[" + i + "] 메타 없음 - 이동 생략 (원본 좌표 유지)");
+            continue;
+        }
+
+        var pieceIdx = meta.pieceIdx;
+        var relVec = (meta.relVec) ? meta.relVec : { dx: 0, dy: 0 };
+
+        // 왜 분기: svgBodies 범위 내 idx면 조각 기준 배치, 아니면 fallbackCenter 사용
+        var baseCenter = null;
+        var mode = "";
+        if (pieceIdx >= 0 && svgBodies && pieceIdx < svgBodies.length) {
+            baseCenter = svgBodies[pieceIdx];
+            mode = "piece";
+        } else {
+            baseCenter = fallbackCenter; // bodies.length===0 케이스
+            mode = "fallback";
+        }
+        if (!baseCenter) {
+            logWrite("[진단] SVG band[" + i + "] baseCenter 없음 - 생략");
+            continue;
+        }
+
+        var targetCx = baseCenter.cx + relVec.dx * scale;
+        var targetCy = baseCenter.cy + relVec.dy * scale;
+
+        // 왜 geometricBounds 재조회: 스케일/변형 이후의 현재 좌표를 반영해야
+        //                            올바른 이동 벡터가 계산된다.
+        var gb = svgBand.pathRef.geometricBounds;
+        var curCx = (gb[0] + gb[2]) / 2;
+        var curCy = (gb[1] + gb[3]) / 2;
+        svgBand.pathRef.translate(targetCx - curCx, targetCy - curCy);
+
+        logWrite("[진단] SVG band[" + i + "] 이동(" + mode + "): pieceIdx=" + pieceIdx
+            + " svg중심=(" + baseCenter.cx.toFixed(1) + "," + baseCenter.cy.toFixed(1) + ")"
+            + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
+            + " scale=" + scale.toFixed(4)
+            + " 타겟=(" + targetCx.toFixed(1) + "," + targetCy.toFixed(1) + ")");
+    }
+}
+
 // ============================================================
 // config 읽기
 // ============================================================
@@ -569,6 +637,10 @@ function main() {
     var baseDoc = null;
 
     try {
+        // B-3안: band 메타는 디자인 AI 측정 블록에서 채워지고, STEP 7에서 참조됨.
+        //        hasElements=false 또는 디자인 bands 없음 → 빈 배열 유지 → STEP 7에서 자연스럽게 스킵.
+        var bandMeta = [];
+
         // ===== STEP 0: config 읽기 =====
         var config = readConfig();
         var resultPath = config.resultJsonPath;
@@ -687,6 +759,50 @@ function main() {
                 logWrite("[진단] 요소[" + mi + "] 소속 body 인덱스=" + pieceIdx
                     + " (거리=" + (distLog >= 0 ? distLog.toFixed(1) : "?") + ")"
                     + " relVec=(" + rv.dx.toFixed(1) + "," + rv.dy.toFixed(1) + ")");
+            }
+
+            // --- B-3안 신규: band 상대벡터 측정 ---
+            // 왜 지금: designDoc이 닫히기 전, designPieces.bands cx/cy 가 확정된 시점.
+            // 각 band를 "요소처럼" 취급해 가장 가까운 body idx와 상대벡터를 기록.
+            if (designPieces && designPieces.bands.length > 0) {
+                for (var bi = 0; bi < designPieces.bands.length; bi++) {
+                    var bandPiece = designPieces.bands[bi];
+                    // 왜 인라인 계산: assignElementToPiece는 PageItem 기반인데 band는 {cx,cy} 스냅샷이라
+                    //                PageItem 생성 없이 직접 거리 계산하는 쪽이 명확.
+                    var bPieceIdx = -1;
+                    if (designPieces.bodies.length > 0) {
+                        var bestIdxB = 0;
+                        var bestDistB = -1;
+                        for (var bj = 0; bj < designPieces.bodies.length; bj++) {
+                            var dxB = bandPiece.cx - designPieces.bodies[bj].cx;
+                            var dyB = bandPiece.cy - designPieces.bodies[bj].cy;
+                            // 왜 Math.sqrt: Math.hypot 은 ES3에 없음
+                            var dB = Math.sqrt(dxB * dxB + dyB * dyB);
+                            if (bestDistB < 0 || dB < bestDistB) {
+                                bestDistB = dB;
+                                bestIdxB = bj;
+                            }
+                        }
+                        bPieceIdx = bestIdxB;
+                    }
+                    // bodies.length===0 케이스 → pieceIdx=-1 유지 → SVG 쪽에서 fallbackCenter 사용
+                    var bBase = (bPieceIdx >= 0 && bPieceIdx < designPieces.bodies.length)
+                                ? designPieces.bodies[bPieceIdx]
+                                : designFallbackCenter;
+                    var bRv = { dx: 0, dy: 0 };
+                    if (bBase) {
+                        bRv.dx = bandPiece.cx - bBase.cx;
+                        bRv.dy = bandPiece.cy - bBase.cy;
+                    }
+                    bandMeta.push({ index: bi, pieceIdx: bPieceIdx, relVec: bRv });
+
+                    var bDistLog = (bestDistB !== undefined && bestDistB >= 0) ? bestDistB : -1;
+                    logWrite("[진단] 디자인AI band[" + bi + "] 소속 body 인덱스=" + bPieceIdx
+                        + " 거리=" + (bDistLog >= 0 ? bDistLog.toFixed(1) : "?")
+                        + " relVec=(" + bRv.dx.toFixed(1) + "," + bRv.dy.toFixed(1) + ")");
+                }
+            } else {
+                logWrite("[진단] 디자인AI bands 없음 - band 이동 스킵 예정");
             }
         }
 
@@ -814,6 +930,64 @@ function main() {
             // --- 요소별 개별 배치 (pieceIdx 기반) ---
             var scaleForPlace = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
             placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces.bodies, svgFallback, scaleForPlace);
+
+            // --- B-3안 신규: band 개별 이동 ---
+            // 왜 요소 배치 뒤: band는 fillLayer path이므로 요소 그룹 해제(ungroup)와 무관.
+            //                 실행 순서는 요소↔band 상호 영향 없음. 로그 가독성 위해 요소 다음에 배치.
+            if (svgPieces.bands.length > 0 && bandMeta.length > 0) {
+                var bandMatchStatus = (bandMeta.length === svgPieces.bands.length) ? "일치" : "불일치";
+                logWrite("[진단] band 매칭 결과: designBands=" + bandMeta.length
+                    + "개 svgBands=" + svgPieces.bands.length + "개 (" + bandMatchStatus + ")");
+                placeBandsPerPiece(svgPieces.bands, bandMeta, svgPieces.bodies, svgFallback, scaleForPlace);
+
+                // --- patternLayer band도 동일 이동 ---
+                // 왜 필요: fillLayer band(채움)만 이동하면 patternLayer band(선)은 원래 위치에 남아
+                //          채움과 선이 분리된다. 같은 이동량을 적용해야 겹침이 유지된다.
+                var ptPieces = classifyBodyPieces(patternLayer);
+                ptPieces.source = "svg-pattern";
+                var ptMatchCount = Math.min(bandMeta.length, ptPieces.bands.length);
+
+                if (ptMatchCount > 0) {
+                    logWrite("[진단] patternLayer band 이동 시작: ptBands=" + ptPieces.bands.length
+                        + "개 매칭=" + ptMatchCount + "개");
+
+                    for (var pbi = 0; pbi < ptMatchCount; pbi++) {
+                        var ptBand = ptPieces.bands[pbi];
+                        var ptMeta = bandMeta[pbi];
+                        if (!ptBand || !ptBand.pathRef || !ptMeta) continue;
+
+                        // 왜 svgPieces.bodies 기준: patternLayer bodies가 아닌 fillLayer bodies 기준으로
+                        //   이동해야 fillLayer band와 동일한 위치로 정렬된다.
+                        var ptPieceIdx = ptMeta.pieceIdx;
+                        var ptRelVec = (ptMeta.relVec) ? ptMeta.relVec : { dx: 0, dy: 0 };
+
+                        var ptBaseCenter = null;
+                        if (ptPieceIdx >= 0 && svgPieces.bodies && ptPieceIdx < svgPieces.bodies.length) {
+                            ptBaseCenter = svgPieces.bodies[ptPieceIdx];
+                        } else {
+                            ptBaseCenter = svgFallback;
+                        }
+                        if (!ptBaseCenter) continue;
+
+                        var ptTargetCx = ptBaseCenter.cx + ptRelVec.dx * scaleForPlace;
+                        var ptTargetCy = ptBaseCenter.cy + ptRelVec.dy * scaleForPlace;
+
+                        var ptBounds = ptBand.pathRef.geometricBounds;
+                        var ptCurCx = (ptBounds[0] + ptBounds[2]) / 2;
+                        var ptCurCy = (ptBounds[1] + ptBounds[3]) / 2;
+
+                        ptBand.pathRef.translate(ptTargetCx - ptCurCx, ptTargetCy - ptCurCy);
+
+                        logWrite("[진단] patternLayer band[" + pbi + "] 이동: 타겟=("
+                            + ptTargetCx.toFixed(1) + "," + ptTargetCy.toFixed(1) + ")");
+                    }
+                } else {
+                    logWrite("[진단] patternLayer band 이동 스킵: ptBands=" + ptPieces.bands.length);
+                }
+            } else {
+                logWrite("[진단] band 이동 스킵: design bands=" + bandMeta.length
+                    + ", svg bands=" + svgPieces.bands.length);
+            }
         } else {
             logWrite("[grading-v2] 요소 없음 - 스케일/정렬 생략");
         }
