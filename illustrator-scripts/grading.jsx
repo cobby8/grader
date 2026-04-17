@@ -133,6 +133,9 @@ function writeErrorResult(resultPath, errorMessage) {
     }));
 }
 
+// cm → pt 변환 (1cm = 28.3465pt, Illustrator/PostScript 표준)
+var CM_TO_PT = 28.3465;
+
 // ============================================================
 // 색상 유틸
 // ============================================================
@@ -818,7 +821,12 @@ function main() {
         logWrite("[grading-v2] STEP 3: SVG 아트보드 " + svgWidth.toFixed(1)
             + "x" + svgHeight.toFixed(1) + "pt");
 
-        baseDoc = createCmykDoc(svgWidth, svgHeight);
+        // 대지 사이즈 고정: 158cm × 200cm (사내 작업 기준)
+        var ARTBOARD_W_CM = 158;
+        var ARTBOARD_H_CM = 200;
+        baseDoc = createCmykDoc(ARTBOARD_W_CM * CM_TO_PT, ARTBOARD_H_CM * CM_TO_PT);
+        logWrite("[grading-v2] STEP 3: 대지 고정 " + ARTBOARD_W_CM + "x" + ARTBOARD_H_CM + "cm ("
+            + (ARTBOARD_W_CM * CM_TO_PT).toFixed(1) + "x" + (ARTBOARD_H_CM * CM_TO_PT).toFixed(1) + "pt)");
         app.activeDocument = baseDoc;
 
         // 베이스 문서 레이어 3개 (z-order 순서: 배경fill < 디자인 < 패턴선)
@@ -877,6 +885,10 @@ function main() {
             // 면적 비율 스케일 (linearScale = sqrt(areaRatio))
             // 왜 if 밖에 선언: 아래 배치 호출부에서도 linearScale 참조 필요.
             var linearScale = 1.0;
+            // 요소 스케일 지수 보정 (K < 1이면 변화 완화, K = 1.0이면 보정 없음)
+            // 사용자 관찰: 작은 사이즈에서 요소가 몸판 대비 과소, 큰 사이즈에서 과대
+            // K=0.8로 스케일 변화 20% 완화
+            var ELEMENT_SCALE_EXPONENT = 0.8;
             if (baseArea > 0 && targetArea > 0) {
                 var areaRatio = targetArea / baseArea;
                 linearScale = Math.sqrt(areaRatio);
@@ -884,9 +896,14 @@ function main() {
                     + " 선형스케일=" + linearScale.toFixed(4)
                     + " (" + (linearScale * 100).toFixed(1) + "%)");
 
+                // 지수 보정 적용: linearScale^K (K<1이면 축소/확대 완화)
+                var adjustedScale = Math.pow(linearScale, ELEMENT_SCALE_EXPONENT);
+                logWrite("[grading-v2] STEP 7: 보정스케일=" + adjustedScale.toFixed(4)
+                    + " (" + (adjustedScale * 100).toFixed(1) + "%) K=" + ELEMENT_SCALE_EXPONENT);
+
                 // 0.5% 이상 차이 있을 때만 적용
-                if (Math.abs(linearScale - 1.0) > 0.005) {
-                    var pct = linearScale * 100;
+                if (Math.abs(adjustedScale - 1.0) > 0.005) {
+                    var pct = adjustedScale * 100;
                     // Transformation.CENTER: 그룹 중심 기준 resize (요소 간 비율 유지)
                     pastedGroup.resize(pct, pct, true, true, true, true, pct, Transformation.CENTER);
                 }
@@ -928,7 +945,10 @@ function main() {
             }
 
             // --- 요소별 개별 배치 (pieceIdx 기반) ---
-            var scaleForPlace = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
+            // 요소용: 보정된 스케일 적용 (band는 몸판 조각이라 면적 비례 그대로 유지)
+            var adjustedForPlace = Math.pow(linearScale, ELEMENT_SCALE_EXPONENT);
+            var scaleForPlace = (typeof adjustedForPlace === "number" && adjustedForPlace > 0) ? adjustedForPlace : 1.0;
+            var bandScaleForPlace = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
             placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces.bodies, svgFallback, scaleForPlace);
 
             // --- B-3안 신규: band 개별 이동 ---
@@ -938,7 +958,7 @@ function main() {
                 var bandMatchStatus = (bandMeta.length === svgPieces.bands.length) ? "일치" : "불일치";
                 logWrite("[진단] band 매칭 결과: designBands=" + bandMeta.length
                     + "개 svgBands=" + svgPieces.bands.length + "개 (" + bandMatchStatus + ")");
-                placeBandsPerPiece(svgPieces.bands, bandMeta, svgPieces.bodies, svgFallback, scaleForPlace);
+                placeBandsPerPiece(svgPieces.bands, bandMeta, svgPieces.bodies, svgFallback, bandScaleForPlace);
 
                 // --- patternLayer band도 동일 이동 ---
                 // 왜 필요: fillLayer band(채움)만 이동하면 patternLayer band(선)은 원래 위치에 남아
@@ -969,8 +989,8 @@ function main() {
                         }
                         if (!ptBaseCenter) continue;
 
-                        var ptTargetCx = ptBaseCenter.cx + ptRelVec.dx * scaleForPlace;
-                        var ptTargetCy = ptBaseCenter.cy + ptRelVec.dy * scaleForPlace;
+                        var ptTargetCx = ptBaseCenter.cx + ptRelVec.dx * bandScaleForPlace;
+                        var ptTargetCy = ptBaseCenter.cy + ptRelVec.dy * bandScaleForPlace;
 
                         var ptBounds = ptBand.pathRef.geometricBounds;
                         var ptCurCx = (ptBounds[0] + ptBounds[2]) / 2;
@@ -993,6 +1013,36 @@ function main() {
         }
 
         baseDoc.selection = null;
+
+        // ===== 패턴 중앙 정렬 (대지 > 패턴이면 중앙 배치) =====
+        // 왜: 대지 고정(158x200cm)이 SVG 패턴보다 클 수 있어 한쪽 치우침 방지
+        var abRect = baseDoc.artboards[0].artboardRect; // [L, T, R, B]
+        var abCx = (abRect[0] + abRect[2]) / 2;
+        var abCy = (abRect[1] + abRect[3]) / 2;
+
+        // 모든 레이어 아이템 합집합 bbox 구하기
+        var allItems = [];
+        var layersToCenter = [fillLayer, patternLayer, designLayer];
+        for (var lci = 0; lci < layersToCenter.length; lci++) {
+            var ly = layersToCenter[lci];
+            if (!ly) continue;
+            for (var aci = 0; aci < ly.pageItems.length; aci++) {
+                allItems.push(ly.pageItems[aci]);
+            }
+        }
+
+        if (allItems.length > 0) {
+            var allCenter = getItemsCenter(allItems);
+            if (allCenter) {
+                var shiftX = abCx - allCenter.cx;
+                var shiftY = abCy - allCenter.cy;
+                // 모든 아이템 일괄 이동
+                for (var shi = 0; shi < allItems.length; shi++) {
+                    allItems[shi].translate(shiftX, shiftY);
+                }
+                logWrite("[grading-v2] 중앙 정렬: 이동 dx=" + shiftX.toFixed(1) + " dy=" + shiftY.toFixed(1));
+            }
+        }
 
         // ===== 레이어 z-order 통합 =====
         // 의도: 패턴선/너치(위) > 디자인 요소(중) > 배경 fill(아래)
