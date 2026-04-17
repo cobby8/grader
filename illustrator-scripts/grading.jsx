@@ -995,22 +995,22 @@ function main() {
         baseDoc.selection = null;
 
         // ===== 레이어 z-order 통합 =====
-        // 의도: 디자인 요소(위) > 배경 fill > 패턴선(아래)
-        // 컨테이너 PLACEATEND = 뒤쪽 = 아래. 위에 놓일 것부터 먼저 이동해야 누적 올바름.
+        // 의도: 패턴선/너치(위) > 디자인 요소(중) > 배경 fill(아래)
+        // PLACEATEND = 뒤쪽 = z-order 아래. 위에 놓일 것부터 먼저 이동.
         var finalLayer = baseDoc.layers.add();
         finalLayer.name = "그레이딩 출력";
 
-        // 1) 디자인 요소 먼저 (최상단 차지)
+        // 1) 패턴선/너치 먼저 (최상단)
+        while (patternLayer.pageItems.length > 0) {
+            patternLayer.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
+        }
+        // 2) 디자인 요소 (중간)
         while (designLayer.pageItems.length > 0) {
             designLayer.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
         }
-        // 2) 배경 fill (중간)
+        // 3) 배경 fill (최하단)
         while (fillLayer.pageItems.length > 0) {
             fillLayer.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
-        }
-        // 3) 패턴선 (최하단)
-        while (patternLayer.pageItems.length > 0) {
-            patternLayer.pageItems[0].move(finalLayer, ElementPlacement.PLACEATEND);
         }
         try { fillLayer.remove(); } catch (e1) {}
         try { designLayer.remove(); } catch (e2) {}
