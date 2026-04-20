@@ -243,6 +243,66 @@ function extractBodyColor(designDoc) {
 }
 
 // ============================================================
+// 몸판 개별 색상 추출 (양면 유니폼 대응)
+// ============================================================
+
+// 왜 필요: 양면 유니폼은 표면=흰색, 이면=남색처럼 각 몸판 조각이 다른 색.
+//          extractBodyColor는 첫 path 색만 반환 → 모든 조각을 같은 색으로 채워 안 보임.
+//          이 함수는 각 조각(pathItem)마다 개별 색상+중심좌표를 반환한다.
+// 반환: [{cx, cy, color: CMYKColor}, ...] (x중심 오름차순 정렬)
+//   단면: [{cx,cy,color:파랑}, {cx,cy,color:파랑}] (2개, 동일 색)
+//   양면: [{cx,cy,color:흰색}, {cx,cy,color:남색}, ...] (4개, 교차 색)
+function extractBodyColors(designDoc) {
+    var colors = [];
+    try {
+        var bodyLayer = designDoc.layers.getByName("몸판");
+        // 직속 pathItems 탐색
+        for (var i = 0; i < bodyLayer.pathItems.length; i++) {
+            var p = bodyLayer.pathItems[i];
+            // 50pt 이상 + filled 있는 path만 (색상 없는 유령 path 제외)
+            if (Math.abs(p.width) > 50 && Math.abs(p.height) > 50
+                && p.filled && p.fillColor && p.fillColor.typename !== "NoColor") {
+                var gb = p.geometricBounds;
+                var cx = (gb[0] + gb[2]) / 2;
+                var cy = (gb[1] + gb[3]) / 2;
+                var color = null;
+                if (p.filled && p.fillColor && p.fillColor.typename !== "NoColor") {
+                    color = toCMYK(p.fillColor);
+                }
+                colors.push({ cx: cx, cy: cy, color: color });
+            }
+        }
+        // GroupItem 내부도 탐색 (양면에서 일부가 그룹일 때)
+        for (var gi = 0; gi < bodyLayer.groupItems.length; gi++) {
+            var grp = bodyLayer.groupItems[gi];
+            for (var gpi = 0; gpi < grp.pathItems.length; gpi++) {
+                var gp = grp.pathItems[gpi];
+                if (Math.abs(gp.width) > 50 && Math.abs(gp.height) > 50
+                    && gp.filled && gp.fillColor && gp.fillColor.typename !== "NoColor") {
+                    var ggb = gp.geometricBounds;
+                    var gcx = (ggb[0] + ggb[2]) / 2;
+                    var gcy = (ggb[1] + ggb[3]) / 2;
+                    var gcolor = null;
+                    if (gp.filled && gp.fillColor && gp.fillColor.typename !== "NoColor") {
+                        gcolor = toCMYK(gp.fillColor);
+                    }
+                    colors.push({ cx: gcx, cy: gcy, color: gcolor });
+                }
+            }
+        }
+        // x+y 2D 정렬 (classifyBodyPieces와 동일 순서)
+        // x 차이 10pt 이상이면 x 기준, 같은 열이면 y 내림차순 (위쪽=큰y 먼저)
+        colors.sort(function(a, b) {
+            if (Math.abs(a.cx - b.cx) > 10) return a.cx - b.cx;
+            return b.cy - a.cy;
+        });
+    } catch (e) {
+        logWrite("[grading-v2] extractBodyColors 실패: " + e.message);
+    }
+    return colors;
+}
+
+// ============================================================
 // 면적 계산
 // ============================================================
 
@@ -461,15 +521,17 @@ function classifyBodyPieces(layer) {
         }
     }
 
-    // 왜 정렬: 디자인 AI와 SVG의 레이어 내 path 순서가 다를 수 있으므로
-    //          x중심 오름차순으로 통일해 "좌→우 idx" 대응을 보장한다.
+    // 왜 2D 정렬: 양면 유니폼처럼 같은 x에 위/아래 body가 있을 때
+    //             x만으로 정렬하면 순서가 불안정. x+y로 결정적 순서 보장.
+    //             10pt 임계값: 같은 열(column)의 미세 좌표 차이 무시.
     result.bodies.sort(function(a, b) {
-        return a.cx - b.cx;
+        if (Math.abs(a.cx - b.cx) > 10) return a.cx - b.cx;
+        return b.cy - a.cy;  // x 비슷하면 y 내림차순 (위=큰y 먼저)
     });
-    // 왜 bands도 정렬: B-3안에서 design bands[i] ↔ svg bands[i] 를 idx로 직접 매칭.
-    //                  양쪽 모두 x중심 오름차순 정렬해야 의미 있는 1:1 대응이 된다.
+    // 왜 bands도 동일 정렬: design bands[i] ↔ svg bands[i] idx 1:1 대응.
     result.bands.sort(function(a, b) {
-        return a.cx - b.cx;
+        if (Math.abs(a.cx - b.cx) > 10) return a.cx - b.cx;
+        return b.cy - a.cy;
     });
 
     // idx 부여 (0..N-1)
@@ -788,6 +850,22 @@ function main() {
                 + " K" + mainColor.black.toFixed(1));
         }
 
+        // body별 개별 색상 추출 (양면 유니폼: 각 몸판 조각의 색이 다름)
+        var bodyColors = extractBodyColors(designDoc);
+        logWrite("[grading-v2] body별 색상: " + bodyColors.length + "개");
+        for (var bci = 0; bci < bodyColors.length; bci++) {
+            var bc = bodyColors[bci];
+            if (bc.color) {
+                logWrite("[진단] bodyColor[" + bci + "] cx=" + bc.cx.toFixed(1)
+                    + " CMYK: C" + bc.color.cyan.toFixed(1)
+                    + " M" + bc.color.magenta.toFixed(1)
+                    + " Y" + bc.color.yellow.toFixed(1)
+                    + " K" + bc.color.black.toFixed(1));
+            } else {
+                logWrite("[진단] bodyColor[" + bci + "] cx=" + bc.cx.toFixed(1) + " 색상 없음");
+            }
+        }
+
         // ===== STEP 2: 기준 면적 계산 (baseArea) =====
         // 왜 패턴선 레이어: 디자이너가 작업한 원본 패턴 크기. 타겟 SVG와 비율 계산용.
         var baseArea = 0;
@@ -839,6 +917,25 @@ function main() {
             }
             designDoc.selection = null;
             logWrite("[grading-v2] 디자인AI 몸판 ungroup: " + bodyLayer.pathItems.length + "개 path");
+
+            // 유령 path 제거 (filled=false인 대형 path)
+            // 왜: 양면 유니폼에서 패턴선만 있는 path가 몸판 레이어에 섞여 있으면
+            //      classifyBodyPieces가 5개로 인식 → SVG 4개와 불일치 → 매칭 깨짐
+            // 안전: designDoc은 SaveOptions.DONOTSAVECHANGES로 닫히므로 원본 무영향
+            var removedCount = 0;
+            for (var rpi = bodyLayer.pathItems.length - 1; rpi >= 0; rpi--) {
+                var rp = bodyLayer.pathItems[rpi];
+                if (Math.abs(rp.width) > 50 && Math.abs(rp.height) > 50) {
+                    if (!rp.filled || !rp.fillColor || rp.fillColor.typename === "NoColor") {
+                        rp.remove();
+                        removedCount++;
+                    }
+                }
+            }
+            if (removedCount > 0) {
+                logWrite("[grading-v2] 디자인AI 몸판 유령 path 제거: " + removedCount + "개 (filled 없는 대형 path)");
+            }
+            logWrite("[grading-v2] 디자인AI 몸판 최종: " + bodyLayer.pathItems.length + "개 path");
         }
 
         if (hasBody && hasElements) {
@@ -1101,6 +1198,28 @@ function main() {
             }
             logWrite("[진단] SVG 몸판 분류: bands=" + svgPieces.bands.length
                 + "개 bodies=" + svgPieces.bodies.length + "개 (좌→우: " + svgCxList + ")");
+
+            // --- body별 색상 적용 (양면 유니폼 대응) ---
+            // 왜 여기서: importPatternPaths가 mainColor(단일)로 전부 채운 상태.
+            //           양면 유니폼은 각 조각이 다른 색이므로 여기서 개별 색상으로 덮어쓴다.
+            // bodyColors(디자인 측)와 svgPieces.bodies(SVG 측)를 인덱스 매칭
+            // (둘 다 x중심 오름차순 정렬이므로 순서가 일치한다)
+            if (bodyColors.length > 0 && svgPieces && svgPieces.bodies.length > 0) {
+                var colorMatchCount = Math.min(bodyColors.length, svgPieces.bodies.length);
+                for (var cmi = 0; cmi < colorMatchCount; cmi++) {
+                    var svgBody = svgPieces.bodies[cmi];
+                    var designColor = bodyColors[cmi].color;
+                    if (svgBody.pathRef && designColor) {
+                        svgBody.pathRef.filled = true;
+                        svgBody.pathRef.fillColor = cloneCMYK(designColor);
+                        logWrite("[진단] body[" + cmi + "] 색상 적용: C" + designColor.cyan.toFixed(1)
+                            + " M" + designColor.magenta.toFixed(1)
+                            + " Y" + designColor.yellow.toFixed(1)
+                            + " K" + designColor.black.toFixed(1));
+                    }
+                }
+                // 매칭 안 된 나머지 body는 mainColor 유지 (importPatternPaths에서 이미 적용)
+            }
 
             // 매칭 일치/불일치 판정
             var designBodyCount = designPieces ? designPieces.bodies.length : 0;
