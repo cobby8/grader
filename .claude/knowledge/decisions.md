@@ -2,6 +2,18 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-04-21] AI→SVG 자동 변환 기능: JSX 스크립트 방식 + 별도 페이지 채택
+- **분류**: decision
+- **발견자**: pm (사용자 확정 2026-04-21)
+- **내용**: 오늘 외부 작업에서 검증된 AI→SVG 변환 파이프라인을 grader에 내장 기능으로 추가 결정. **구현 방식 Q1**: (A) 새 JSX 스크립트 작성(`illustrator-scripts/ai_to_pdf.jsx`) + Python PyMuPDF 조합 **채택** vs (B) pywin32 COM 직접 호출 거부. 이유: (1) 기존 프로젝트가 이미 `run_illustrator_script` Tauri 커맨드와 `grading.jsx` JSX 방식을 사용해 일관성 유지, (2) pywin32는 추가 의존성이며 Windows 전용, (3) JSX는 Illustrator에 내장된 ExtendScript 엔진이라 별도 설치 불필요. **UI 위치 Q2**: (A) 사이드바에 "AI 변환" 신규 페이지 **채택** vs (B) PatternManage 안에 버튼 추가 거부. 이유: 배치 작업(수십~수백 파일)에 적합한 별도 워크스페이스가 필요. **구현 순서**: SVG 표준화 Phase 1 완료 후 planner-architect에게 상세 설계 위임.
+- **참조횟수**: 0
+
+### [2026-04-21] AI 파일 처리 분기: 헤더 바이트 검사 기반 2경로 파이프라인
+- **분류**: decision
+- **발견자**: pm
+- **내용**: AI→SVG 변환 시 단일 도구(PyMuPDF만 or Illustrator만) 선택 대신 **헤더 바이트로 분기하는 하이브리드** 채택. 이유: (1) PDF 호환 AI 89%는 PyMuPDF 단독으로 1~2초/파일로 빠르게 처리, (2) PostScript AI 11%는 Illustrator JSX로 PDF 재저장 후 PyMuPDF로 2단계 처리. 도구 단일화 거부 근거: 전체를 Illustrator로 돌리면 63개 변환에 7~10분 소요(각 30~40초), 전체를 PyMuPDF로 돌리면 11%는 실패. **분기 판정**: `open(path, 'rb').read(10)` 첫 10바이트가 `%PDF`로 시작하면 PyMuPDF 경로, `%!PS`이면 Illustrator 경로. 외부 검증 결과 63/63(100%) 성공, 총 소요 1분 32초(PyMuPDF 79초 + Illustrator 12초).
+- **참조횟수**: 0
+
 ### [2026-04-21] SVG 일괄 표준화: 기존 svg_parser.py 확장 대신 신규 svg_normalizer.py 분리
 - **분류**: decision
 - **발견자**: planner-architect → developer
