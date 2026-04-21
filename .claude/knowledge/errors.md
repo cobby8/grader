@@ -2,6 +2,18 @@
 <!-- 담당: debugger, tester | 최대 30항목 -->
 <!-- 이 프로젝트에서 반복되는 에러 패턴, 함정, 주의사항을 기록 -->
 
+### [2026-04-21] SVG 분류 로직 4그룹 12 path 누락 버그 (svg_normalizer._extract_pattern_paths)
+- **분류**: error
+- **발견자**: tester → developer (svg_normalizer Phase 1-3 검증 중)
+- **내용**: 초기 `_extract_pattern_paths`는 6 path 한 쌍 구조만 가정하여, 변환된 4그룹 12 path SVG 입력 시 좌측 큰 패턴 2개가 분류에서 누락되고 우측 작은 패턴 위/아래만 인식. 결과: 변환된 SVG를 다시 normalize하면 좌표가 viewBox 밖으로 나가 망가짐(idempotent 실패). **수정**: (1) path를 패턴/절단선으로 분리(높이 < 5 → 절단선), (2) 패턴이 4개(4그룹) → y_min 기준 위쪽 쌍만 채택, (3) 큰/작은 결정 기준을 `x_min` 비교에서 **`width`(폭) 비교 우선**으로 변경(폭이 더 큰 쪽이 큰 패턴=앞판). 검증 결과 6/12 path 모두 정확히 분류됨. **교훈**: SVG 변환 도구의 분류 로직은 변환 전(원본)과 변환 후(결과물) 양쪽 구조 모두 다룰 수 있어야 한다(멱등성 보장).
+- **참조횟수**: 0
+
+### [2026-04-21] SVG 패턴 단순 Tx swap 금지 (로컬 좌표계 원점 위치 다름)
+- **분류**: error
+- **발견자**: developer (U넥 양면유니폼 외부 작업 시행착오)
+- **내용**: SVG path들의 좌우 위치를 바꿀 때 transform matrix의 Tx 값을 단순 swap하면 가운데서 겹침 발생(417pt). 원인: 패턴마다 d 속성의 로컬 좌표계 원점(M0 0)이 다른 위치에 있음. 큰 패턴은 원점이 패턴 왼쪽 아래(X 0~1712), 작은 패턴은 원점이 패턴 오른쪽 위(X -365~1347). 단순 Tx swap 시 작은 패턴이 음수 X 영역까지 뻗어서 겹침 발생. **해결**: bbox 정확 측정(svgpathtools cubic bezier 포함) 후 새 좌표 계산(절대 위치 기준 평행이동). 또한 작은 절단선 Y 좌표는 **사이즈 무관 상수**(작은 패턴 따라 이동시키면 큰 절단선과 어긋남). svg_normalizer.py에 두 원칙 모두 반영됨.
+- **참조횟수**: 0
+
 ### [2026-04-16] ExtendScript clipboard(copy/paste) + svgDoc.close() 간헐 무효화
 - **분류**: error
 - **발견자**: debugger → developer (버그 B 수정)

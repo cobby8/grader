@@ -3,15 +3,17 @@
 ## 파일별 요약
 | 파일 | 항목 수 | 최종 업데이트 |
 |------|--------|------------|
-| architecture.md | 7 | 2026-04-08 |
-| errors.md | 4 | 2026-04-16 |
+| architecture.md | 8 | 2026-04-21 |
+| errors.md | 6 | 2026-04-21 |
 | conventions.md | 9 | 2026-04-10 |
-| decisions.md | 15 | 2026-04-15 |
-| lessons.md | 3 | 2026-04-16 |
+| decisions.md | 17 | 2026-04-21 |
+| lessons.md | 6 | 2026-04-21 |
 
-## 최근 추가된 지식 (최근 5건)
-1. [2026-04-16] lesson: 누적 회귀는 revert로 기저점 확보 → 한 걸음씩 재도입이 정답 (PLAN-GRADING-RECOVERY)
-2. [2026-04-16] error: Illustrator 문서 간 geometricBounds 직접 비교 금지 (ruler origin 차이로 dy=-svgHeight 오차)
-3. [2026-04-15] decision: 패턴선 색상 대비 알고리즘 WCAG→APCA Lc 교체 (파랑/빨강 지각 일치)
-4. [2026-04-14] decision: grading.jsx 새 CMYK 문서 시작 + 몸판→요소 순서 재설계
-5. [2026-04-08] decision: 요소 재구성 방식 - Level 1(배경색 채우기)부터 단계적 접근 (REPORT-ELEMENT-REBUILD.md)
+## 최근 추가된 지식 (최근 7건)
+1. [2026-04-21] lesson: SVG path 분류는 x_min(위치)보다 width(크기)가 더 안정적 — 변환 불변량 우선
+2. [2026-04-21] lesson: AI 파일은 헤더로 변환 도구 분기 (PDF 호환 vs PostScript 원본)
+3. [2026-04-21] lesson: SVG 변환 파이프라인 검증 = Idempotent 테스트 + 시각 확인 단계
+4. [2026-04-21] error: SVG 분류 로직 4그룹 12 path 누락 버그 → 폭 비교 우선으로 해결
+5. [2026-04-21] error: SVG 패턴 단순 Tx swap 금지 (로컬 원점 다름)
+6. [2026-04-21] decision: SVG 일괄 표준화 모듈은 svg_parser.py 확장 대신 신규 svg_normalizer.py 분리
+7. [2026-04-21] architecture: svg_normalizer.py 모듈 추가 (950줄, 11함수, U넥 양면유니폼 전용 Phase 1)

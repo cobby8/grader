@@ -35,6 +35,15 @@ from pdf_grader import generate_graded_pdf, generate_graded_pdf_by_pieces
 from order_parser import parse_order_excel
 from svg_parser import get_svg_bounding_box, normalize_svg_artboard, extract_svg_paths_for_clipping, extract_piece_bboxes
 from pattern_scaler import calculate_piece_scale_factors
+# SVG 일괄 표준화 모듈 (Phase 1-3 신규)
+# - measure_svg_bboxes: 디버깅용 path별 bbox 측정
+# - preview_normalization: 변환 시뮬레이션 (파일 미수정)
+# - normalize_batch: 폴더 일괄 변환 (파일 수정 + 백업)
+from svg_normalizer import (
+    measure_svg_bboxes,
+    preview_normalization,
+    normalize_batch,
+)
 
 
 def print_json(data: dict) -> None:
@@ -66,6 +75,9 @@ def show_help() -> None:
             "normalize_artboard <svg_path> <target_w_mm> <target_h_mm>": "SVG 아트보드(viewBox)를 목표 크기(mm)로 보정합니다 (패턴 좌표 유지, 중앙 배치)",
             "extract_piece_bboxes <svg_path>": "SVG에서 각 도형의 개별 bounding box를 추출합니다 (조각별 그레이딩용)",
             "generate_by_pieces <src_pdf> <out_pdf> <base_svg> <target_svg>": "조각별 채워넣기 방식으로 그레이딩 PDF 생성 (CMYK 보존)",
+            "measure_svg <svg_path>": "[SVG 표준화] 모든 path의 bbox를 측정합니다 (디버깅용)",
+            "preview_normalize <folder_or_files> <base_file>": "[SVG 표준화] 변환 시뮬레이션 (파일 미수정). 첫 인자가 폴더면 내부 SVG 모두 수집, 파일이면 ';' 구분 가능",
+            "normalize_batch <folder> <base_file> [--no-backup]": "[SVG 표준화] 폴더 내 SVG 일괄 변환. 기본 백업(.bak) 생성, --no-backup 시 백업 생략",
         },
         "examples": [
             'python main.py get_pdf_info "C:/designs/front.pdf"',
@@ -83,6 +95,10 @@ def show_help() -> None:
             'python main.py normalize_artboard "C:/patterns/front_L.svg" 1580 2000',
             'python main.py extract_piece_bboxes "C:/patterns/front_XL.svg"',
             'python main.py generate_by_pieces "C:/src.pdf" "C:/out.pdf" "C:/base_XL.svg" "C:/target_XS.svg"',
+            'python main.py measure_svg "C:/patterns/U넥_L.svg"',
+            'python main.py preview_normalize "C:/patterns/" "C:/patterns/U넥_2XL.svg"',
+            'python main.py normalize_batch "C:/patterns/" "C:/patterns/U넥_2XL.svg"',
+            'python main.py normalize_batch "C:/patterns/" "C:/patterns/U넥_2XL.svg" --no-backup',
         ],
     }
     print_json(help_text)
@@ -313,6 +329,108 @@ def main() -> None:
             result = generate_graded_pdf_by_pieces(
                 src_pdf, out_pdf, base_svg, target_svg
             )
+            print_json(result)
+            if not result.get("success"):
+                sys.exit(1)
+
+        elif command == "measure_svg":
+            # [SVG 표준화] 단일 SVG의 모든 path bbox를 측정 (디버깅용)
+            # 사용: measure_svg <svg_path>
+            if len(args) < 2:
+                print_error("SVG 파일 경로가 필요합니다. 예: python main.py measure_svg pattern.svg")
+                sys.exit(1)
+            import os as _os_meas
+            if not _os_meas.path.exists(args[1]):
+                print_error(f"SVG 파일을 찾을 수 없습니다: {args[1]}")
+                sys.exit(1)
+            result = measure_svg_bboxes(args[1])
+            print_json(result)
+            if not result.get("success"):
+                sys.exit(1)
+
+        elif command == "preview_normalize":
+            # [SVG 표준화] 변환 시뮬레이션 (파일 미수정)
+            # 사용: preview_normalize <folder_or_files> <base_file>
+            # 첫 인자가 디렉터리면 내부 .svg를 자동 수집 (.bak 제외, base 파일 제외)
+            # 첫 인자가 파일이면 그 파일만 (또는 ';' 로 구분된 다중 파일)
+            if len(args) < 3:
+                print_error(
+                    "인자가 부족합니다. 예: python main.py preview_normalize folder base.svg"
+                )
+                sys.exit(1)
+            target_arg = args[1]
+            base_file = args[2]
+
+            import os as _os_prev
+            # 입력 분기: 폴더 vs 파일(들)
+            target_files: list[str] = []
+            if _os_prev.path.isdir(target_arg):
+                # 폴더이면 내부 .svg 수집 (.bak 제외)
+                try:
+                    files_in_folder = _os_prev.listdir(target_arg)
+                except OSError as e:
+                    print_error(f"폴더 읽기 실패: {e}")
+                    sys.exit(1)
+                # base 파일과 동일한 경로는 제외
+                base_norm = _os_prev.path.normcase(_os_prev.path.abspath(base_file))
+                for f in sorted(files_in_folder):
+                    if not f.lower().endswith(".svg"):
+                        continue
+                    if f.lower().endswith(".bak"):
+                        continue
+                    full = _os_prev.path.join(target_arg, f)
+                    if _os_prev.path.normcase(_os_prev.path.abspath(full)) == base_norm:
+                        continue
+                    target_files.append(full)
+            else:
+                # 파일 또는 ';' 로 구분된 파일 목록
+                # (Windows 경로에 콤마가 들어갈 수 있어 ';' 채택)
+                for piece in target_arg.split(";"):
+                    piece = piece.strip()
+                    if not piece:
+                        continue
+                    if not _os_prev.path.exists(piece):
+                        print_error(f"SVG 파일을 찾을 수 없습니다: {piece}")
+                        sys.exit(1)
+                    target_files.append(piece)
+
+            if not target_files:
+                print_error("시뮬레이션 대상 SVG 파일이 없습니다.")
+                sys.exit(1)
+
+            result = preview_normalization(target_files, base_file_path=base_file)
+            print_json(result)
+            if not result.get("success"):
+                sys.exit(1)
+
+        elif command == "normalize_batch":
+            # [SVG 표준화] 폴더 내 SVG 일괄 변환 (파일 수정 + 백업)
+            # 사용: normalize_batch <folder> <base_file> [--no-backup]
+            if len(args) < 3:
+                print_error(
+                    "인자가 부족합니다. 예: python main.py normalize_batch folder base.svg [--no-backup]"
+                )
+                sys.exit(1)
+            folder_path = args[1]
+            base_file = args[2]
+            # 옵션 파싱: --no-backup 플래그 (위치 무관, 4번째 인자에 자주 옴)
+            backup = True
+            for opt in args[3:]:
+                if opt == "--no-backup":
+                    backup = False
+                else:
+                    print_error(f"알 수 없는 옵션: {opt} (지원: --no-backup)")
+                    sys.exit(1)
+
+            import os as _os_batch
+            if not _os_batch.path.isdir(folder_path):
+                print_error(f"폴더를 찾을 수 없습니다: {folder_path}")
+                sys.exit(1)
+            if not _os_batch.path.exists(base_file):
+                print_error(f"기준 SVG 파일을 찾을 수 없습니다: {base_file}")
+                sys.exit(1)
+
+            result = normalize_batch(folder_path, base_file_path=base_file, backup=backup)
             print_json(result)
             if not result.get("success"):
                 sys.exit(1)

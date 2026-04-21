@@ -2,6 +2,18 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-04-21] SVG 일괄 표준화: 기존 svg_parser.py 확장 대신 신규 svg_normalizer.py 분리
+- **분류**: decision
+- **발견자**: planner-architect → developer
+- **내용**: U넥 양면유니폼 12개 사이즈 SVG를 기준 파일 구조로 일괄 변환하는 기능 추가 시, 기존 `svg_parser.py`(1088줄, 그레이딩 핵심)에 함수를 추가하는 옵션 A 대신 **신규 모듈 `svg_normalizer.py` 분리(950줄)** 선택. 이유: (1) svg_parser.py는 그레이딩 회귀 위험이 큼, (2) 관심사 분리(parser=읽기, normalizer=변환), (3) 기존 grader 모듈 컨벤션(`pdf_handler`, `pdf_grader`, `pattern_scaler` 따로) 과 일관, (4) cubic bezier 정확 처리를 위해 svgpathtools 의존성 추가가 필요한데 기존 모듈은 의존성 변동 최소화. Phase 1 범위는 **U넥 양면유니폼 전용**으로 한정(상수 하드코딩, `NORMALIZER_VERSION = "1.0-uneck-double-sided"`). 향후 V넥/하의 등 양식 추가 시 Phase 3에서 JSON 프리셋으로 외부화 검토.
+- **참조횟수**: 0
+
+### [2026-04-21] SVG path bbox 측정: 자체 파싱 대신 svgpathtools 채택
+- **분류**: decision
+- **발견자**: developer
+- **내용**: 기존 `svg_parser._parse_path_bbox`는 path 명령(M/L/C/S/Q/Z) 단순 파싱으로 cubic bezier 제어점까지 bbox에 포함시키는 한계가 있어, 곡선이 많은 패턴에서 실제 시각 영역보다 큰 bbox를 반환. 신규 `svg_normalizer.py`는 **svgpathtools 1.7.2** 채택해 cubic/quadratic bezier 곡선의 실제 통과 영역을 정확히 측정. 의존성 비용은 svgpathtools(~3MB) + scipy/numpy(이미 거의 표준). 기존 svg_parser의 측정 로직은 그대로 두어 그레이딩 회귀 위험 0. 멱등성 검증 결과 같은 입력 100번 변환해도 비트 단위 동일 결과 보장.
+- **참조횟수**: 0
+
 ### [2026-04-08] AI 파일 처리 방식: 직접 파싱 대신 Illustrator 스크립팅 선택
 - **분류**: decision
 - **발견자**: planner-architect

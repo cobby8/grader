@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect, developer | 최대 30항목 -->
 <!-- 프로젝트의 폴더 구조, 파일 역할, 핵심 패턴을 기록 -->
 
+### [2026-04-21] svg_normalizer.py 모듈 (SVG 일괄 표준화)
+- **분류**: architecture
+- **발견자**: developer
+- **내용**: `python-engine/svg_normalizer.py` (950줄, 신규) — U넥 양면유니폼 사이즈별 SVG 12개를 기준 파일 구조로 일괄 변환. 11개 함수 구성: private 6개(transform 평탄화, path 평행이동, bbox 분류, SVG 조립), public 디버깅 3개(`measure_svg_bboxes`, `classify_svg_paths`, `preview_normalization`), public 핵심 2개(`normalize_svg`, `normalize_batch`). 모든 public 함수는 grader 컨벤션 `{"success": bool, "data": ..., "error": ...}` dict 반환. 모듈 상단에 변환 상수(NORMALIZER_VERSION, ARTBOARD_WIDTH/HEIGHT, PATTERN_X/Y_OFFSET, CUT_LINE_MARGIN, Y_OFFSET 등) 정의. main.py에 CLI 커맨드 3개 등록(`measure_svg`, `preview_normalize`, `normalize_batch`). svgpathtools>=1.6.0 의존성 추가. svg_parser.py와는 완전 분리 (그레이딩 회귀 위험 차단).
+- **참조횟수**: 0
+
 ### [2026-04-08] 승화전사 유니폼 패턴 자동 생성 프로그램 아키텍처
 - **분류**: architecture
 - **발견자**: planner-architect
