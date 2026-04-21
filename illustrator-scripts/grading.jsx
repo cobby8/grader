@@ -74,26 +74,25 @@ function writeTextFile(filePath, content) {
 }
 
 // ============================================================
-// 로그 (파일 출력 + $.writeln 병행)
+// 로그 (파일 출력)
 // ============================================================
 
-// 왜 파일 출력: ExtendScript Toolkit 없으면 $.writeln 결과 안 보임.
+// 왜 파일 출력: Illustrator 콘솔 없으므로 파일로 남겨야 디버깅 가능.
 // config.outputPath 옆에 grading-debug.log 저장 → 사용자가 노트패드로 확인.
 var _logFile = null;
 var _logFileInitialized = false;
+var DEBUG_LOG = false; // true: 진단 로그 출력 (디버깅용), false: 핵심 로그만 (성능 우선)
 
 function initLogFile(outputPath) {
     try {
-        // outputPath 부모 폴더 계산
         var parent = outputPath.replace(/[\\\/][^\\\/]+$/, "");
         if (!parent || parent === outputPath) parent = outputPath;
         var logPath = parent + "\\grading-debug.log";
         _logFile = new File(logPath);
         _logFile.encoding = "UTF-8";
-        // 매 실행마다 덮어쓰기 (append 아님)
         _logFile.open("w");
         _logFile.write("=== grading-v2 실행 로그 (" + new Date().toString() + ") ===\n");
-        _logFile.close();
+        // 파일을 열어둔 채 유지 (매번 open/close 하지 않음 → 성능 대폭 향상)
         _logFileInitialized = true;
     } catch (e) {
         _logFileInitialized = false;
@@ -101,15 +100,17 @@ function initLogFile(outputPath) {
 }
 
 function logWrite(msg) {
-    // $.writeln도 유지 (ExtendScript Toolkit 연결 시 도움)
-    try { $.writeln(msg); } catch (e1) {}
-    // 파일 append
+    // $.writeln 제거 — ExtendScript Toolkit 미사용 시 불필요한 오버헤드
     if (_logFileInitialized && _logFile) {
         try {
-            _logFile.open("a");
             _logFile.write(msg + "\n");
-            _logFile.close();
         } catch (e2) {}
+    }
+}
+
+function flushLogFile() {
+    if (_logFileInitialized && _logFile) {
+        try { _logFile.close(); } catch (e) {}
     }
 }
 
@@ -208,7 +209,7 @@ function extractBodyColor(designDoc) {
     try {
         bodyLayer = designDoc.layers.getByName("몸판");
     } catch (e) {
-        logWrite("[grading-v2] '몸판' 레이어 없음");
+        if (DEBUG_LOG) logWrite("[grading-v2] '몸판' 레이어 없음");
         return null;
     }
 
@@ -216,7 +217,7 @@ function extractBodyColor(designDoc) {
     for (var i = 0; i < bodyLayer.pathItems.length; i++) {
         var p = bodyLayer.pathItems[i];
         if (p.filled && p.fillColor && p.fillColor.typename !== "NoColor") {
-            logWrite("[grading-v2] 몸판 색 발견 (pathItems[" + i + "])");
+            if (DEBUG_LOG) logWrite("[grading-v2] 몸판 색 발견 (pathItems[" + i + "])");
             return toCMYK(p.fillColor);
         }
     }
@@ -231,75 +232,15 @@ function extractBodyColor(designDoc) {
             for (var gi = 0; gi < it.pathItems.length; gi++) {
                 var gp = it.pathItems[gi];
                 if (gp.filled && gp.fillColor && gp.fillColor.typename !== "NoColor") {
-                    logWrite("[grading-v2] 몸판 색 발견 (그룹 내부)");
+                    if (DEBUG_LOG) logWrite("[grading-v2] 몸판 색 발견 (그룹 내부)");
                     return toCMYK(gp.fillColor);
                 }
             }
         }
     }
 
-    logWrite("[grading-v2] 몸판에서 채워진 path 못 찾음");
+    if (DEBUG_LOG) logWrite("[grading-v2] 몸판에서 채워진 path 못 찾음");
     return null;
-}
-
-// ============================================================
-// 몸판 개별 색상 추출 (양면 유니폼 대응)
-// ============================================================
-
-// 왜 필요: 양면 유니폼은 표면=흰색, 이면=남색처럼 각 몸판 조각이 다른 색.
-//          extractBodyColor는 첫 path 색만 반환 → 모든 조각을 같은 색으로 채워 안 보임.
-//          이 함수는 각 조각(pathItem)마다 개별 색상+중심좌표를 반환한다.
-// 반환: [{cx, cy, color: CMYKColor}, ...] (x중심 오름차순 정렬)
-//   단면: [{cx,cy,color:파랑}, {cx,cy,color:파랑}] (2개, 동일 색)
-//   양면: [{cx,cy,color:흰색}, {cx,cy,color:남색}, ...] (4개, 교차 색)
-function extractBodyColors(designDoc) {
-    var colors = [];
-    try {
-        var bodyLayer = designDoc.layers.getByName("몸판");
-        // 직속 pathItems 탐색
-        for (var i = 0; i < bodyLayer.pathItems.length; i++) {
-            var p = bodyLayer.pathItems[i];
-            // 50pt 이상 + filled 있는 path만 (색상 없는 유령 path 제외)
-            if (Math.abs(p.width) > 50 && Math.abs(p.height) > 50
-                && p.filled && p.fillColor && p.fillColor.typename !== "NoColor") {
-                var gb = p.geometricBounds;
-                var cx = (gb[0] + gb[2]) / 2;
-                var cy = (gb[1] + gb[3]) / 2;
-                var color = null;
-                if (p.filled && p.fillColor && p.fillColor.typename !== "NoColor") {
-                    color = toCMYK(p.fillColor);
-                }
-                colors.push({ cx: cx, cy: cy, color: color });
-            }
-        }
-        // GroupItem 내부도 탐색 (양면에서 일부가 그룹일 때)
-        for (var gi = 0; gi < bodyLayer.groupItems.length; gi++) {
-            var grp = bodyLayer.groupItems[gi];
-            for (var gpi = 0; gpi < grp.pathItems.length; gpi++) {
-                var gp = grp.pathItems[gpi];
-                if (Math.abs(gp.width) > 50 && Math.abs(gp.height) > 50
-                    && gp.filled && gp.fillColor && gp.fillColor.typename !== "NoColor") {
-                    var ggb = gp.geometricBounds;
-                    var gcx = (ggb[0] + ggb[2]) / 2;
-                    var gcy = (ggb[1] + ggb[3]) / 2;
-                    var gcolor = null;
-                    if (gp.filled && gp.fillColor && gp.fillColor.typename !== "NoColor") {
-                        gcolor = toCMYK(gp.fillColor);
-                    }
-                    colors.push({ cx: gcx, cy: gcy, color: gcolor });
-                }
-            }
-        }
-        // x+y 2D 정렬 (classifyBodyPieces와 동일 순서)
-        // x 차이 10pt 이상이면 x 기준, 같은 열이면 y 내림차순 (위쪽=큰y 먼저)
-        colors.sort(function(a, b) {
-            if (Math.abs(a.cx - b.cx) > 10) return a.cx - b.cx;
-            return b.cy - a.cy;
-        });
-    } catch (e) {
-        logWrite("[grading-v2] extractBodyColors 실패: " + e.message);
-    }
-    return colors;
 }
 
 // ============================================================
@@ -376,7 +317,7 @@ function importPatternPaths(svgDoc, baseDoc, mainColor, fillLayer, patternLayer)
         var src = svgDoc.layers[li];
 
         // [진단] 레이어 전체 통계: 어떤 종류의 아이템이 몇 개 있는지 파악
-        logWrite("[진단] SVG 레이어[" + li + "] 이름=" + src.name
+        if (DEBUG_LOG) logWrite("[진단] SVG 레이어[" + li + "] 이름=" + src.name
             + " pathItems=" + src.pathItems.length
             + " compoundPathItems=" + src.compoundPathItems.length
             + " groupItems=" + src.groupItems.length
@@ -390,7 +331,7 @@ function importPatternPaths(svgDoc, baseDoc, mainColor, fillLayer, patternLayer)
             var fl = false, cl = false;
             try { fl = it.filled; } catch (eF) {}
             try { cl = it.closed; } catch (eC) {}
-            logWrite("[진단]   [" + di + "] typename=" + it.typename
+            if (DEBUG_LOG) logWrite("[진단]   [" + di + "] typename=" + it.typename
                 + " w=" + w.toFixed(1) + " h=" + h.toFixed(1)
                 + " filled=" + fl + " closed=" + cl);
         }
@@ -401,7 +342,7 @@ function importPatternPaths(svgDoc, baseDoc, mainColor, fillLayer, patternLayer)
             var path = src.pathItems[pi];
 
             // [진단] 각 path의 크기/채움여부/50pt 통과 여부
-            logWrite("[진단]   path[" + pi + "] w=" + Math.abs(path.width).toFixed(1)
+            if (DEBUG_LOG) logWrite("[진단]   path[" + pi + "] w=" + Math.abs(path.width).toFixed(1)
                 + " h=" + Math.abs(path.height).toFixed(1)
                 + " filled=" + path.filled
                 + " 50pt통과=" + (Math.abs(path.width) > 50 && Math.abs(path.height) > 50));
@@ -447,7 +388,7 @@ function importPatternPaths(svgDoc, baseDoc, mainColor, fillLayer, patternLayer)
     }
 
     // [진단] 함수 종료 직전 최종 결과 (몸판 색상 채움 count + 누적 면적)
-    logWrite("[진단] importPatternPaths 결과: filledCount=" + filledCount
+    if (DEBUG_LOG) logWrite("[진단] importPatternPaths 결과: filledCount=" + filledCount
         + " targetArea=" + targetArea.toFixed(1));
 
     return { filledCount: filledCount, targetArea: targetArea };
@@ -521,17 +462,15 @@ function classifyBodyPieces(layer) {
         }
     }
 
-    // 왜 2D 정렬: 양면 유니폼처럼 같은 x에 위/아래 body가 있을 때
-    //             x만으로 정렬하면 순서가 불안정. x+y로 결정적 순서 보장.
-    //             10pt 임계값: 같은 열(column)의 미세 좌표 차이 무시.
+    // 왜 정렬: 디자인 AI와 SVG의 레이어 내 path 순서가 다를 수 있으므로
+    //          x중심 오름차순으로 통일해 "좌→우 idx" 대응을 보장한다.
     result.bodies.sort(function(a, b) {
-        if (Math.abs(a.cx - b.cx) > 10) return a.cx - b.cx;
-        return b.cy - a.cy;  // x 비슷하면 y 내림차순 (위=큰y 먼저)
+        return a.cx - b.cx;
     });
-    // 왜 bands도 동일 정렬: design bands[i] ↔ svg bands[i] idx 1:1 대응.
+    // 왜 bands도 정렬: B-3안에서 design bands[i] ↔ svg bands[i] 를 idx로 직접 매칭.
+    //                  양쪽 모두 x중심 오름차순 정렬해야 의미 있는 1:1 대응이 된다.
     result.bands.sort(function(a, b) {
-        if (Math.abs(a.cx - b.cx) > 10) return a.cx - b.cx;
-        return b.cy - a.cy;
+        return a.cx - b.cx;
     });
 
     // idx 부여 (0..N-1)
@@ -607,7 +546,7 @@ function placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces, fallbackCen
         }
 
         if (!baseCenter) {
-            logWrite("[진단] 요소[" + i + "] 배치 생략: baseCenter 없음 (type=" + pieceType + " pieceIdx=" + pieceIdx + ")");
+            if (DEBUG_LOG) logWrite("[진단] 요소[" + i + "] 배치 생략: baseCenter 없음 (type=" + pieceType + " pieceIdx=" + pieceIdx + ")");
             continue;
         }
 
@@ -645,7 +584,7 @@ function placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces, fallbackCen
                 item.translate(targetCxBd - curCxBd, targetBottomBd - curBottomBd);
             }
 
-            logWrite("[진단] 요소[" + i + "] 배치(band,상대좌표): pieceIdx=" + pieceIdx
+            if (DEBUG_LOG) logWrite("[진단] 요소[" + i + "] 배치(band,상대좌표): pieceIdx=" + pieceIdx
                 + " bandBottom=" + svgBandBottom.toFixed(1)
                 + " relVec.dy=" + relVec.dy.toFixed(1)
                 + " scale=" + scale.toFixed(4)
@@ -657,7 +596,7 @@ function placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces, fallbackCen
             var curBottom = gb[3]; // 현재 요소 하단
             item.translate(targetCx - curCx, targetBottom - curBottom);
 
-            logWrite("[진단] 요소[" + i + "] 배치(piece,하단기준): pieceIdx=" + pieceIdx
+            if (DEBUG_LOG) logWrite("[진단] 요소[" + i + "] 배치(piece,하단기준): pieceIdx=" + pieceIdx
                 + " bodyBottom=" + svgBodyBottom.toFixed(1)
                 + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
                 + " scale=" + scale.toFixed(4)
@@ -668,7 +607,7 @@ function placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces, fallbackCen
             var curCy = (gb[1] + gb[3]) / 2;
             item.translate(targetCx - curCx, targetCy - curCy);
 
-            logWrite("[진단] 요소[" + i + "] 배치(fallback): pieceIdx=" + pieceIdx
+            if (DEBUG_LOG) logWrite("[진단] 요소[" + i + "] 배치(fallback): pieceIdx=" + pieceIdx
                 + " center=(" + baseCenter.cx.toFixed(1) + "," + baseCenter.cy.toFixed(1) + ")"
                 + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
                 + " scale=" + scale.toFixed(4)
@@ -696,7 +635,7 @@ function placeBandsPerPiece(svgBands, bandMeta, svgBodies, fallbackCenter, linea
         // 메타 범위 초과 → 이 band는 디자인 AI에 대응이 없음 (그대로 두고 경고)
         var meta = (i < matchCount) ? bandMeta[i] : null;
         if (!meta) {
-            logWrite("[진단] SVG band[" + i + "] 메타 없음 - 이동 생략 (원본 좌표 유지)");
+            if (DEBUG_LOG) logWrite("[진단] SVG band[" + i + "] 메타 없음 - 이동 생략 (원본 좌표 유지)");
             continue;
         }
 
@@ -714,7 +653,7 @@ function placeBandsPerPiece(svgBands, bandMeta, svgBodies, fallbackCenter, linea
             mode = "fallback";
         }
         if (!baseCenter) {
-            logWrite("[진단] SVG band[" + i + "] baseCenter 없음 - 생략");
+            if (DEBUG_LOG) logWrite("[진단] SVG band[" + i + "] baseCenter 없음 - 생략");
             continue;
         }
 
@@ -736,7 +675,7 @@ function placeBandsPerPiece(svgBands, bandMeta, svgBodies, fallbackCenter, linea
             // 이동 후 실제 좌표 저장 (geometricBounds 캐시 회피)
             bandPositions[i] = { cx: targetCx, bottom: targetBottom };
 
-            logWrite("[진단] SVG band[" + i + "] 이동(piece,상단기준): pieceIdx=" + pieceIdx
+            if (DEBUG_LOG) logWrite("[진단] SVG band[" + i + "] 이동(piece,상단기준): pieceIdx=" + pieceIdx
                 + " bodyTop=" + svgBodyTop.toFixed(1)
                 + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
                 + " scale=" + scale.toFixed(4)
@@ -751,7 +690,7 @@ function placeBandsPerPiece(svgBands, bandMeta, svgBodies, fallbackCenter, linea
             var movedBottom = gb[3] + (targetCy - curCy);
             bandPositions[i] = { cx: targetCx, bottom: movedBottom };
 
-            logWrite("[진단] SVG band[" + i + "] 이동(fallback): pieceIdx=" + pieceIdx
+            if (DEBUG_LOG) logWrite("[진단] SVG band[" + i + "] 이동(fallback): pieceIdx=" + pieceIdx
                 + " center=(" + baseCenter.cx.toFixed(1) + "," + baseCenter.cy.toFixed(1) + ")"
                 + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
                 + " scale=" + scale.toFixed(4)
@@ -814,6 +753,9 @@ function main() {
         var designFile = new File(config.designAiPath);
         if (!designFile.exists) throw new Error("디자인 AI 파일 없음: " + config.designAiPath);
 
+        // 대화 상자 억제 (속도 향상 — SVG/AI 열 때 옵션 창 방지)
+        app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS;
+
         designDoc = app.open(designFile);
         logWrite("[grading-v2] STEP 1: 디자인 열림 - " + designDoc.name);
 
@@ -844,26 +786,10 @@ function main() {
             mainColor.cyan = 0; mainColor.magenta = 0; mainColor.yellow = 0; mainColor.black = 100;
             logWrite("[grading-v2] 경고: 몸판 색 추출 실패, 기본 검정 사용");
         } else {
-            logWrite("[grading-v2] 몸판 색 CMYK: C" + mainColor.cyan.toFixed(1)
+            if (DEBUG_LOG) logWrite("[grading-v2] 몸판 색 CMYK: C" + mainColor.cyan.toFixed(1)
                 + " M" + mainColor.magenta.toFixed(1)
                 + " Y" + mainColor.yellow.toFixed(1)
                 + " K" + mainColor.black.toFixed(1));
-        }
-
-        // body별 개별 색상 추출 (양면 유니폼: 각 몸판 조각의 색이 다름)
-        var bodyColors = extractBodyColors(designDoc);
-        logWrite("[grading-v2] body별 색상: " + bodyColors.length + "개");
-        for (var bci = 0; bci < bodyColors.length; bci++) {
-            var bc = bodyColors[bci];
-            if (bc.color) {
-                logWrite("[진단] bodyColor[" + bci + "] cx=" + bc.cx.toFixed(1)
-                    + " CMYK: C" + bc.color.cyan.toFixed(1)
-                    + " M" + bc.color.magenta.toFixed(1)
-                    + " Y" + bc.color.yellow.toFixed(1)
-                    + " K" + bc.color.black.toFixed(1));
-            } else {
-                logWrite("[진단] bodyColor[" + bci + "] cx=" + bc.cx.toFixed(1) + " 색상 없음");
-            }
         }
 
         // ===== STEP 2: 기준 면적 계산 (baseArea) =====
@@ -889,7 +815,7 @@ function main() {
             for (var ei = 0; ei < elemLayer.pageItems.length; ei++) {
                 elemItems.push(elemLayer.pageItems[ei]);
             }
-            logWrite("[grading-v2] 요소 레퍼런스 수집: " + elemItems.length + "개");
+            if (DEBUG_LOG) logWrite("[grading-v2] 요소 레퍼런스 수집: " + elemItems.length + "개");
         }
 
         // B-2안: 몸판 조각 분류 + 요소별 소속/상대벡터 계산
@@ -916,26 +842,7 @@ function main() {
                 app.executeMenuCommand("ungroup");
             }
             designDoc.selection = null;
-            logWrite("[grading-v2] 디자인AI 몸판 ungroup: " + bodyLayer.pathItems.length + "개 path");
-
-            // 유령 path 제거 (filled=false인 대형 path)
-            // 왜: 양면 유니폼에서 패턴선만 있는 path가 몸판 레이어에 섞여 있으면
-            //      classifyBodyPieces가 5개로 인식 → SVG 4개와 불일치 → 매칭 깨짐
-            // 안전: designDoc은 SaveOptions.DONOTSAVECHANGES로 닫히므로 원본 무영향
-            var removedCount = 0;
-            for (var rpi = bodyLayer.pathItems.length - 1; rpi >= 0; rpi--) {
-                var rp = bodyLayer.pathItems[rpi];
-                if (Math.abs(rp.width) > 50 && Math.abs(rp.height) > 50) {
-                    if (!rp.filled || !rp.fillColor || rp.fillColor.typename === "NoColor") {
-                        rp.remove();
-                        removedCount++;
-                    }
-                }
-            }
-            if (removedCount > 0) {
-                logWrite("[grading-v2] 디자인AI 몸판 유령 path 제거: " + removedCount + "개 (filled 없는 대형 path)");
-            }
-            logWrite("[grading-v2] 디자인AI 몸판 최종: " + bodyLayer.pathItems.length + "개 path");
+            if (DEBUG_LOG) logWrite("[grading-v2] 디자인AI 몸판 ungroup: " + bodyLayer.pathItems.length + "개 path");
         }
 
         if (hasBody && hasElements) {
@@ -949,7 +856,7 @@ function main() {
             for (var di = 0; di < designPieces.bodies.length; di++) {
                 designCxList += (di > 0 ? ", " : "") + "body" + di + "=" + designPieces.bodies[di].cx.toFixed(1);
             }
-            logWrite("[진단] 디자인AI 몸판 분류: bands=" + designPieces.bands.length
+            if (DEBUG_LOG) logWrite("[진단] 디자인AI 몸판 분류: bands=" + designPieces.bands.length
                 + "개 bodies=" + designPieces.bodies.length + "개 (좌→우: " + designCxList + ")");
 
             for (var mi = 0; mi < elemItems.length; mi++) {
@@ -1009,7 +916,7 @@ function main() {
                 }
                 elemMeta.push({ pieceType: bestType, pieceIdx: bestIdx, relVec: rv });
 
-                logWrite("[진단] 요소[" + mi + "] 소속: type=" + bestType + " idx=" + bestIdx
+                if (DEBUG_LOG) logWrite("[진단] 요소[" + mi + "] 소속: type=" + bestType + " idx=" + bestIdx
                     + " (거리=" + (bestDist >= 0 ? bestDist.toFixed(1) : "?") + ")"
                     + " relVec=(" + rv.dx.toFixed(1) + "," + rv.dy.toFixed(1) + ")");
             }
@@ -1056,12 +963,12 @@ function main() {
                     bandMeta.push({ index: bi, pieceIdx: bPieceIdx, relVec: bRv });
 
                     var bDistLog = (bestDistB !== undefined && bestDistB >= 0) ? bestDistB : -1;
-                    logWrite("[진단] 디자인AI band[" + bi + "] 소속 body 인덱스=" + bPieceIdx
+                    if (DEBUG_LOG) logWrite("[진단] 디자인AI band[" + bi + "] 소속 body 인덱스=" + bPieceIdx
                         + " 거리=" + (bDistLog >= 0 ? bDistLog.toFixed(1) : "?")
                         + " relVec=(" + bRv.dx.toFixed(1) + "," + bRv.dy.toFixed(1) + ")");
                 }
             } else {
-                logWrite("[진단] 디자인AI bands 없음 - band 이동 스킵 예정");
+                if (DEBUG_LOG) logWrite("[진단] 디자인AI bands 없음 - band 이동 스킵 예정");
             }
         }
 
@@ -1088,7 +995,7 @@ function main() {
             app.executeMenuCommand("ungroup");
         }
         app.selection = null;
-        logWrite("[grading-v2] SVG ungroup 완료: " + svgDoc.layers[0].pathItems.length + "개 path 노출");
+        if (DEBUG_LOG) logWrite("[grading-v2] SVG ungroup 완료: " + svgDoc.layers[0].pathItems.length + "개 path 노출");
 
         // 대지 사이즈 고정: 158cm × 200cm (사내 작업 기준)
         var ARTBOARD_W_CM = 158;
@@ -1167,7 +1074,7 @@ function main() {
 
                 // 지수 보정 적용: linearScale^K (K<1이면 축소/확대 완화)
                 var adjustedScale = Math.pow(linearScale, ELEMENT_SCALE_EXPONENT);
-                logWrite("[grading-v2] STEP 7: 보정스케일=" + adjustedScale.toFixed(4)
+                if (DEBUG_LOG) logWrite("[grading-v2] STEP 7: 보정스케일=" + adjustedScale.toFixed(4)
                     + " (" + (adjustedScale * 100).toFixed(1) + "%) K=" + ELEMENT_SCALE_EXPONENT);
 
                 // 0.5% 이상 차이 있을 때만 적용
@@ -1196,41 +1103,19 @@ function main() {
             for (var sci = 0; sci < svgPieces.bodies.length; sci++) {
                 svgCxList += (sci > 0 ? ", " : "") + "body" + sci + "=" + svgPieces.bodies[sci].cx.toFixed(1);
             }
-            logWrite("[진단] SVG 몸판 분류: bands=" + svgPieces.bands.length
+            if (DEBUG_LOG) logWrite("[진단] SVG 몸판 분류: bands=" + svgPieces.bands.length
                 + "개 bodies=" + svgPieces.bodies.length + "개 (좌→우: " + svgCxList + ")");
-
-            // --- body별 색상 적용 (양면 유니폼 대응) ---
-            // 왜 여기서: importPatternPaths가 mainColor(단일)로 전부 채운 상태.
-            //           양면 유니폼은 각 조각이 다른 색이므로 여기서 개별 색상으로 덮어쓴다.
-            // bodyColors(디자인 측)와 svgPieces.bodies(SVG 측)를 인덱스 매칭
-            // (둘 다 x중심 오름차순 정렬이므로 순서가 일치한다)
-            if (bodyColors.length > 0 && svgPieces && svgPieces.bodies.length > 0) {
-                var colorMatchCount = Math.min(bodyColors.length, svgPieces.bodies.length);
-                for (var cmi = 0; cmi < colorMatchCount; cmi++) {
-                    var svgBody = svgPieces.bodies[cmi];
-                    var designColor = bodyColors[cmi].color;
-                    if (svgBody.pathRef && designColor) {
-                        svgBody.pathRef.filled = true;
-                        svgBody.pathRef.fillColor = cloneCMYK(designColor);
-                        logWrite("[진단] body[" + cmi + "] 색상 적용: C" + designColor.cyan.toFixed(1)
-                            + " M" + designColor.magenta.toFixed(1)
-                            + " Y" + designColor.yellow.toFixed(1)
-                            + " K" + designColor.black.toFixed(1));
-                    }
-                }
-                // 매칭 안 된 나머지 body는 mainColor 유지 (importPatternPaths에서 이미 적용)
-            }
 
             // 매칭 일치/불일치 판정
             var designBodyCount = designPieces ? designPieces.bodies.length : 0;
             var svgBodyCount = svgPieces.bodies.length;
             var matchCount = Math.min(designBodyCount, svgBodyCount);
             var matchStatus = (designBodyCount === svgBodyCount) ? "일치" : "불일치";
-            logWrite("[진단] 매칭 결과: designBodies=" + designBodyCount
+            if (DEBUG_LOG) logWrite("[진단] 매칭 결과: designBodies=" + designBodyCount
                 + "개 svgBodies=" + svgBodyCount
                 + "개 (" + matchStatus + ", 유효 매칭=" + matchCount + "개)");
             if (matchStatus === "불일치") {
-                logWrite("[진단] 경고: 몸판 조각 개수 불일치 (design="
+                if (DEBUG_LOG) logWrite("[진단] 경고: 몸판 조각 개수 불일치 (design="
                     + designBodyCount + ", svg=" + svgBodyCount
                     + ") → min 까지 매칭, 초과분 fallback");
             }
@@ -1247,7 +1132,7 @@ function main() {
             var bandPositions = [];
             if (svgPieces.bands.length > 0 && bandMeta.length > 0) {
                 var bandMatchStatus = (bandMeta.length === svgPieces.bands.length) ? "일치" : "불일치";
-                logWrite("[진단] band 매칭 결과: designBands=" + bandMeta.length
+                if (DEBUG_LOG) logWrite("[진단] band 매칭 결과: designBands=" + bandMeta.length
                     + "개 svgBands=" + svgPieces.bands.length + "개 (" + bandMatchStatus + ")");
                 bandPositions = placeBandsPerPiece(svgPieces.bands, bandMeta, svgPieces.bodies, svgFallback, bandScaleForPlace);
 
@@ -1259,7 +1144,7 @@ function main() {
                 var ptMatchCount = Math.min(bandMeta.length, ptPieces.bands.length);
 
                 if (ptMatchCount > 0) {
-                    logWrite("[진단] patternLayer band 이동 시작: ptBands=" + ptPieces.bands.length
+                    if (DEBUG_LOG) logWrite("[진단] patternLayer band 이동 시작: ptBands=" + ptPieces.bands.length
                         + "개 매칭=" + ptMatchCount + "개");
 
                     for (var pbi = 0; pbi < ptMatchCount; pbi++) {
@@ -1293,7 +1178,7 @@ function main() {
                             var ptCurBottom = ptBounds[3]; // 현재 pattern band 하단
                             ptBand.pathRef.translate(ptTargetCx - ptCurCx, ptTargetBottom - ptCurBottom);
 
-                            logWrite("[진단] patternLayer band[" + pbi + "] 이동(상단기준):"
+                            if (DEBUG_LOG) logWrite("[진단] patternLayer band[" + pbi + "] 이동(상단기준):"
                                 + " bodyTop=" + ptSvgBodyTop.toFixed(1)
                                 + " 타겟Bottom=" + ptTargetBottom.toFixed(1));
                         } else {
@@ -1302,22 +1187,22 @@ function main() {
                             var ptCurCy = (ptBounds[1] + ptBounds[3]) / 2;
                             ptBand.pathRef.translate(ptTargetCx - ptCurCx, ptTargetCy - ptCurCy);
 
-                            logWrite("[진단] patternLayer band[" + pbi + "] 이동(fallback): 타겟=("
+                            if (DEBUG_LOG) logWrite("[진단] patternLayer band[" + pbi + "] 이동(fallback): 타겟=("
                                 + ptTargetCx.toFixed(1) + "," + ptTargetCy.toFixed(1) + ")");
                         }
                     }
                 } else {
-                    logWrite("[진단] patternLayer band 이동 스킵: ptBands=" + ptPieces.bands.length);
+                    if (DEBUG_LOG) logWrite("[진단] patternLayer band 이동 스킵: ptBands=" + ptPieces.bands.length);
                 }
             } else {
-                logWrite("[진단] band 이동 스킵: design bands=" + bandMeta.length
+                if (DEBUG_LOG) logWrite("[진단] band 이동 스킵: design bands=" + bandMeta.length
                     + ", svg bands=" + svgPieces.bands.length);
             }
 
             // --- 요소 배치 (band 이동 후 실행) ---
             // 왜 band 뒤: band 소속 요소가 bandPositions(이동 후 좌표)를 참조하므로
             //              band 이동이 완료된 뒤에 실행해야 정확한 좌표를 얻는다.
-            app.redraw(); // geometricBounds 갱신 (band 외 요소용)
+            // app.redraw() 제거 — 성능 병목. bandPositions로 캐시 회피 중이라 불필요.
             placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces, svgFallback, scaleForPlace, bandPositions);
         } else {
             logWrite("[grading-v2] 요소 없음 - 스케일/정렬 생략");
@@ -1351,7 +1236,7 @@ function main() {
                 for (var shi = 0; shi < allItems.length; shi++) {
                     allItems[shi].translate(shiftX, shiftY);
                 }
-                logWrite("[grading-v2] 중앙 정렬: 이동 dx=" + shiftX.toFixed(1) + " dy=" + shiftY.toFixed(1));
+                if (DEBUG_LOG) logWrite("[grading-v2] 중앙 정렬: 이동 dx=" + shiftX.toFixed(1) + " dy=" + shiftY.toFixed(1));
             }
         }
 
@@ -1377,7 +1262,7 @@ function main() {
         try { designLayer.remove(); } catch (e2) {}
         try { patternLayer.remove(); } catch (e3) {}
 
-        logWrite("[grading-v2] 레이어 통합 완료");
+        if (DEBUG_LOG) logWrite("[grading-v2] 레이어 통합 완료");
 
         // ===== STEP 8: EPS 저장 =====
         var outputFile = new File(config.outputPath);
@@ -1391,9 +1276,11 @@ function main() {
         writeSuccessResult(resultPath, config.outputPath,
             "그레이딩 완료 (v2, " + filledCount + "개 조각 + " + pastedItems.length + "개 요소)");
         logWrite("[grading-v2] 완료!");
+        flushLogFile();
 
     } catch (err) {
         logWrite("[grading-v2] 오류: " + err.message);
+        flushLogFile();
 
         // 열린 문서 정리 (역순)
         try { if (designDoc) designDoc.close(SaveOptions.DONOTSAVECHANGES); } catch (eD) {}
