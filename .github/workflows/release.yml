@@ -80,6 +80,20 @@ jobs:
       - name: Sync bundle resources
         run: npm run sync:resources
 
+      # 6.5) 진단용 — Secret 길이 확인 (값 자체는 노출 X)
+      # TAURI_SIGNING_PRIVATE_KEY 기대 길이: 348 (정확히)
+      # TAURI_SIGNING_PRIVATE_KEY_PASSWORD 기대 길이: 9 (stiz3000!)
+      # 다른 값이 나오면 Secret 등록 시 공백/줄바꿈 혼입 또는 오타
+      - name: Debug Secret lengths
+        shell: bash
+        run: |
+          echo "PRIVATE_KEY length: ${#TAURI_SIGNING_PRIVATE_KEY}"
+          echo "PASSWORD length: ${#TAURI_SIGNING_PRIVATE_KEY_PASSWORD}"
+          echo "(기대값: PRIVATE_KEY=348, PASSWORD=9)"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
       # 7) Tauri 빌드 + 서명 + GitHub Release 업로드 (한 번에)
       #    tauri-apps/tauri-action@v0 — Tauri 팀 공식 액션 (Tauri 2.x 호환)
       #    자동 수행:
