@@ -2,6 +2,24 @@
 <!-- 담당: debugger, tester | 최대 30항목 -->
 <!-- 이 프로젝트에서 반복되는 에러 패턴, 함정, 주의사항을 기록 -->
 
+### [2026-04-21] 양면 유니폼 Y축 부등호 방향 혼용 버그 (findBodyForLayer vs 색상 4분면 매칭)
+- **분류**: error
+- **발견자**: debugger (커밋 e79959d 양면 유니폼 버그 4종 분석 중)
+- **내용**: grading.jsx에서 "상단/하단"을 판정하는 부등호가 함수마다 달랐다. `findBodyForLayer`(L556)는 `isTop = (cy < midY)`로, 색상 4분면 매칭 루프(L1218,1222)는 `(cy > midY)`로 썼다. Illustrator의 `geometricBounds[1]`(top)은 **Y 클수록 위**이므로 후자가 맞다. 전자는 반대 방향이라 "요소_표_앞"이 SVG의 이면 body 위에 배치되고 색상도 엉뚱한 몸판에 들어가 "흰 몸판 + 흰 글자" 같은 색상 반전까지 파생됐다(독립 버그 아닌 파생). **교훈**: 문서 내 "상/하" 판정 기준은 모듈 공통 헬퍼(`isTopInDoc(cy, midY)`)로 통일하자. Illustrator 좌표계는 PostScript와 동일한 "Y 위가 큰 값"이라는 사실을 코멘트로 반복 명시. **해결 방향**: L556 부등호를 `>`로 수정하면 버그1(표/이 스왑)과 버그4(색상 반전)가 동시에 해결됨. 추가로 몸판 path에도 이름("표_앞" 등)을 붙여 bbox 추정을 완전히 제거하는 구조 개선 권장.
+- **참조횟수**: 0
+
+### [2026-04-21] 이름 기반 요소 배치 모드에 상대 좌표 누락 (grading.jsx L1304) — 3차 분석으로 포팅 구조 확정
+- **분류**: error
+- **발견자**: debugger (양면 유니폼 버그 3: 번호/이름/로고 "외측 위 쏠림")
+- **내용**: 커밋 e79959d에서 추가된 "이름 기반 모드"(hasNamedLayers 경로)는 요소들을 그룹화한 뒤 "그룹 하단 = body 하단, 그룹 중심x = body 중심x"로 **통째로 한 번만 translate**한다(L1306~1309). 폴백 모드는 `placeElementGroupPerPiece`가 요소별 `relVec.dx/dy`를 사용해 개별 배치하는 것과 대조적. 결과: 번호는 body 상단, 이름은 body 하단 같은 원래 상대 위치가 모두 "body 하단 뭉침" 상태가 된다. **2차 분석(사용자 증상 "외측 위 쏠림")**: 원인은 **디자인AI의 요소 분포 영역 bbox와 SVG body 영역 bbox 형태가 다름**에 있다. 그룹 bbox를 body bbox에 cx+bottom 맞춤하면 요소가 body의 특정 가장자리로 몰림(디자인AI에서 요소가 상반부에 있으면 SVG body 상단에 몰림, 하반부에 있으면 하단에 몰림). **교훈**: 새 매칭 모드를 추가할 때는 기존 모드의 배치 알고리즘을 그대로 계승해야 한다. 공통 함수로 추출해 양쪽에서 공유. **확정된 해결 방향 (3차 분석, 2026-04-21)**: `bbox[3]`은 확실히 Y 하단(더 작은 Y값) — 좌표 규약 오류 아님. 2차 수정본이 망가진 진짜 원인은 **서브그룹 4회 group/ungroup 사이클이 `executeMenuCommand("ungroup")`에서 중첩 GroupItem 참조를 파괴한 것으로 추정**(가설 D). **재수정 구조**: (1) Phase 1에서 모든 요소를 **단일 배열 `allDups`**로 duplicate하며 요소별 `relVec`와 이름 기반 `svgBodyIdx`를 `allElemMeta[{pieceType:"body", pieceIdx, relVec}]`로 동반 수집. (2) Phase 2는 폴백과 동일하게 **1회 group → resize(CENTER) → ungroup** 후 기존 `placeElementGroupPerPiece(allDups, allElemMeta, svgPieces, svgFallback, adjustedScale, bandPositions)` 재사용. **핵심**: group/ungroup이 4회→1회가 되어 PageItem 참조 파괴 가능성 제거 + 폴백과 100% 동일 배치 로직 공유. scratchpad "디버거 3차 분석" 섹션 참조.
+- **참조횟수**: 4 (2차 분석 재참조 + 2026-04-21 수정 적용 후 롤백 + 3차 분석 구조 포팅안)
+
+### [2026-04-21] 양면 유니폼 면적비 정규화 필요 (baseArea/targetArea 전체 합산) — 2차 분석으로 가설 수정
+- **분류**: error
+- **발견자**: debugger (버그 2: 2XS인데 XL 크기 거의 그대로)
+- **내용**: `calcLayerArea`는 레이어 내 모든 50pt+ path 면적을 합산한다. **1차 분석 "대칭 상쇄" 가설은 틀렸음** — 2XS 실제 로그에서 baseArea=14,162,144 / targetArea=10,572,110 / 면적비=0.7465 / 선형스케일=0.864 / 보정스케일(^0.78)=0.8922로 정상 계산 경로를 탐. **진짜 문제**: (a) `ELEMENT_SCALE_EXPONENT = 0.78`이 선형 축소를 더 완화해 11% 축소 수준으로 약해짐 (2XS 기대치 30% 축소와 괴리), (b) 면적비가 0.49(√ = 0.7)가 아닌 0.7465가 나온 건 **SVG의 4 body 크기가 XL의 70%가 아닌 86% 정도에 그침**을 시사 — SVG 생성 쪽 또는 디자이너의 body 크기 설정 이슈. **교훈**: 면적 기준은 "조각 1개 단위"로 정규화해야 구조 간(단면 2body vs 양면 4body, 디자인AI의 너치 포함 여부 등) 비교가 안전. **확정된 해결 방향**: (1) `baseAreaPerPiece = baseArea / baseResult.count`, `targetAreaPerPiece = targetArea / filledCount`로 정규화. (2) exponent는 일단 0.78 유지 후 재테스트, 필요 시 0.9~1.0으로 조정. **로그 검증 필요**: 2XS SVG body 개별 width/height 덤프로 실제 선형비 확인 필요 (`DEBUG_LOG=true` + `[진단] path w/h`). **[2026-04-21 롤백됨] 실제 기준 count=4, 타겟 count=4라 `baseArea/count` ÷ `targetArea/count` = `baseArea/targetArea`로 수학적 효과가 0. 비대칭 구조(단면 2body + 양면 4body 섞임) 케이스에서만 의미 있는 수정이었음. 재도입 시 count 비대칭 분기 필요.**
+- **참조횟수**: 2 (2차 분석으로 가설 수정 + 2026-04-21 수정 적용 후 롤백)
+
 ### [2026-04-21] SVG 분류 로직 4그룹 12 path 누락 버그 (svg_normalizer._extract_pattern_paths)
 - **분류**: error
 - **발견자**: tester → developer (svg_normalizer Phase 1-3 검증 중)

@@ -199,7 +199,11 @@
       "Bash(echo \"---exit=$?---\")",
       "Bash(awk BEGIN{o=0;c=0} {for\\(i=1;i<=length\\($0\\);i++\\){ch=substr\\($0,i,1\\); if\\(ch==\"{\"\\)o++; else if\\(ch==\"}\"\\)c++}} END{print \"열림:\" o, \"닫힘:\" c, \"차이:\" o-c}:*)",
       "Bash(grep -E \"\\\\.md$|\\\\.jsx$\")",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(git -C \"C:/0. Programing/grader\" checkout HEAD -- illustrator-scripts/grading.jsx)",
+      "Bash(git -C \"C:/0. Programing/grader\" diff --stat illustrator-scripts/grading.jsx)",
+      "Bash(git -C \"C:/0. Programing/grader\" diff illustrator-scripts/grading.jsx)",
+      "Bash(git -C \"C:/0. Programing/grader\" status)"
     ]
   }
 }

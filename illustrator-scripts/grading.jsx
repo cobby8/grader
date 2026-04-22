@@ -81,7 +81,7 @@ function writeTextFile(filePath, content) {
 // config.outputPath 옆에 grading-debug.log 저장 → 사용자가 노트패드로 확인.
 var _logFile = null;
 var _logFileInitialized = false;
-var DEBUG_LOG = false; // true: 진단 로그 출력 (디버깅용), false: 핵심 로그만 (성능 우선)
+var DEBUG_LOG = false; // 2026-04-21 검증 완료, 성능 원복
 
 function initLogFile(outputPath) {
     try {
@@ -553,7 +553,7 @@ function findBodyForLayer(piece, side, bodies) {
     var bestDist = Infinity;
     for (var bi = 0; bi < bodies.length; bi++) {
         var isLeft = (bodies[bi].cx < midX);
-        var isTop = (bodies[bi].cy < midY); // SVG→baseDoc 좌표: Y 작을수록 위(상단)
+        var isTop = (bodies[bi].cy > midY); // Y 클수록 위 (Illustrator geometricBounds 기준)
 
         if (bodies.length <= 2) {
             // 단면(2body): y축 무시, x축만 체크
@@ -1167,7 +1167,9 @@ function main() {
 
         // 공통: 면적 비율 스케일 계산 (두 모드 모두 사용)
         var linearScale = 1.0;
-        var ELEMENT_SCALE_EXPONENT = 0.78;
+        // 2026-04-21: 0.78 → 1.0. 2XS에서 축소 부족 이슈 완화용. 선형 스케일 그대로 적용 (완화 제거).
+        // 단, SVG 자체가 XL의 86% 크기인 근본 문제는 SVG 생성 쪽에서 해결 필요.
+        var ELEMENT_SCALE_EXPONENT = 1.0;
         var adjustedScale = 1.0;
         if (baseArea > 0 && targetArea > 0) {
             var areaRatio = targetArea / baseArea;
@@ -1254,18 +1256,73 @@ function main() {
             //      유클리드 거리 의존 제거 → 양면에서 요소-body 꼬임 해결.
             logWrite("[grading-v2] STEP 6-7: 이름 기반 요소 배치 모드 (" + elemLayerGroups.length + "개 그룹)");
 
-            // Phase 1: 모든 그룹 duplicate (designDoc 열려있어야)
-            var dupGroups = []; // [{name, side, piece, items: [dupItem, ...]}, ...]
+            // ==============================================================
+            // [2026-04-21 재수정] 폴백 모드와 100% 동일한 "1회 group/ungroup + placeElementGroupPerPiece 재사용" 구조
+            // 왜 이 구조: 이전 버전은 그룹별로 4회 group/ungroup을 반복했는데,
+            //   executeMenuCommand("ungroup")이 PageItem 참조를 무효화할 가능성(가설 D)이 있어
+            //   요소가 XL 원 위치에 남는 문제 발생. 폴백 모드는 1회만 group/ungroup하므로 안전.
+            // ==============================================================
+
+            // Phase 1: 모든 그룹의 요소를 단일 배열로 duplicate + 요소별 relVec 수집
+            // (designDoc 열려있을 때만 가능 — geometricBounds 접근 필요)
+            var allDups = [];        // baseDoc 요소 평탄 배열 (폴백의 pastedItems 대응)
+            var allElemMeta = [];    // [{pieceType, pieceIdx, relVec}, ...] — 폴백과 동일 스키마
+            var phase1Summary = [];  // 로그용: 그룹별 {name, count, svgBodyIdx}
+
             for (var elgi = 0; elgi < elemLayerGroups.length; elgi++) {
                 var eg = elemLayerGroups[elgi];
                 if (eg.items.length === 0) continue;
-                var grpDups = [];
-                for (var dii = 0; dii < eg.items.length; dii++) {
-                    grpDups.push(eg.items[dii].duplicate(designLayer, ElementPlacement.PLACEATEND));
+
+                // SVG body 인덱스: Phase 2에서 placeElementGroupPerPiece가 svgPieces.bodies[svgBodyIdx]를 참조
+                var svgBodyIdx = findBodyForLayer(eg.piece, eg.side, svgPieces.bodies);
+                if (svgBodyIdx < 0) {
+                    logWrite("[grading-v2] 경고: '" + eg.name + "' SVG body 매칭 실패 - 건너뜀");
+                    continue;
                 }
-                dupGroups.push({ name: eg.name, side: eg.side, piece: eg.piece, items: grpDups });
+
+                // designDoc body: relVec 측정용 (XL 디자인 기준)
+                // designPieces는 L972에서 생성됨. 이름 기반 모드 진입 시 살아있어야 하나,
+                // hasBody/hasElements 둘 다 true일 때만 생성되므로 null 체크 필수.
+                var designBody = null;
+                if (designPieces && designPieces.bodies && designPieces.bodies.length > 0) {
+                    var designBodyIdx = findBodyForLayer(eg.piece, eg.side, designPieces.bodies);
+                    if (designBodyIdx >= 0) {
+                        designBody = designPieces.bodies[designBodyIdx];
+                    }
+                }
+
+                for (var dii = 0; dii < eg.items.length; dii++) {
+                    var srcElem = eg.items[dii];
+
+                    // relVec: 요소 중심 - designBody 중심 (X), 요소 하단 - designBody 하단 (Y)
+                    // 폴백 모드 L1031~1037과 완전히 동일한 공식
+                    var rv = { dx: 0, dy: 0 };
+                    if (designBody) {
+                        var elCenter = getItemsCenter([srcElem]);
+                        if (elCenter) {
+                            rv.dx = elCenter.cx - designBody.cx;
+                            var elBottom = srcElem.geometricBounds[3]; // bbox[3] = bottom (Y 하단)
+                            rv.dy = elBottom - designBody.bbox[3];
+                        }
+                    }
+
+                    // duplicate (designDoc → baseDoc의 designLayer)
+                    var dup = srcElem.duplicate(designLayer, ElementPlacement.PLACEATEND);
+                    allDups.push(dup);
+                    // pieceType = "body" 고정 (이름 기반 레이어는 body 전용. band는 별도 경로)
+                    allElemMeta.push({ pieceType: "body", pieceIdx: svgBodyIdx, relVec: rv });
+                }
+
+                phase1Summary.push({ name: eg.name, count: eg.items.length, svgBodyIdx: svgBodyIdx });
             }
-            logWrite("[grading-v2] Phase 1: " + dupGroups.length + "개 그룹 duplicate 완료");
+            logWrite("[grading-v2] Phase 1: " + allDups.length + "개 요소 duplicate + relVec 수집 완료 ("
+                + phase1Summary.length + "개 그룹)");
+            if (DEBUG_LOG) {
+                for (var psi = 0; psi < phase1Summary.length; psi++) {
+                    var ps = phase1Summary[psi];
+                    logWrite("[진단] 그룹 '" + ps.name + "': " + ps.count + "개 요소 → svgBody[" + ps.svgBodyIdx + "]");
+                }
+            }
 
             // designDoc 닫기 (duplicate 완료 후 안전)
             try { designDoc.close(SaveOptions.DONOTSAVECHANGES); designDoc = null; }
@@ -1273,59 +1330,18 @@ function main() {
 
             app.activeDocument = baseDoc;
 
-            // Phase 2: 각 그룹별 resize + body 매칭 + 배치
-            var totalPlaced = 0;
-            for (var dgi = 0; dgi < dupGroups.length; dgi++) {
-                var dg = dupGroups[dgi];
-                if (dg.items.length === 0) continue;
-
-                // body 찾기 (레이어 이름 기반)
-                var bodyIdx = findBodyForLayer(dg.piece, dg.side, svgPieces.bodies);
-                if (bodyIdx < 0) {
-                    logWrite("[grading-v2] 경고: '" + dg.name + "' body 매칭 실패 - 건너뜀");
-                    continue;
-                }
-                var targetBody = svgPieces.bodies[bodyIdx];
-
-                // 그룹화 + resize
-                baseDoc.selection = null;
-                for (var sii = 0; sii < dg.items.length; sii++) {
-                    dg.items[sii].selected = true;
-                }
-                app.executeMenuCommand("group");
-                var grp = baseDoc.selection[0];
-
-                // 스케일 적용 (보정된 adjustedScale)
-                if (Math.abs(adjustedScale - 1.0) > 0.005) {
-                    var pct = adjustedScale * 100;
-                    grp.resize(pct, pct, true, true, true, true, pct, Transformation.CENTER);
-                }
-
-                // 하단 정렬: 그룹 하단 = body 하단, 그룹 중심x = body 중심x
-                // 왜 하단 기준: 유니폼 요소(번호/로고)는 body 하단 기준으로 위치가 결정됨
-                var grpBounds = grp.geometricBounds;
-                var grpCx = (grpBounds[0] + grpBounds[2]) / 2;
-                var grpBottom = grpBounds[3];
-                grp.translate(targetBody.cx - grpCx, targetBody.bbox[3] - grpBottom);
-
-                // ungroup (개별 요소로 풀기)
-                baseDoc.selection = null;
-                grp.selected = true;
-                app.executeMenuCommand("ungroup");
-                baseDoc.selection = null;
-
-                totalPlaced += dg.items.length;
-                logWrite("[grading-v2] '" + dg.name + "' → body[" + bodyIdx + "] 배치 완료 (" + dg.items.length + "개)");
-            }
-            logWrite("[grading-v2] 이름 기반 배치 완료: " + totalPlaced + "개 요소");
-
-            // 이름 기반 모드에서도 band 이동 처리
+            // ==============================================================
+            // band 처리 (요소 배치보다 먼저 — 폴백 L1404~1436과 동일 순서)
+            // 왜 먼저: placeElementGroupPerPiece의 band 모드가 bandPositions를 참조하기 때문.
+            //   (단, 이름 기반 모드에서는 요소가 모두 pieceType="body"라 bandPositions는 실제 사용 안 됨.
+            //    그래도 인자 시그니처 호환을 위해 같은 순서로 처리)
+            // ==============================================================
             var bandScaleForPlace = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
             var bandPositions = [];
             if (svgPieces.bands.length > 0 && bandMeta.length > 0) {
                 bandPositions = placeBandsPerPiece(svgPieces.bands, bandMeta, svgPieces.bodies, svgFallback, bandScaleForPlace);
 
-                // patternLayer band도 동일 이동
+                // patternLayer band도 동일 이동 (폴백 L1408~1436과 동일)
                 var ptPieces = classifyBodyPieces(patternLayer);
                 var ptMatchCount = Math.min(bandMeta.length, ptPieces.bands.length);
                 for (var pbi = 0; pbi < ptMatchCount; pbi++) {
@@ -1354,6 +1370,40 @@ function main() {
                         ptBand.pathRef.translate(ptTargetCx - ptCurCx, ptTargetCy - ptCurCy);
                     }
                 }
+            }
+
+            // ==============================================================
+            // Phase 2: 전체 1그룹 → CENTER resize → ungroup (1회만) → placeElementGroupPerPiece
+            // 폴백 모드 L1376~1389 + L1439와 완전히 동일한 구조
+            // ==============================================================
+            if (allDups.length > 0) {
+                // 전체를 단일 그룹으로 묶어 1회만 CENTER resize
+                baseDoc.selection = null;
+                for (var si = 0; si < allDups.length; si++) {
+                    allDups[si].selected = true;
+                }
+                app.executeMenuCommand("group");
+                var pastedGroup = baseDoc.selection[0];
+
+                if (Math.abs(adjustedScale - 1.0) > 0.005) {
+                    var pct2 = adjustedScale * 100;
+                    pastedGroup.resize(pct2, pct2, true, true, true, true, pct2, Transformation.CENTER);
+                }
+
+                // ungroup: 1회만 실행 — 가설 D(PageItem 참조 파괴) 회피
+                app.executeMenuCommand("ungroup");
+                baseDoc.selection = null;
+
+                logWrite("[grading-v2] Phase 2: 1회 group/resize/ungroup 완료 (요소 " + allDups.length + "개)");
+
+                // 폴백과 동일한 함수 호출: 각 요소를 자기 svgBody 기준으로 relVec*scale 만큼 개별 translate
+                // 스케일 인자: adjustedScale (폴백 L1399 scaleForPlace와 일치)
+                var scaleForPlace = adjustedScale;
+                placeElementGroupPerPiece(allDups, allElemMeta, svgPieces, svgFallback, scaleForPlace, bandPositions);
+
+                logWrite("[grading-v2] 이름 기반 배치 완료: " + allDups.length + "개 요소 (폴백 함수 재사용)");
+            } else {
+                logWrite("[grading-v2] 이름 기반 모드: 처리할 요소 없음");
             }
 
         } else {
