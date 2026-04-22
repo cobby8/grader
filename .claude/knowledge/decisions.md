@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-04-22] SVG 표준화 기준 파일: 양면 상의는 글로벌 `양면유니폼_U넥_스탠다드_XL.svg` 고정 사용 (드롭다운 제거)
+- **분류**: decision
+- **발견자**: 사용자 확정 → developer (Phase 1-5 보완 수정)
+- **내용**: SVG 표준화 모달의 기준 파일 결정 방식을 **사용자 수동 선택 → 자동 고정**으로 전환. **채택**: 양면 유니폼 상의(driveFolder 경로에 "양면 유니폼상의" 포함)는 모든 프리셋이 동일한 글로벌 기준 파일 `{drivePatternRoot}/0. 농구유니폼 확정 정리본/2. 양면 유니폼상의 패턴/U넥/U넥 양면유니폼 스탠다드/양면유니폼_U넥_스탠다드_XL.svg` 사용. 그 외(단면 등)는 자체 폴더 내 `XL → 2XL → L → M → S` 순서 fallback. **거부 (이전 채택안)**: 모달 내 기준 사이즈 드롭다운 — 프리셋마다 다른 기준이 지정돼 검증/매칭 로직이 깨질 수 있고, 사용자가 실수로 2XL 등을 선택하면 전체 폴더가 다른 기준으로 변환됨. **구현**: `svgStandardizeService.ts`에 `GLOBAL_DOUBLE_SIDED_BASE_FILE_RELATIVE` 상수 + `isDoubleSidedTopPattern()` + `resolveBaseFile()` 추가. Modal props에서 `registeredSizes`/`pieceBaseName` 제거, `svgPathBySize`/`drivePatternRoot` 추가. 드롭다운 JSX → "자동 결정된 기준 파일 안내 카드"로 교체. **안전장치**: (1) 판별 키워드 `"양면 유니폼상의"`(공백 1개, Drive 실제 폴더명과 정확히 일치), (2) Drive 루트의 trailing slash 자동 정리, (3) `resolveBaseFile` 반환 null이면 [미리보기] 버튼 disabled + 에러 카드 표시, (4) 글로벌 파일 미존재 시 Python CLI가 `"기준 SVG 파일을 찾을 수 없습니다"` 반환 → Modal error phase.
+- **참조횟수**: 0
+
 ### [2026-04-22] SVG 표준화 UI 버튼 배치: 카드 ⋮ 더보기 메뉴 채택
 - **분류**: decision
 - **발견자**: planner-architect
