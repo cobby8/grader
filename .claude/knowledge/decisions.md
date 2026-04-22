@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-04-22] Drive 스캔 시 사이즈 배열 병합 정책: "기존 치수 보존 + 신규 사이즈 자동 추가"
+- **분류**: decision
+- **발견자**: developer (PM 지시로 근본 수정 중 확정)
+- **내용**: `driveSync.mergeDriveScanResult`에서 기존 프리셋의 `sizes` 배열을 Drive 스캔 결과와 병합할 때의 정책. **채택 (A)**: 기존 사이즈는 `width/height` 치수 데이터 그대로 보존 + Drive에 **신규로 존재하는 사이즈만** 자동 추가(width/height=0 초기화) + `SIZE_LIST`(5XS→5XL) 순 정렬. **거부 (B)**: `sizes` 배열 전체 보존(기존 구현) — 신규 사이즈 SVG 추가를 차단하는 안티패턴. **거부 (C)**: Drive가 소유한 `svgPathBySize`에 맞춰 `sizes` 전체 재생성 — 사용자가 PatternManage에서 입력한 mm 치수가 모두 0으로 초기화됨(치명적 데이터 유실). **거부 (D)**: 신규 사이즈를 사용자에게 모달로 확인 — Drive 자동 동기화의 "조용한 갱신" 원칙 위배, 바이브 코더 UX 부담. **핵심 원칙**: 사용자 입력 데이터 보호는 **항목 단위**로 — "기존 항목의 값은 덮지 않되, 신규 항목은 자동 추가". "Drive에는 있지만 로컬에 없는 것 = 자동 추가", "로컬에만 있고 Drive에서 없어진 것 = 일단 유지"(Q2-B 결정, L675~682). **pieceId 연결**: 새 사이즈 엔트리의 `pieceId`는 기존 프리셋의 `sizes[0].pieces[0].pieceId`를 재사용 → 폴백은 `pieces[0].id`. Phase 1 단일 piece 가정 하에 안전. **width/height=0**: 사용자가 PatternManage에서 나중에 입력해야 하는 값임을 "0"으로 표시(경고 UI는 추후 Phase). 상세 커밋은 developer 작업 로그 참조.
+- **참조횟수**: 0
+
 ### [2026-04-22] 자동 업데이트 시스템: Tauri Updater + GitHub Releases + Actions 채택
 - **분류**: decision
 - **발견자**: planner-architect (사용자 확정 2026-04-22)
