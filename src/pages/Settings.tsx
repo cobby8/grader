@@ -27,6 +27,7 @@ import {
   setDriveSyncEnabled,
 } from "../stores/settingsStore";
 import { getCacheStats, clearAll as clearSvgCache } from "../stores/svgCacheStore";
+import UpdateSection from "../components/UpdateSection";
 import type { AppSettings } from "../types/pattern";
 
 /**
@@ -343,7 +344,10 @@ function Settings() {
         </div>
       </section>
 
-      {/* === 섹션 3: 정보 === */}
+      {/* === 섹션 3: 버전 정보 + 업데이트 (자동 업데이트 Phase C) === */}
+      <UpdateSection />
+
+      {/* === 섹션 4: 정보 === */}
       <section className="settings-section">
         <h2 className="settings-section__title">정보</h2>
         <div className="settings-row">

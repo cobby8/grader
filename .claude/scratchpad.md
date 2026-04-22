@@ -39,7 +39,7 @@
 | 단계 | 내용 | 상태 |
 |------|------|------|
 | 0~7 | 기본 기능(패턴/디자인/사이즈/CMYK/Illustrator/APCA) | ✅ 완료 |
-| 8 | 설치형 배포 + 자동 업데이트 | 📋 **설계 완료** (PLAN-AUTO-UPDATE.md, 5 Phase) |
+| 8 | 설치형 배포 + 자동 업데이트 | 🔨 **Phase A+B+C 구현 완료** (D/E 대기) |
 | 9 | Drive 연동 (자동 동기화) | ✅ |
 | 10 | Phase 1 (WorkSetup + 세션) | ✅ |
 | 11 | Phase 2 (패턴 선택 모드) | ✅ |
@@ -277,6 +277,64 @@
 
 **다음 단계**: tester + reviewer 검증 → Phase B 커밋 → Phase C (업데이트 UI)
 
+### developer [2026-04-22] Phase C 업데이트 UI
+
+📝 구현한 기능: 자동 업데이트 시스템 Phase C — updaterService 래퍼, 앱 마운트 시 자동 체크 훅, UpdateModal 팝업, Settings 내 UpdateSection
+
+**변경 파일 (신규 4개)**:
+| 파일 경로 | 줄수 | 요약 |
+|----------|------|-----|
+| `src/services/updaterService.ts` | ~110 | `checkForUpdate()` (조용히 실패), `downloadAndInstall()` (진행률 콜백+relaunch), `getCurrentVersion()` (Tauri API) |
+| `src/hooks/useAutoUpdateCheck.ts` | ~150 | 모듈 상태 + 구독자 패턴. `UpdateStatus` 6종. `runCheckNow()` / `dismissUpdate()` export. StrictMode 2회 실행 차단 플래그 |
+| `src/components/UpdateModal.tsx` | ~220 | Phase 머신 4종(idle/downloading/finishing/error). ESC + 백드롭 닫기(다운 중 차단). 진행률 바 + 용량 미상 대응. 재시도 버튼 |
+| `src/components/UpdateSection.tsx` | ~150 | 현재 버전(Tauri getVersion) + 마지막 확인 시각 + 상태 문구 + [지금 확인] / [업데이트 받기] 버튼. 훅 구독만(autoCheck=false) |
+
+**변경 파일 (수정 3개)**:
+| 파일 경로 | 변경 내용 |
+|----------|---------|
+| `src/App.tsx` | `useAutoUpdateCheck(true)` 훅 호출 + `<UpdateModal>` 조건부 렌더 (18줄 추가, 기존 구조 보존) |
+| `src/pages/Settings.tsx` | `UpdateSection` import + `{/* 섹션 3 */}` 위치에 `<UpdateSection />` 삽입. 기존 섹션 3은 "섹션 4: 정보"로 번호만 재부여, 내용 보존 |
+| `src/App.css` | `.update-modal__*` BEM 클래스 ~140줄 추가 (백드롭/카드/헤더/body/footer/진행바/에러). 기존 2047줄 뒤에 append |
+
+**주요 설계 결정**:
+1. **상태 공유 방식**: Zustand/Context 대신 **모듈 상태 + listener Set** 패턴 채택 (기존 프로젝트 svgCacheStore 스타일과 일관). App은 `autoCheck=true`로 1회 체크, Settings는 `autoCheck=false`로 구독만.
+2. **버전 표시**: `@tauri-apps/api/app`의 `getVersion()` API 사용 — tauri.conf.json과 자동 동기화되므로 package.json 읽기보다 정확.
+3. **조용한 실패 원칙**: `checkForUpdate()`는 네트워크 오류 시 throw하지 않고 `{ kind: 'error' }`로 반환. 자동 체크 중 GitHub 접근 실패 → React error boundary 터지지 않도록 방어.
+4. **StrictMode 중복 방지**: 개발 모드에서 useEffect가 2회 실행되는 문제 → `hasAutoCheckedOnce` 모듈 플래그로 실제 `check()`는 1번만.
+5. **다운로드 중 닫기 차단**: `phase === 'downloading' | 'finishing'`일 때 ESC + 백드롭 클릭 무시. setup 파일 전송 중 끊김 방지.
+6. **Phase C 전용 라우트 X**: PLAN D5 결정 사항 준수 — Settings 페이지 내부 섹션으로 통합, 사이드바 복잡화 방지.
+
+**TypeScript 핵심 타입**:
+- `UpdateCheckResult = { kind: 'available'; update: Update } | { kind: 'up-to-date' } | { kind: 'error'; message: string }` — discriminated union
+- `UpdateStatus = 'idle' | 'checking' | 'available' | 'up-to-date' | 'error' | 'dismissed'`
+- `UpdateState = { status, result: UpdateCheckResult | null, lastCheckedAt: string | null }`
+
+**검증 결과**:
+- ✅ `npx tsc --noEmit` 통과 (exit 0, 에러 0개)
+- ✅ Tauri updater 타입(Update, DownloadEvent)의 `body`, `date`, `version`, `contentLength`, `chunkLength` 모두 실제 dist 타입과 일치
+- ✅ 기존 App.tsx, Settings.tsx 구조 보존 (훅+모달 추가, 섹션 1개 삽입만)
+- ✅ 하드코딩 색상 0건 (모두 `var(--color-*)` 사용)
+- ✅ Tailwind 사용 0건 (BEM + CSS 변수)
+
+💡 tester 참고:
+- 테스트 방법:
+  1. `npx tsc --noEmit` → exit 0 확인
+  2. `npm run tauri dev` → 앱 기동, 화면 정상 렌더 (기존 기능 회귀 없음)
+  3. 콘솔에 `[updater]` 로그 관찰 — 네트워크/레포지토리 없어도 조용히 실패해야 함 (에러 박스 X)
+  4. Settings 페이지 열기 → "버전 정보" 섹션 노출, 현재 버전이 `v1.0.0`으로 표시됨
+  5. [지금 확인] 클릭 → 상태가 "확인 중..." → "최신/새 버전/에러" 중 하나로 전환
+- 정상 동작: 앱 기동 시 콘솔에 체크 1회 수행 (에러 있어도 조용). Settings → 버전 정보 섹션 표시됨
+- 주의: **실제 업데이트 설치 테스트는 Phase E**에서. 지금은 GitHub에 릴리스 없으므로 항상 "최신 버전" 또는 "에러"(네트워크)로 나올 것
+
+⚠️ reviewer 참고:
+- `useAutoUpdateCheck(true)`는 **App.tsx 한 곳에서만** 호출. Settings 쪽은 반드시 `false`로 구독만. 두 곳 다 `true`면 중복 체크 발생 (현재 hasAutoCheckedOnce로 막히긴 하지만 의도 혼란 방지).
+- `dismissed` 상태는 같은 세션 내 재알림만 막음. 앱 재시작 시 자동으로 다시 idle로 리셋됨 (모듈 상태는 앱 프로세스 단위).
+- Update 객체의 `body`는 마크다운일 수 있으나 현재는 `<pre>` 원문 표시 (렌더링은 후속 개선 — 사용자 요구 없음).
+- UpdateModal은 `role="dialog" aria-modal="true"`로 접근성 기본 준수. 포커스 트랩은 미구현 (소규모 앱, 과한 요구).
+- CSS z-index 1000으로 모달이 헤더/사이드바 위에 확실히 뜸. 다른 모달/오버레이 계층 필요 시 조정.
+
+**다음 단계**: tester + reviewer 검증 → Phase C 커밋 → Phase D (RELEASE-GUIDE + CHANGELOG)
+
 ## 테스트 결과 (tester)
 (다음 작업에서 사용)
 
@@ -289,8 +347,124 @@
 | user | grading.jsx / 3XL.svg | 3XL 사이즈 요소가 몸판 벗어나 과하게 큼 | 🔍 재검증 필요 |
 | user | 3XL.svg / 4XL.svg | 3XL/4XL 요소가 몸판 상단 튀어나감 | 🔍 재검증 필요 |
 | user | grading.jsx / OrderGenerate | 기준 AI=XL로 XL 타겟 시 요소 하나도 안 들어옴 | 🔍 로그 필요 |
+| user | driveSync.ts / PatternManage.tsx | G드라이브 신규 SVG 파일이 grader 앱에 인식 안 됨 | 🔍 디버거 조사 완료, 사용자 확인 대기 |
 
 ⚠️ 위 3건은 양면 버그 수정과 별개. 이번에 바뀐 로직에서 재발 여부 재확인 필요.
+
+---
+
+## 디버거 조사 [2026-04-22] G드라이브 신규 SVG 미인식
+
+### 🔴 에러 번역
+"구글드라이브에 새로 올린 패턴 SVG 파일이 grader 앱의 패턴 목록에 안 보인다."
+
+비유: **카페 주문표**를 올려놨는데, 사장님이 **냉장고에 원두를 새로 채워 넣은 사실**을 모르는 상태. 주문표(목록)만 보고 있으니 새 원두는 안 보인다. 누군가가 "냉장고 다시 확인!" 이라고 알려줘야 목록이 갱신된다.
+
+---
+
+### 🗺️ 동작 구조 요약 (코드 경로 특정)
+
+**동기화 트리거 조건** (`src/pages/PatternManage.tsx:517~520`)
+```
+PatternManage 페이지 진입 + 로드 완료 + Drive 동기화 ON + 루트 경로 있음
+ → runAutoSync() 실행
+```
+**중요**: 자동 동기화는 **"패턴 관리" 페이지 진입 시에만 실행**된다. 다른 페이지(주문 생성, 세션 등)를 열어서는 아무리 기다려도 Drive는 재스캔되지 않는다.
+
+**60초 쿨다운** (`PatternManage.tsx:423~435`)
+- `lastAutoScanRef`로 마지막 스캔 시각 기억 (epoch ms)
+- 60초 이내 재진입은 console.info "쿨다운 중" 출력 후 스킵
+- **앱 재시작 시 ref는 0으로 리셋** → 재시작 직후 첫 진입은 쿨다운 걸리지 않음
+
+**스캔 로직** (`src/services/driveSync.ts:347 scanDriveRoot`)
+- BFS 재귀로 하위 폴더 전부 탐색 (깊이 제한 20, 실측 6레벨)
+- 각 파일 `parseFilename()` 으로 `{패턴명}_{사이즈}.svg` 규칙 매칭
+- **매칭 실패 시 그 파일만 스킵 + warnings 배열에 기록**
+
+**파일명 정규식** (`driveSync.ts:61`)
+```
+^(.+?)[\s_\-]+(5XS|4XS|3XS|2XS|XS|S|M|L|XL|2XL|3XL|4XL|5XL)\.svg$
+```
+- 사이즈 토큰이 파일명 끝에 있어야 함 (대소문자 무시)
+- 앞부분과 사이즈 사이 구분자는 **공백/언더스코어/하이픈** 중 1개 이상
+- 예: `농구유니폼_V넥_XS.svg` O / `농구유니폼XS.svg` X (구분자 없음) / `농구유니폼_XS_v2.svg` X (사이즈가 끝이 아님)
+
+**경고 처리** (`PatternManage.tsx:485~492`)
+- warnings는 **console.warn만 찍고 UI엔 절대 표시 X** (사용자가 "경고 부담" 피드백)
+- 즉 파일이 스킵돼도 앱 화면상으론 **아무 메시지 없이 조용히 무시**
+
+---
+
+### 🎯 원인 TOP 3 (유력도 순)
+
+#### 1순위: **파일명 규칙 위반** (가능성 ~50%)
+SVG 파일명이 `{패턴명}_{사이즈}.svg` 규칙에 안 맞으면 경고만 찍히고 스킵된다. 사용자 화면엔 **아무 표시 없음**.
+
+**의심 케이스**:
+- 사이즈 토큰 없음: `신상품.svg`, `test.svg`
+- 구분자 없음: `농구유니폼XL.svg` (언더스코어 없이 붙음)
+- 사이즈가 중간에 위치: `농구_XL_수정본.svg` (끝이 `_수정본.svg`)
+- 사이즈 대문자 문제는 아님 (정규식 `i` 플래그 — `.SVG`도 OK)
+- 한글·공백 혼용: `농구 유니폼 V넥 XL.svg` (공백 구분자는 허용됨 — **이건 정상 동작**)
+
+**확인 방법**: 개발자도구(F12) 콘솔에 `파일명 규칙 위반(사이즈 토큰 없음), 스킵: ...` 로그가 찍히면 확정.
+
+#### 2순위: **Drive 동기화 아직 안 돼서 로컬에 파일 없음** (가능성 ~25%)
+G드라이브 "파일 스트리밍" 모드에서는 다른 사람이 업로드한 파일이 내 PC에 내려오는 데 시간이 걸린다. Windows 탐색기로는 파일이 보일 수 있지만 실제 물리적으로는 "아직 다운로드 중" 상태일 수 있음.
+
+**확인 방법**: `G:\공유 드라이브\디자인\00. 2026 커스텀용 패턴 SVG\...` 경로에서 해당 SVG 파일을 **한 번 더블클릭으로 열어보기** (앱 말고 뷰어로). 잠시 로딩되면서 열리면 스트리밍 다운로드 완료된 것.
+
+#### 3순위: **패턴 관리 페이지를 아직 열지 않음 or 쿨다운** (가능성 ~15%)
+자동 동기화는 "패턴 관리" 진입 시에만 실행되는데, 사용자가 그 전에 "주문 생성" 등 다른 화면에서 확인했을 가능성. 또는 60초 이내 최근에 이미 한 번 진입했다면 쿨다운.
+
+**확인 방법**:
+- 사이드바에서 **"패턴 관리"** 메뉴 클릭해서 그 페이지를 본 후 결과 확인
+- 이미 패턴 관리에 있었다면, 앱을 **완전히 종료→재시작** 후 패턴 관리 재진입
+
+#### 기타 가능성 (합쳐서 ~10%)
+- **D**: 추가한 파일이 정상 규칙인데도 스캔이 실패 → **권한 문제** (해당 SVG 파일만 Drive 권한 누락). readDir은 성공해도 readTextFile 시 실패 가능. 다만 driveSync는 파일 **존재**만 확인하고 meta.json 읽기에만 readTextFile 쓰므로, 이 케이스는 드물다.
+- **E**: `drivePatternRoot` 경로가 잘못 설정됨 (Settings에서 확인 필요)
+- **F**: `driveSyncEnabled = false` (토글이 꺼져 있음 → Settings에서 확인)
+- **G**: 같은 폴더에 기존 SVG가 있고 사이즈만 추가된 경우에 stableId 매칭이 꼬였을 가능성 — 로직상 svgPathBySize 확장은 정상 동작하도록 되어 있어서 (`mergeDriveScanResult:616~632`) 가능성은 낮지만, `svgSource !== "drive"`면 경로 갱신이 스킵된다는 점은 주의.
+
+**회귀 가능성**: 최근 커밋 3개(Phase A/B/C) 및 양면 유니폼 버그 수정은 Drive 스캔 코드(`src/services/driveSync.ts`, `src/stores/svgCacheStore.ts`)를 건드리지 않았다. Phase A의 `bundle.resources` 변경은 **앱 번들링 시점의 Python 파일 목록**일 뿐 런타임 Drive 스캔과 무관. **회귀 가능성은 낮음**.
+
+---
+
+### ❓ 사용자에게 할 질문 (PM이 전달)
+
+1. **파일명**: 추가한 SVG 파일 이름은 정확히 무엇인가? (예: `농구유니폼_V넥_3XL.svg`)
+2. **위치**: 어느 하위 폴더에 넣었나? (`G:\...\00. 2026 커스텀용 패턴 SVG\` 이후 경로)
+3. **타이밍**: 언제 추가했나? 몇 분 전? 몇 시간 전?
+4. **증상**: "패턴 관리" 페이지에서 **안 보이는** 것인가, 아니면 에러 메시지가 뜨는 것인가?
+5. **기존 파일 확인**: 같은 폴더 안의 다른 기존 SVG 파일들은 정상적으로 앱에 보이는가?
+6. **페이지 진입 확인**: 파일 추가 후 사이드바에서 **"패턴 관리"** 메뉴를 클릭해서 그 페이지를 **다시 열어봤나**?
+7. **Settings 상태**: Settings 페이지에서 "Drive 연동 사용" 토글이 **활성**으로 되어 있는가? 그리고 "Drive 루트 폴더"가 `G:\공유 드라이브\디자인\00. 2026 커스텀용 패턴 SVG`로 맞게 설정되어 있는가?
+8. **탐색기 확인**: Windows 탐색기에서 `G:\...` 경로로 직접 가서 해당 SVG 파일이 **보이고 열리는지** 확인했는가?
+
+---
+
+### 🔧 해결 방안 초안 (사용자 승인 필요, developer에게 넘길 예정)
+
+#### 방안 A (가장 가능성 높은 시나리오 — 파일명 규칙 위반)
+1. 사용자가 콘솔 로그(F12) 열어서 "파일명 규칙 위반" 경고 확인 요청
+2. 파일명을 `{패턴명}_{사이즈}.svg` 규칙에 맞게 수정 (예: `신상.svg` → `신상_XS.svg`)
+3. 앱 재시작 or 60초 대기 후 패턴 관리 재진입
+
+#### 방안 B (Drive 스트리밍 지연)
+1. 탐색기에서 해당 SVG 직접 열어 다운로드 유도
+2. 1~2분 후 grader 앱에서 패턴 관리 재진입
+
+#### 방안 C (UX 개선 — 사용자 부담 감소)
+**[조사 결과 파생 제안]** 현재 경고는 console.warn만 가고 UI 표시 없음. 사용자가 **왜 안 보이는지 알 방법이 없음**. Phase 2 개선 제안:
+- Settings에 "최근 Drive 스캔 경고" 섹션 추가 (무시한 파일 목록 표시)
+- 또는 패턴 관리 페이지 상단에 "⚠️ 스캔 시 건너뛴 파일 N개" 배지 (클릭 시 상세 모달)
+- "수동 새로고침" 버튼 추가로 60초 쿨다운 우회 가능하게
+
+#### 방안 D (긴급 우회책 — 지금 즉시 확인)
+사용자가 Settings에서 Drive 동기화 **껐다 켜기** → 쿨다운 ref 초기화는 안 되지만, 토글 deps 변경으로 useEffect 재실행 → 쿨다운 끝난 상태라면 즉시 스캔 발동.
+
+**확정 불가 영역**: 콘솔 로그를 보지 않고는 1~3순위 중 어느 것인지 확정할 수 없음. 사용자 답변 수신 후 재분석 필요.
 
 ---
 
@@ -311,6 +485,8 @@
 | 2026-04-22 | developer | Phase A 기반 설정 10 Step (키생성→G드라이브 이동→Cargo/npm/conf/caps/lib 수정→v1.0.0 통일) | ✅ cargo check 35.6초 통과, keys/ gitignore 검증 OK |
 | 2026-04-22 | developer | Phase A-5 (sync-bundle-resources.mjs 146줄 + prebuild 등록) + 계획서 오타 4건 수정 | ✅ 멱등성 PASS (변경 없음 15개 리소스), `grader-updater.key` 잔존 0건 |
 | 2026-04-22 | developer | Phase B CI 워크플로우 (bump-version.mjs 267줄 + release.yml 131줄 + package.json scripts 2개) | ✅ 3파일 버전 왕복 테스트 PASS, YAML 구조 검증 PASS (탭/홀수들여쓰기 0), Secrets 이름 일치 |
+| 2026-04-22 | developer | Phase C 업데이트 UI (updaterService 110줄 + hook 150줄 + Modal 220줄 + Section 150줄 + App.tsx/Settings.tsx/App.css 수정) | ✅ tsc --noEmit 통과, 모듈 상태+구독자 패턴으로 App/Settings 상태 공유, BEM+CSS변수 준수 |
+| 2026-04-22 | debugger | G드라이브 신규 SVG 미인식 조사 (driveSync.ts + PatternManage.tsx + svgCacheStore.ts 경로 특정) | 🔍 원인 TOP 3 가설 + 사용자 질문 8건 정리, 코드 수정 없이 분석만 |
 
 ---
 

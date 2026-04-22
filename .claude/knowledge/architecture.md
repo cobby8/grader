@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect, developer | 최대 30항목 -->
 <!-- 프로젝트의 폴더 구조, 파일 역할, 핵심 패턴을 기록 -->
 
+### [2026-04-22] 자동 업데이트 Phase C 구현 완료 — 업데이트 UI (service + hook + Modal + Section)
+- **분류**: architecture
+- **발견자**: developer
+- **내용**: Phase C(업데이트 UI) 4파일 신규 + 3파일 수정. **신규**: (1) `src/services/updaterService.ts`(110줄) — Tauri Updater/Process 플러그인 래퍼. `checkForUpdate()`는 네트워크 오류 시 throw하지 않고 discriminated union `{ kind: 'available' | 'up-to-date' | 'error' }` 반환(조용한 실패 원칙). `downloadAndInstall(update, onProgress)`는 Started/Progress/Finished 이벤트를 단순 `(received, total)` 콜백으로 변환 후 `relaunch()` 호출. `getCurrentVersion()`은 `@tauri-apps/api/app`의 `getVersion()` 사용(package.json보다 정확). (2) `src/hooks/useAutoUpdateCheck.ts`(150줄) — **모듈 상태 + 구독자 Set 패턴**(Zustand/Context 대신 기존 svgCacheStore 스타일 채택). 6상태 머신 `UpdateStatus`: idle/checking/available/up-to-date/error/dismissed. `runCheckNow()`/`dismissUpdate()` export. `hasAutoCheckedOnce` 모듈 플래그로 React StrictMode 2회 실행 차단. App과 Settings가 같은 모듈 상태를 공유. (3) `src/components/UpdateModal.tsx`(220줄) — Phase 머신 4종(idle/downloading/finishing/error). ESC + 백드롭 클릭 닫기(다운 중엔 차단). 진행률 바(용량 미상 시 50% 고정). 에러 시 재시도 버튼. role="dialog" aria-modal. (4) `src/components/UpdateSection.tsx`(150줄) — Settings 내부 섹션. `useAutoUpdateCheck(false)`로 구독만. 현재 버전/마지막 확인/상태 문구/[지금 확인]+[업데이트 받기] 버튼. **수정**: (5) `src/App.tsx` — `useAutoUpdateCheck(true)` 1줄 + `<UpdateModal>` 조건부 렌더(기존 구조 완전 보존). (6) `src/pages/Settings.tsx` — `<UpdateSection />` 1줄 삽입(섹션 3 위치). (7) `src/App.css` — `.update-modal__*` BEM 클래스 140줄 append(백드롭/카드/헤더/본문/푸터/진행바/에러, 모두 `var(--color-*)` 사용). `npx tsc --noEmit` exit 0 통과. autoCheck=true는 **App.tsx 한 곳에서만** 호출 필수(Settings는 false).
+- **참조횟수**: 0
+
 ### [2026-04-22] 자동 업데이트 시스템 아키텍처 (Tauri Updater + GitHub Releases)
 - **분류**: architecture
 - **발견자**: planner-architect

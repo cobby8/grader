@@ -2,6 +2,18 @@
 <!-- 담당: developer, reviewer | 최대 30항목 -->
 <!-- 이 프로젝트만의 코드 스타일, 네이밍 규칙, 패턴을 기록 -->
 
+### [2026-04-22] Tauri 플러그인 래퍼 서비스 패턴 (조용한 실패 원칙)
+- **분류**: convention
+- **발견자**: developer
+- **내용**: Tauri 플러그인 API(updater, fs, dialog 등) 호출은 `src/services/*.ts`의 얇은 래퍼 서비스에 캡슐화한다. 네트워크/외부 의존 플러그인(updater)은 **throw하지 않고 discriminated union으로 반환**(`{ kind: 'available' | 'up-to-date' | 'error' }` 형태). 이유: 앱 시작 시 호출되는 훅이 throw하면 React error boundary가 터져 앱이 기동 안 된다. `console.warn('[updater] ...')`만 남기고 상위에서 조용히 처리. 반면 사용자가 명시적으로 트리거한 동작(`downloadAndInstall`)은 예외 전파 허용 — UI에서 재시도 버튼으로 복구. 기존 `driveSync.ts`, `svgResolver.ts`와 동일한 함수 export 스타일(클래스 X).
+- **참조횟수**: 0
+
+### [2026-04-22] React 전역 상태 공유: 모듈 상태 + 구독자 Set 패턴
+- **분류**: convention
+- **발견자**: developer
+- **내용**: 기존 프로젝트에 Zustand/Redux/Context 없음. 여러 컴포넌트가 공유해야 하는 상태(예: 업데이트 체크 결과)는 **모듈 레벨 상태 + `listeners: Set<(s)=>void>`** 패턴으로 구현. 훅 내부에서 `useState(state)` + `useEffect`로 구독/해제, `setState(next)`는 모든 listener에 알림. 싱글톤이라 `hasAutoCheckedOnce` 같은 플래그로 React StrictMode 이중 실행도 쉽게 차단. 장점: (1) 의존성 0(라이브러리 추가 불필요) (2) 기존 `svgCacheStore.ts` 스타일과 일관 (3) 타입 안전. 단점: 앱 재시작 시 초기화(의도적 — 업데이트 상태는 세션 단위로 충분). 훅 인자에 `autoCheck: boolean` 같은 트리거 플래그를 두어 **한 군데만** 자동 실행, 나머지는 구독만 하는 구조 권장.
+- **참조횟수**: 0
+
 ### [2026-04-09] CSS 변수 네이밍 규칙
 - **분류**: convention
 - **발견자**: developer

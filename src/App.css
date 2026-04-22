@@ -2045,3 +2045,145 @@ html, body, #root {
   color: #6b7280;
 }
 
+/* ============================================================
+ * UpdateModal (자동 업데이트 팝업) — Phase C
+ * - App.tsx에서 조건부 렌더
+ * - 프로젝트 BEM + --color-* 변수 사용
+ * ============================================================ */
+
+/* 화면 전체 덮는 반투명 백드롭 */
+.update-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000; /* 사이드바/헤더보다 위에 */
+  padding: 24px;
+}
+
+/* 모달 본체 (카드) */
+.update-modal__card {
+  background-color: var(--color-bg-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  width: 100%;
+  max-width: 520px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.update-modal__header {
+  padding: 20px 24px 8px;
+  border-bottom: 1px solid var(--color-bg-content);
+}
+
+.update-modal__title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-text-dark);
+  margin-bottom: 4px;
+}
+
+.update-modal__version {
+  font-family: "Consolas", "Monaco", monospace;
+  background-color: var(--color-accent-soft);
+  color: var(--color-accent);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.95em;
+}
+
+.update-modal__date {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* 릴리스 노트 본문 — 스크롤 가능 */
+.update-modal__body {
+  padding: 12px 24px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 60px;
+}
+
+.update-modal__notes {
+  font-family: "Consolas", "Monaco", monospace;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+  background-color: var(--color-bg-content);
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* 푸터 (버튼 영역) */
+.update-modal__footer {
+  padding: 12px 24px 20px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+  border-top: 1px solid var(--color-bg-content);
+  flex-wrap: wrap;
+}
+
+/* 다운로드 진행률 바 */
+.update-modal__progress {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.update-modal__progress-bar {
+  width: 100%;
+  height: 10px;
+  background-color: var(--color-bg-content);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.update-modal__progress-fill {
+  height: 100%;
+  background-color: var(--color-accent);
+  transition: width var(--transition-fast);
+}
+
+.update-modal__progress-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+}
+
+.update-modal__progress-size {
+  color: var(--color-text-muted);
+  font-family: "Consolas", "Monaco", monospace;
+}
+
+/* 설치 직전 안내 */
+.update-modal__finishing {
+  width: 100%;
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-status-ok);
+  padding: 8px 0;
+}
+
+/* 에러 박스 */
+.update-modal__error {
+  width: 100%;
+  padding: 10px 12px;
+  background-color: rgba(239, 68, 68, 0.1);
+  color: var(--color-status-error);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  margin-bottom: 4px;
+  word-break: break-word;
+}
+
