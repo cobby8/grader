@@ -9,7 +9,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "sync:resources": "node scripts/sync-bundle-resources.mjs"
+    "sync:resources": "node scripts/sync-bundle-resources.mjs",
+    "release:bump": "node scripts/bump-version.mjs",
+    "release:prepare": "node scripts/bump-version.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
