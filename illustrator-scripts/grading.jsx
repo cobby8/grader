@@ -74,26 +74,25 @@ function writeTextFile(filePath, content) {
 }
 
 // ============================================================
-// 로그 (파일 출력 + $.writeln 병행)
+// 로그 (파일 출력)
 // ============================================================
 
-// 왜 파일 출력: ExtendScript Toolkit 없으면 $.writeln 결과 안 보임.
+// 왜 파일 출력: Illustrator 콘솔 없으므로 파일로 남겨야 디버깅 가능.
 // config.outputPath 옆에 grading-debug.log 저장 → 사용자가 노트패드로 확인.
 var _logFile = null;
 var _logFileInitialized = false;
+var DEBUG_LOG = false; // 2026-04-21 검증 완료, 성능 원복
 
 function initLogFile(outputPath) {
     try {
-        // outputPath 부모 폴더 계산
         var parent = outputPath.replace(/[\\\/][^\\\/]+$/, "");
         if (!parent || parent === outputPath) parent = outputPath;
         var logPath = parent + "\\grading-debug.log";
         _logFile = new File(logPath);
         _logFile.encoding = "UTF-8";
-        // 매 실행마다 덮어쓰기 (append 아님)
         _logFile.open("w");
         _logFile.write("=== grading-v2 실행 로그 (" + new Date().toString() + ") ===\n");
-        _logFile.close();
+        // 파일을 열어둔 채 유지 (매번 open/close 하지 않음 → 성능 대폭 향상)
         _logFileInitialized = true;
     } catch (e) {
         _logFileInitialized = false;
@@ -101,15 +100,17 @@ function initLogFile(outputPath) {
 }
 
 function logWrite(msg) {
-    // $.writeln도 유지 (ExtendScript Toolkit 연결 시 도움)
-    try { $.writeln(msg); } catch (e1) {}
-    // 파일 append
+    // $.writeln 제거 — ExtendScript Toolkit 미사용 시 불필요한 오버헤드
     if (_logFileInitialized && _logFile) {
         try {
-            _logFile.open("a");
             _logFile.write(msg + "\n");
-            _logFile.close();
         } catch (e2) {}
+    }
+}
+
+function flushLogFile() {
+    if (_logFileInitialized && _logFile) {
+        try { _logFile.close(); } catch (e) {}
     }
 }
 
@@ -208,7 +209,7 @@ function extractBodyColor(designDoc) {
     try {
         bodyLayer = designDoc.layers.getByName("몸판");
     } catch (e) {
-        logWrite("[grading-v2] '몸판' 레이어 없음");
+        if (DEBUG_LOG) logWrite("[grading-v2] '몸판' 레이어 없음");
         return null;
     }
 
@@ -216,7 +217,7 @@ function extractBodyColor(designDoc) {
     for (var i = 0; i < bodyLayer.pathItems.length; i++) {
         var p = bodyLayer.pathItems[i];
         if (p.filled && p.fillColor && p.fillColor.typename !== "NoColor") {
-            logWrite("[grading-v2] 몸판 색 발견 (pathItems[" + i + "])");
+            if (DEBUG_LOG) logWrite("[grading-v2] 몸판 색 발견 (pathItems[" + i + "])");
             return toCMYK(p.fillColor);
         }
     }
@@ -231,15 +232,56 @@ function extractBodyColor(designDoc) {
             for (var gi = 0; gi < it.pathItems.length; gi++) {
                 var gp = it.pathItems[gi];
                 if (gp.filled && gp.fillColor && gp.fillColor.typename !== "NoColor") {
-                    logWrite("[grading-v2] 몸판 색 발견 (그룹 내부)");
+                    if (DEBUG_LOG) logWrite("[grading-v2] 몸판 색 발견 (그룹 내부)");
                     return toCMYK(gp.fillColor);
                 }
             }
         }
     }
 
-    logWrite("[grading-v2] 몸판에서 채워진 path 못 찾음");
+    if (DEBUG_LOG) logWrite("[grading-v2] 몸판에서 채워진 path 못 찾음");
     return null;
+}
+
+// 디자인 AI "몸판" 레이어의 각 body별 개별 색상 추출
+// 반환: [{cx, cy, color: CMYKColor}, ...] (x+y 2D 정렬)
+// 왜 필요: 양면 유니폼(표면=흰색, 이면=남색)에서 body마다 색이 다를 수 있음
+function extractBodyColors(designDoc) {
+    var colors = [];
+    try {
+        var bodyLayer = designDoc.layers.getByName("몸판");
+        // 직속 pathItems 탐색 (50pt 이상 = 몸판 조각)
+        for (var i = 0; i < bodyLayer.pathItems.length; i++) {
+            var p = bodyLayer.pathItems[i];
+            if (Math.abs(p.width) > 50 && Math.abs(p.height) > 50
+                && p.filled && p.fillColor && p.fillColor.typename !== "NoColor") {
+                var gb = p.geometricBounds;
+                var cx = (gb[0] + gb[2]) / 2;
+                var cy = (gb[1] + gb[3]) / 2;
+                colors.push({ cx: cx, cy: cy, color: toCMYK(p.fillColor) });
+            }
+        }
+        // GroupItem 내부도 탐색
+        for (var gi = 0; gi < bodyLayer.groupItems.length; gi++) {
+            var grp = bodyLayer.groupItems[gi];
+            for (var gpi = 0; gpi < grp.pathItems.length; gpi++) {
+                var gp = grp.pathItems[gpi];
+                if (Math.abs(gp.width) > 50 && Math.abs(gp.height) > 50
+                    && gp.filled && gp.fillColor && gp.fillColor.typename !== "NoColor") {
+                    var ggb = gp.geometricBounds;
+                    colors.push({ cx: (ggb[0]+ggb[2])/2, cy: (ggb[1]+ggb[3])/2, color: toCMYK(gp.fillColor) });
+                }
+            }
+        }
+        // x+y 2D 정렬 (classifyBodyPieces와 동일 규칙)
+        colors.sort(function(a, b) {
+            if (Math.abs(a.cx - b.cx) > 10) return a.cx - b.cx;
+            return b.cy - a.cy;
+        });
+    } catch (e) {
+        logWrite("[grading-v2] extractBodyColors 실패: " + e.message);
+    }
+    return colors;
 }
 
 // ============================================================
@@ -316,7 +358,7 @@ function importPatternPaths(svgDoc, baseDoc, mainColor, fillLayer, patternLayer)
         var src = svgDoc.layers[li];
 
         // [진단] 레이어 전체 통계: 어떤 종류의 아이템이 몇 개 있는지 파악
-        logWrite("[진단] SVG 레이어[" + li + "] 이름=" + src.name
+        if (DEBUG_LOG) logWrite("[진단] SVG 레이어[" + li + "] 이름=" + src.name
             + " pathItems=" + src.pathItems.length
             + " compoundPathItems=" + src.compoundPathItems.length
             + " groupItems=" + src.groupItems.length
@@ -330,7 +372,7 @@ function importPatternPaths(svgDoc, baseDoc, mainColor, fillLayer, patternLayer)
             var fl = false, cl = false;
             try { fl = it.filled; } catch (eF) {}
             try { cl = it.closed; } catch (eC) {}
-            logWrite("[진단]   [" + di + "] typename=" + it.typename
+            if (DEBUG_LOG) logWrite("[진단]   [" + di + "] typename=" + it.typename
                 + " w=" + w.toFixed(1) + " h=" + h.toFixed(1)
                 + " filled=" + fl + " closed=" + cl);
         }
@@ -341,7 +383,7 @@ function importPatternPaths(svgDoc, baseDoc, mainColor, fillLayer, patternLayer)
             var path = src.pathItems[pi];
 
             // [진단] 각 path의 크기/채움여부/50pt 통과 여부
-            logWrite("[진단]   path[" + pi + "] w=" + Math.abs(path.width).toFixed(1)
+            if (DEBUG_LOG) logWrite("[진단]   path[" + pi + "] w=" + Math.abs(path.width).toFixed(1)
                 + " h=" + Math.abs(path.height).toFixed(1)
                 + " filled=" + path.filled
                 + " 50pt통과=" + (Math.abs(path.width) > 50 && Math.abs(path.height) > 50));
@@ -387,7 +429,7 @@ function importPatternPaths(svgDoc, baseDoc, mainColor, fillLayer, patternLayer)
     }
 
     // [진단] 함수 종료 직전 최종 결과 (몸판 색상 채움 count + 누적 면적)
-    logWrite("[진단] importPatternPaths 결과: filledCount=" + filledCount
+    if (DEBUG_LOG) logWrite("[진단] importPatternPaths 결과: filledCount=" + filledCount
         + " targetArea=" + targetArea.toFixed(1));
 
     return { filledCount: filledCount, targetArea: targetArea };
@@ -485,6 +527,55 @@ function classifyBodyPieces(layer) {
     return result;
 }
 
+// 레이어 이름(면+조각)으로 4분면 body 찾기
+// 왜: 양면 유니폼에서 유클리드 거리 매칭은 요소-body가 꼬임.
+//      레이어 이름("요소_표_앞" 등)에서 면(표/이)+조각(앞/뒤)을 파싱해
+//      4분면 위치를 고정하면 매칭이 확정적.
+// bodies: classifyBodyPieces로 정렬된 배열
+// 반환: body 인덱스 또는 -1
+function findBodyForLayer(piece, side, bodies) {
+    if (!piece || bodies.length === 0) return -1;
+
+    // bodies 중심점 계산 (4분면 분할 기준)
+    var midX = 0, midY = 0;
+    for (var i = 0; i < bodies.length; i++) {
+        midX += bodies[i].cx;
+        midY += bodies[i].cy;
+    }
+    midX /= bodies.length;
+    midY /= bodies.length;
+
+    // 사분면 결정: 앞판=좌측, 뒷판=우측 / 표면(or 단면)=상단, 이면=하단
+    var wantLeft = (piece === "앞");
+    var wantTop = (!side || side === "표"); // 표면 or 단면(side===null) = 상단
+
+    var bestIdx = -1;
+    var bestDist = Infinity;
+    for (var bi = 0; bi < bodies.length; bi++) {
+        var isLeft = (bodies[bi].cx < midX);
+        var isTop = (bodies[bi].cy > midY); // Y 클수록 위 (Illustrator geometricBounds 기준)
+
+        if (bodies.length <= 2) {
+            // 단면(2body): y축 무시, x축만 체크
+            if (wantLeft === isLeft || bodies.length === 1) {
+                var dist = Math.abs(bodies[bi].cx - midX);
+                if (dist < bestDist || bestIdx === -1) {
+                    bestDist = dist;
+                    bestIdx = bi;
+                }
+            }
+        } else {
+            // 양면(4body): x+y 모두 체크
+            if (wantLeft === isLeft && wantTop === isTop) {
+                bestIdx = bi;
+                break; // 정확히 1개 매칭
+            }
+        }
+    }
+
+    return bestIdx;
+}
+
 // 요소 1개의 소속 body 조각 인덱스 판별 (유클리드 거리 최단)
 // 반환: bodies의 idx (0..N-1) 또는 -1 (bodies 비었을 때 = fallback 트리거)
 function assignElementToPiece(elemItem, bodies) {
@@ -545,7 +636,7 @@ function placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces, fallbackCen
         }
 
         if (!baseCenter) {
-            logWrite("[진단] 요소[" + i + "] 배치 생략: baseCenter 없음 (type=" + pieceType + " pieceIdx=" + pieceIdx + ")");
+            if (DEBUG_LOG) logWrite("[진단] 요소[" + i + "] 배치 생략: baseCenter 없음 (type=" + pieceType + " pieceIdx=" + pieceIdx + ")");
             continue;
         }
 
@@ -583,7 +674,7 @@ function placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces, fallbackCen
                 item.translate(targetCxBd - curCxBd, targetBottomBd - curBottomBd);
             }
 
-            logWrite("[진단] 요소[" + i + "] 배치(band,상대좌표): pieceIdx=" + pieceIdx
+            if (DEBUG_LOG) logWrite("[진단] 요소[" + i + "] 배치(band,상대좌표): pieceIdx=" + pieceIdx
                 + " bandBottom=" + svgBandBottom.toFixed(1)
                 + " relVec.dy=" + relVec.dy.toFixed(1)
                 + " scale=" + scale.toFixed(4)
@@ -595,7 +686,7 @@ function placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces, fallbackCen
             var curBottom = gb[3]; // 현재 요소 하단
             item.translate(targetCx - curCx, targetBottom - curBottom);
 
-            logWrite("[진단] 요소[" + i + "] 배치(piece,하단기준): pieceIdx=" + pieceIdx
+            if (DEBUG_LOG) logWrite("[진단] 요소[" + i + "] 배치(piece,하단기준): pieceIdx=" + pieceIdx
                 + " bodyBottom=" + svgBodyBottom.toFixed(1)
                 + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
                 + " scale=" + scale.toFixed(4)
@@ -606,7 +697,7 @@ function placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces, fallbackCen
             var curCy = (gb[1] + gb[3]) / 2;
             item.translate(targetCx - curCx, targetCy - curCy);
 
-            logWrite("[진단] 요소[" + i + "] 배치(fallback): pieceIdx=" + pieceIdx
+            if (DEBUG_LOG) logWrite("[진단] 요소[" + i + "] 배치(fallback): pieceIdx=" + pieceIdx
                 + " center=(" + baseCenter.cx.toFixed(1) + "," + baseCenter.cy.toFixed(1) + ")"
                 + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
                 + " scale=" + scale.toFixed(4)
@@ -634,7 +725,7 @@ function placeBandsPerPiece(svgBands, bandMeta, svgBodies, fallbackCenter, linea
         // 메타 범위 초과 → 이 band는 디자인 AI에 대응이 없음 (그대로 두고 경고)
         var meta = (i < matchCount) ? bandMeta[i] : null;
         if (!meta) {
-            logWrite("[진단] SVG band[" + i + "] 메타 없음 - 이동 생략 (원본 좌표 유지)");
+            if (DEBUG_LOG) logWrite("[진단] SVG band[" + i + "] 메타 없음 - 이동 생략 (원본 좌표 유지)");
             continue;
         }
 
@@ -652,7 +743,7 @@ function placeBandsPerPiece(svgBands, bandMeta, svgBodies, fallbackCenter, linea
             mode = "fallback";
         }
         if (!baseCenter) {
-            logWrite("[진단] SVG band[" + i + "] baseCenter 없음 - 생략");
+            if (DEBUG_LOG) logWrite("[진단] SVG band[" + i + "] baseCenter 없음 - 생략");
             continue;
         }
 
@@ -674,7 +765,7 @@ function placeBandsPerPiece(svgBands, bandMeta, svgBodies, fallbackCenter, linea
             // 이동 후 실제 좌표 저장 (geometricBounds 캐시 회피)
             bandPositions[i] = { cx: targetCx, bottom: targetBottom };
 
-            logWrite("[진단] SVG band[" + i + "] 이동(piece,상단기준): pieceIdx=" + pieceIdx
+            if (DEBUG_LOG) logWrite("[진단] SVG band[" + i + "] 이동(piece,상단기준): pieceIdx=" + pieceIdx
                 + " bodyTop=" + svgBodyTop.toFixed(1)
                 + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
                 + " scale=" + scale.toFixed(4)
@@ -689,7 +780,7 @@ function placeBandsPerPiece(svgBands, bandMeta, svgBodies, fallbackCenter, linea
             var movedBottom = gb[3] + (targetCy - curCy);
             bandPositions[i] = { cx: targetCx, bottom: movedBottom };
 
-            logWrite("[진단] SVG band[" + i + "] 이동(fallback): pieceIdx=" + pieceIdx
+            if (DEBUG_LOG) logWrite("[진단] SVG band[" + i + "] 이동(fallback): pieceIdx=" + pieceIdx
                 + " center=(" + baseCenter.cx.toFixed(1) + "," + baseCenter.cy.toFixed(1) + ")"
                 + " relVec=(" + relVec.dx.toFixed(1) + "," + relVec.dy.toFixed(1) + ")"
                 + " scale=" + scale.toFixed(4)
@@ -752,6 +843,9 @@ function main() {
         var designFile = new File(config.designAiPath);
         if (!designFile.exists) throw new Error("디자인 AI 파일 없음: " + config.designAiPath);
 
+        // 대화 상자 억제 (속도 향상 — SVG/AI 열 때 옵션 창 방지)
+        app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS;
+
         designDoc = app.open(designFile);
         logWrite("[grading-v2] STEP 1: 디자인 열림 - " + designDoc.name);
 
@@ -768,7 +862,7 @@ function main() {
             var ln = designDoc.layers[li].name;
             if (ln === "몸판") hasBody = true;
             if (ln === "패턴선") hasPatternLine = true;
-            if (ln === "요소") hasElements = true;
+            if (ln === "요소" || ln.indexOf("요소_") === 0) hasElements = true;
         }
         if (!hasBody) logWrite("[grading-v2] 경고: '몸판' 레이어 없음");
         if (!hasPatternLine) logWrite("[grading-v2] 경고: '패턴선' 레이어 없음");
@@ -782,11 +876,15 @@ function main() {
             mainColor.cyan = 0; mainColor.magenta = 0; mainColor.yellow = 0; mainColor.black = 100;
             logWrite("[grading-v2] 경고: 몸판 색 추출 실패, 기본 검정 사용");
         } else {
-            logWrite("[grading-v2] 몸판 색 CMYK: C" + mainColor.cyan.toFixed(1)
+            if (DEBUG_LOG) logWrite("[grading-v2] 몸판 색 CMYK: C" + mainColor.cyan.toFixed(1)
                 + " M" + mainColor.magenta.toFixed(1)
                 + " Y" + mainColor.yellow.toFixed(1)
                 + " K" + mainColor.black.toFixed(1));
         }
+
+        // body별 개별 색상 추출 (양면 유니폼 대응, STEP 7에서 참조)
+        var bodyColors = extractBodyColors(designDoc);
+        logWrite("[grading-v2] body별 색상: " + bodyColors.length + "개");
 
         // ===== STEP 2: 기준 면적 계산 (baseArea) =====
         // 왜 패턴선 레이어: 디자이너가 작업한 원본 패턴 크기. 타겟 SVG와 비율 계산용.
@@ -803,15 +901,43 @@ function main() {
             }
         }
 
-        // "요소" 레이어 아이템 레퍼런스 미리 수집 (duplicate용)
-        // 왜 미리: STEP 6에서 designDoc이 아직 열려있을 때 duplicate 소스로 쓰기 위함.
-        var elemItems = [];
+        // 요소 레이어를 그룹별로 수집 (이름 기반 매칭용)
+        // "요소" (기존) 또는 "요소_표_앞", "요소_이_뒤" 등 (이름 규약) 모두 수집
+        // 왜 그룹별: 양면 유니폼에서 레이어 이름으로 어느 body(4분면)에 배치할지 확정하기 위함.
+        //           기존처럼 전부 합치면 유클리드 매칭이 꼬여 색상/위치가 뒤바뀜.
+        var elemLayerGroups = []; // [{name, side, piece, items}, ...]
         if (hasElements) {
-            var elemLayer = designDoc.layers.getByName("요소");
-            for (var ei = 0; ei < elemLayer.pageItems.length; ei++) {
-                elemItems.push(elemLayer.pageItems[ei]);
+            for (var eli = 0; eli < designDoc.layers.length; eli++) {
+                var elName = designDoc.layers[eli].name;
+                if (elName === "요소" || elName.indexOf("요소_") === 0) {
+                    // 레이어 이름 파싱: "요소" / "요소_앞" / "요소_표_앞"
+                    var tokens = elName.split("_");
+                    var elSide = null;  // null=단면/폴백, "표"=표면, "이"=이면
+                    var elPiece = null; // "앞", "뒤" 등
+                    if (tokens.length === 2) { elPiece = tokens[1]; }        // "요소_앞"
+                    else if (tokens.length === 3) { elSide = tokens[1]; elPiece = tokens[2]; } // "요소_표_앞"
+
+                    var layerItems = [];
+                    var elLayer = designDoc.layers[eli];
+                    for (var eii = 0; eii < elLayer.pageItems.length; eii++) {
+                        layerItems.push(elLayer.pageItems[eii]);
+                    }
+                    if (layerItems.length > 0) {
+                        elemLayerGroups.push({ name: elName, side: elSide, piece: elPiece, items: layerItems });
+                    }
+                }
             }
-            logWrite("[grading-v2] 요소 레퍼런스 수집: " + elemItems.length + "개");
+            logWrite("[grading-v2] 요소 레이어 " + elemLayerGroups.length + "개 수집");
+        }
+        // 호환성: elemItems도 유지 (기존 유클리드 폴백 + 아래 코드 참조용)
+        var elemItems = [];
+        for (var egi = 0; egi < elemLayerGroups.length; egi++) {
+            for (var eii2 = 0; eii2 < elemLayerGroups[egi].items.length; eii2++) {
+                elemItems.push(elemLayerGroups[egi].items[eii2]);
+            }
+        }
+        if (hasElements) {
+            logWrite("[grading-v2] 요소 총: " + elemItems.length + "개 (레이어 스캔)");
         }
 
         // B-2안: 몸판 조각 분류 + 요소별 소속/상대벡터 계산
@@ -838,7 +964,7 @@ function main() {
                 app.executeMenuCommand("ungroup");
             }
             designDoc.selection = null;
-            logWrite("[grading-v2] 디자인AI 몸판 ungroup: " + bodyLayer.pathItems.length + "개 path");
+            if (DEBUG_LOG) logWrite("[grading-v2] 디자인AI 몸판 ungroup: " + bodyLayer.pathItems.length + "개 path");
         }
 
         if (hasBody && hasElements) {
@@ -852,7 +978,7 @@ function main() {
             for (var di = 0; di < designPieces.bodies.length; di++) {
                 designCxList += (di > 0 ? ", " : "") + "body" + di + "=" + designPieces.bodies[di].cx.toFixed(1);
             }
-            logWrite("[진단] 디자인AI 몸판 분류: bands=" + designPieces.bands.length
+            if (DEBUG_LOG) logWrite("[진단] 디자인AI 몸판 분류: bands=" + designPieces.bands.length
                 + "개 bodies=" + designPieces.bodies.length + "개 (좌→우: " + designCxList + ")");
 
             for (var mi = 0; mi < elemItems.length; mi++) {
@@ -912,7 +1038,7 @@ function main() {
                 }
                 elemMeta.push({ pieceType: bestType, pieceIdx: bestIdx, relVec: rv });
 
-                logWrite("[진단] 요소[" + mi + "] 소속: type=" + bestType + " idx=" + bestIdx
+                if (DEBUG_LOG) logWrite("[진단] 요소[" + mi + "] 소속: type=" + bestType + " idx=" + bestIdx
                     + " (거리=" + (bestDist >= 0 ? bestDist.toFixed(1) : "?") + ")"
                     + " relVec=(" + rv.dx.toFixed(1) + "," + rv.dy.toFixed(1) + ")");
             }
@@ -959,12 +1085,12 @@ function main() {
                     bandMeta.push({ index: bi, pieceIdx: bPieceIdx, relVec: bRv });
 
                     var bDistLog = (bestDistB !== undefined && bestDistB >= 0) ? bestDistB : -1;
-                    logWrite("[진단] 디자인AI band[" + bi + "] 소속 body 인덱스=" + bPieceIdx
+                    if (DEBUG_LOG) logWrite("[진단] 디자인AI band[" + bi + "] 소속 body 인덱스=" + bPieceIdx
                         + " 거리=" + (bDistLog >= 0 ? bDistLog.toFixed(1) : "?")
                         + " relVec=(" + bRv.dx.toFixed(1) + "," + bRv.dy.toFixed(1) + ")");
                 }
             } else {
-                logWrite("[진단] 디자인AI bands 없음 - band 이동 스킵 예정");
+                if (DEBUG_LOG) logWrite("[진단] 디자인AI bands 없음 - band 이동 스킵 예정");
             }
         }
 
@@ -991,7 +1117,7 @@ function main() {
             app.executeMenuCommand("ungroup");
         }
         app.selection = null;
-        logWrite("[grading-v2] SVG ungroup 완료: " + svgDoc.layers[0].pathItems.length + "개 path 노출");
+        if (DEBUG_LOG) logWrite("[grading-v2] SVG ungroup 완료: " + svgDoc.layers[0].pathItems.length + "개 path 노출");
 
         // 대지 사이즈 고정: 158cm × 200cm (사내 작업 기준)
         var ARTBOARD_W_CM = 158;
@@ -1029,130 +1155,314 @@ function main() {
 
         app.activeDocument = baseDoc;
 
-        // ===== STEP 6: 요소 duplicate (designDoc → baseDoc.designLayer) =====
-        // Q3: app.copy/paste 금지. duplicate(targetLayer, PLACEATEND) 사용.
-        var pastedItems = [];
-        for (var di = 0; di < elemItems.length; di++) {
-            var dup = elemItems[di].duplicate(designLayer, ElementPlacement.PLACEATEND);
-            pastedItems.push(dup);
+        // ===== STEP 6~7: 요소 duplicate + 스케일 + 배치 =====
+        // 이름 기반 레이어(piece !== null)가 있으면 레이어별 독립 처리,
+        // 폴백("요소" 레이어만)이면 기존 유클리드 매칭 코드 실행.
+
+        // 이름 기반 레이어 존재 여부 판별
+        var hasNamedLayers = false;
+        for (var nli = 0; nli < elemLayerGroups.length; nli++) {
+            if (elemLayerGroups[nli].piece !== null) { hasNamedLayers = true; break; }
         }
-        logWrite("[grading-v2] STEP 6: " + pastedItems.length + "개 요소 복제");
 
-        // 이제 designDoc 닫아도 안전
-        try { designDoc.close(SaveOptions.DONOTSAVECHANGES); designDoc = null; }
-        catch (eD) { logWrite("[grading-v2] 디자인 close 실패: " + eD.message); }
+        // 공통: 면적 비율 스케일 계산 (두 모드 모두 사용)
+        var linearScale = 1.0;
+        // 2026-04-21: 0.78 → 1.0. 2XS에서 축소 부족 이슈 완화용. 선형 스케일 그대로 적용 (완화 제거).
+        // 단, SVG 자체가 XL의 86% 크기인 근본 문제는 SVG 생성 쪽에서 해결 필요.
+        var ELEMENT_SCALE_EXPONENT = 1.0;
+        var adjustedScale = 1.0;
+        if (baseArea > 0 && targetArea > 0) {
+            var areaRatio = targetArea / baseArea;
+            linearScale = Math.sqrt(areaRatio);
+            adjustedScale = Math.pow(linearScale, ELEMENT_SCALE_EXPONENT);
+            logWrite("[grading-v2] STEP 7: 면적비=" + areaRatio.toFixed(4)
+                + " 선형스케일=" + linearScale.toFixed(4)
+                + " 보정스케일=" + adjustedScale.toFixed(4));
+        } else {
+            logWrite("[grading-v2] 면적 계산 불가 - 스케일 생략");
+        }
 
-        // ===== STEP 7: 스케일(그룹) + 조각별 개별 배치 (B-2안) =====
-        if (pastedItems.length > 0) {
-            // 복제된 아이템을 selection에 재등록
-            baseDoc.selection = null;
-            for (var si = 0; si < pastedItems.length; si++) {
-                pastedItems[si].selected = true;
+        // 공통: SVG fillLayer 조각 분류 (두 모드 모두 필요)
+        var svgPieces = classifyBodyPieces(fillLayer);
+        svgPieces.source = "svg";
+        var svgFallback = getLayerCenter(fillLayer);
+
+        // SVG bodies cx 리스트 로그
+        var svgCxList = "";
+        for (var sci = 0; sci < svgPieces.bodies.length; sci++) {
+            svgCxList += (sci > 0 ? ", " : "") + "body" + sci + "=" + svgPieces.bodies[sci].cx.toFixed(1);
+        }
+        if (DEBUG_LOG) logWrite("[진단] SVG 몸판 분류: bands=" + svgPieces.bands.length
+            + "개 bodies=" + svgPieces.bodies.length + "개 (좌→우: " + svgCxList + ")");
+
+        // 공통: body별 색상 적용 (양면 유니폼 대응)
+        // 왜: 인덱스 순차 매칭은 디자인AI와 SVG의 body 순서가 다르면 색이 반대로 들어감
+        // 해결: 4분면(좌/우, 상/하) 위치 기반으로 같은 위치의 body끼리 매칭
+        if (bodyColors.length > 0 && svgPieces && svgPieces.bodies.length > 0) {
+            // 디자인 AI body 중심 계산 (모든 body의 평균 좌표 = 전체 중심점)
+            var midXd = 0, midYd = 0;
+            for (var mdi = 0; mdi < bodyColors.length; mdi++) {
+                midXd += bodyColors[mdi].cx; midYd += bodyColors[mdi].cy;
             }
+            midXd /= bodyColors.length; midYd /= bodyColors.length;
 
-            // 그룹화 (요소 간 내부 비율 보존 목적으로 resize만 그룹 기준에서 1회)
-            app.executeMenuCommand("group");
-            var pastedGroup = baseDoc.selection[0];
+            // SVG body 중심 계산
+            var midXs = 0, midYs = 0;
+            for (var msi = 0; msi < svgPieces.bodies.length; msi++) {
+                midXs += svgPieces.bodies[msi].cx; midYs += svgPieces.bodies[msi].cy;
+            }
+            midXs /= svgPieces.bodies.length; midYs /= svgPieces.bodies.length;
 
-            // 면적 비율 스케일 (linearScale = sqrt(areaRatio))
-            // 왜 if 밖에 선언: 아래 배치 호출부에서도 linearScale 참조 필요.
-            var linearScale = 1.0;
-            // 요소 스케일 지수 보정 (K < 1이면 변화 완화, K = 1.0이면 보정 없음)
-            // 사용자 관찰: 작은 사이즈에서 요소가 몸판 대비 과소, 큰 사이즈에서 과대
-            // K=0.78 스케일 변화 22% 완화
-            var ELEMENT_SCALE_EXPONENT = 0.78;
-            if (baseArea > 0 && targetArea > 0) {
-                var areaRatio = targetArea / baseArea;
-                linearScale = Math.sqrt(areaRatio);
-                logWrite("[grading-v2] STEP 7: 면적비=" + areaRatio.toFixed(4)
-                    + " 선형스케일=" + linearScale.toFixed(4)
-                    + " (" + (linearScale * 100).toFixed(1) + "%)");
+            // 4분면 매칭: 디자인body와 SVG body가 같은 사분면에 있으면 색상 적용
+            var colorApplied = 0;
+            for (var ci = 0; ci < bodyColors.length; ci++) {
+                var dLeft = (bodyColors[ci].cx < midXd);   // 디자인 body가 좌측인지
+                var dTop = (bodyColors[ci].cy > midYd);     // 디자인 body가 상단인지
 
-                // 지수 보정 적용: linearScale^K (K<1이면 축소/확대 완화)
-                var adjustedScale = Math.pow(linearScale, ELEMENT_SCALE_EXPONENT);
-                logWrite("[grading-v2] STEP 7: 보정스케일=" + adjustedScale.toFixed(4)
-                    + " (" + (adjustedScale * 100).toFixed(1) + "%) K=" + ELEMENT_SCALE_EXPONENT);
+                for (var si = 0; si < svgPieces.bodies.length; si++) {
+                    var sLeft = (svgPieces.bodies[si].cx < midXs);  // SVG body가 좌측인지
+                    var sTop = (svgPieces.bodies[si].cy > midYs);   // SVG body가 상단인지
 
-                // 0.5% 이상 차이 있을 때만 적용
-                if (Math.abs(adjustedScale - 1.0) > 0.005) {
-                    var pct = adjustedScale * 100;
-                    // Transformation.CENTER: 그룹 중심 기준 resize (요소 간 비율 유지)
-                    pastedGroup.resize(pct, pct, true, true, true, true, pct, Transformation.CENTER);
+                    if (dLeft === sLeft && dTop === sTop) {
+                        var svgBody = svgPieces.bodies[si];
+                        if (svgBody.pathRef && bodyColors[ci].color) {
+                            svgBody.pathRef.filled = true;
+                            svgBody.pathRef.fillColor = cloneCMYK(bodyColors[ci].color);
+                            colorApplied++;
+                        }
+                        break;
+                    }
                 }
-            } else {
-                logWrite("[grading-v2] 면적 계산 불가 - 스케일 생략");
+            }
+            logWrite("[grading-v2] body별 색상 적용: " + colorApplied + "/" + bodyColors.length + "개 (4분면 매칭)");
+
+            // 2body 단면 폴백: 4분면 매칭 실패 시 기존 순차 매칭으로 대체
+            if (colorApplied === 0 && bodyColors.length <= 2) {
+                var fallbackCount = Math.min(bodyColors.length, svgPieces.bodies.length);
+                for (var fi = 0; fi < fallbackCount; fi++) {
+                    var fb = svgPieces.bodies[fi];
+                    if (fb.pathRef && bodyColors[fi].color) {
+                        fb.pathRef.filled = true;
+                        fb.pathRef.fillColor = cloneCMYK(bodyColors[fi].color);
+                    }
+                }
+                logWrite("[grading-v2] body별 색상 폴백: " + fallbackCount + "개 (순차 매칭)");
+            }
+        }
+
+        if (hasNamedLayers && svgPieces && svgPieces.bodies.length > 0) {
+            // ===== 이름 기반 매칭 모드 =====
+            // 왜: 레이어 이름("요소_표_앞" 등)으로 4분면 body를 확정적으로 매칭.
+            //      유클리드 거리 의존 제거 → 양면에서 요소-body 꼬임 해결.
+            logWrite("[grading-v2] STEP 6-7: 이름 기반 요소 배치 모드 (" + elemLayerGroups.length + "개 그룹)");
+
+            // ==============================================================
+            // [2026-04-21 재수정] 폴백 모드와 100% 동일한 "1회 group/ungroup + placeElementGroupPerPiece 재사용" 구조
+            // 왜 이 구조: 이전 버전은 그룹별로 4회 group/ungroup을 반복했는데,
+            //   executeMenuCommand("ungroup")이 PageItem 참조를 무효화할 가능성(가설 D)이 있어
+            //   요소가 XL 원 위치에 남는 문제 발생. 폴백 모드는 1회만 group/ungroup하므로 안전.
+            // ==============================================================
+
+            // Phase 1: 모든 그룹의 요소를 단일 배열로 duplicate + 요소별 relVec 수집
+            // (designDoc 열려있을 때만 가능 — geometricBounds 접근 필요)
+            var allDups = [];        // baseDoc 요소 평탄 배열 (폴백의 pastedItems 대응)
+            var allElemMeta = [];    // [{pieceType, pieceIdx, relVec}, ...] — 폴백과 동일 스키마
+            var phase1Summary = [];  // 로그용: 그룹별 {name, count, svgBodyIdx}
+
+            for (var elgi = 0; elgi < elemLayerGroups.length; elgi++) {
+                var eg = elemLayerGroups[elgi];
+                if (eg.items.length === 0) continue;
+
+                // SVG body 인덱스: Phase 2에서 placeElementGroupPerPiece가 svgPieces.bodies[svgBodyIdx]를 참조
+                var svgBodyIdx = findBodyForLayer(eg.piece, eg.side, svgPieces.bodies);
+                if (svgBodyIdx < 0) {
+                    logWrite("[grading-v2] 경고: '" + eg.name + "' SVG body 매칭 실패 - 건너뜀");
+                    continue;
+                }
+
+                // designDoc body: relVec 측정용 (XL 디자인 기준)
+                // designPieces는 L972에서 생성됨. 이름 기반 모드 진입 시 살아있어야 하나,
+                // hasBody/hasElements 둘 다 true일 때만 생성되므로 null 체크 필수.
+                var designBody = null;
+                if (designPieces && designPieces.bodies && designPieces.bodies.length > 0) {
+                    var designBodyIdx = findBodyForLayer(eg.piece, eg.side, designPieces.bodies);
+                    if (designBodyIdx >= 0) {
+                        designBody = designPieces.bodies[designBodyIdx];
+                    }
+                }
+
+                for (var dii = 0; dii < eg.items.length; dii++) {
+                    var srcElem = eg.items[dii];
+
+                    // relVec: 요소 중심 - designBody 중심 (X), 요소 하단 - designBody 하단 (Y)
+                    // 폴백 모드 L1031~1037과 완전히 동일한 공식
+                    var rv = { dx: 0, dy: 0 };
+                    if (designBody) {
+                        var elCenter = getItemsCenter([srcElem]);
+                        if (elCenter) {
+                            rv.dx = elCenter.cx - designBody.cx;
+                            var elBottom = srcElem.geometricBounds[3]; // bbox[3] = bottom (Y 하단)
+                            rv.dy = elBottom - designBody.bbox[3];
+                        }
+                    }
+
+                    // duplicate (designDoc → baseDoc의 designLayer)
+                    var dup = srcElem.duplicate(designLayer, ElementPlacement.PLACEATEND);
+                    allDups.push(dup);
+                    // pieceType = "body" 고정 (이름 기반 레이어는 body 전용. band는 별도 경로)
+                    allElemMeta.push({ pieceType: "body", pieceIdx: svgBodyIdx, relVec: rv });
+                }
+
+                phase1Summary.push({ name: eg.name, count: eg.items.length, svgBodyIdx: svgBodyIdx });
+            }
+            logWrite("[grading-v2] Phase 1: " + allDups.length + "개 요소 duplicate + relVec 수집 완료 ("
+                + phase1Summary.length + "개 그룹)");
+            if (DEBUG_LOG) {
+                for (var psi = 0; psi < phase1Summary.length; psi++) {
+                    var ps = phase1Summary[psi];
+                    logWrite("[진단] 그룹 '" + ps.name + "': " + ps.count + "개 요소 → svgBody[" + ps.svgBodyIdx + "]");
+                }
             }
 
-            // --- 그룹 해제 (표준 ungroup 명령) ---
-            // 왜 ungroup: 이제부터 각 요소를 pieceIdx에 따라 개별 translate해야 하므로
-            //             그룹 단위 이동을 해제한다. pastedItems 배열은 duplicate 시점의
-            //             최상위 1레벨 참조만 담고 있어 1회 ungroup 으로 우리가 만든 그룹만 해제됨.
-            app.executeMenuCommand("ungroup");
+            // designDoc 닫기 (duplicate 완료 후 안전)
+            try { designDoc.close(SaveOptions.DONOTSAVECHANGES); designDoc = null; }
+            catch (eD) { logWrite("[grading-v2] 디자인 close 실패: " + eD.message); }
 
-            // --- SVG fillLayer 조각 분류 (디자인 AI와 동일 알고리즘) ---
-            var svgPieces = classifyBodyPieces(fillLayer);
-            svgPieces.source = "svg";
-            var svgFallback = getLayerCenter(fillLayer);
+            app.activeDocument = baseDoc;
 
-            // SVG bodies cx 리스트 로그
-            var svgCxList = "";
-            for (var sci = 0; sci < svgPieces.bodies.length; sci++) {
-                svgCxList += (sci > 0 ? ", " : "") + "body" + sci + "=" + svgPieces.bodies[sci].cx.toFixed(1);
-            }
-            logWrite("[진단] SVG 몸판 분류: bands=" + svgPieces.bands.length
-                + "개 bodies=" + svgPieces.bodies.length + "개 (좌→우: " + svgCxList + ")");
-
-            // 매칭 일치/불일치 판정
-            var designBodyCount = designPieces ? designPieces.bodies.length : 0;
-            var svgBodyCount = svgPieces.bodies.length;
-            var matchCount = Math.min(designBodyCount, svgBodyCount);
-            var matchStatus = (designBodyCount === svgBodyCount) ? "일치" : "불일치";
-            logWrite("[진단] 매칭 결과: designBodies=" + designBodyCount
-                + "개 svgBodies=" + svgBodyCount
-                + "개 (" + matchStatus + ", 유효 매칭=" + matchCount + "개)");
-            if (matchStatus === "불일치") {
-                logWrite("[진단] 경고: 몸판 조각 개수 불일치 (design="
-                    + designBodyCount + ", svg=" + svgBodyCount
-                    + ") → min 까지 매칭, 초과분 fallback");
-            }
-
-            // --- 요소별 개별 배치 (pieceIdx 기반) ---
-            // 요소용: 보정된 스케일 적용 (band는 몸판 조각이라 면적 비례 그대로 유지)
-            var adjustedForPlace = Math.pow(linearScale, ELEMENT_SCALE_EXPONENT);
-            var scaleForPlace = (typeof adjustedForPlace === "number" && adjustedForPlace > 0) ? adjustedForPlace : 1.0;
+            // ==============================================================
+            // band 처리 (요소 배치보다 먼저 — 폴백 L1404~1436과 동일 순서)
+            // 왜 먼저: placeElementGroupPerPiece의 band 모드가 bandPositions를 참조하기 때문.
+            //   (단, 이름 기반 모드에서는 요소가 모두 pieceType="body"라 bandPositions는 실제 사용 안 됨.
+            //    그래도 인자 시그니처 호환을 위해 같은 순서로 처리)
+            // ==============================================================
             var bandScaleForPlace = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
-
-            // --- band 개별 이동 (요소 배치보다 먼저 실행) ---
-            // 왜 먼저: band 소속 요소가 bandPositions(이동 후 실제 좌표)를 참조해야 하므로
-            //          band를 먼저 이동하고 그 결과를 placeElementGroupPerPiece에 전달한다.
             var bandPositions = [];
             if (svgPieces.bands.length > 0 && bandMeta.length > 0) {
-                var bandMatchStatus = (bandMeta.length === svgPieces.bands.length) ? "일치" : "불일치";
-                logWrite("[진단] band 매칭 결과: designBands=" + bandMeta.length
-                    + "개 svgBands=" + svgPieces.bands.length + "개 (" + bandMatchStatus + ")");
                 bandPositions = placeBandsPerPiece(svgPieces.bands, bandMeta, svgPieces.bodies, svgFallback, bandScaleForPlace);
 
-                // --- patternLayer band도 동일 이동 ---
-                // 왜 필요: fillLayer band(채움)만 이동하면 patternLayer band(선)은 원래 위치에 남아
-                //          채움과 선이 분리된다. 같은 이동량을 적용해야 겹침이 유지된다.
+                // patternLayer band도 동일 이동 (폴백 L1408~1436과 동일)
                 var ptPieces = classifyBodyPieces(patternLayer);
-                ptPieces.source = "svg-pattern";
                 var ptMatchCount = Math.min(bandMeta.length, ptPieces.bands.length);
+                for (var pbi = 0; pbi < ptMatchCount; pbi++) {
+                    var ptBand = ptPieces.bands[pbi];
+                    var ptMeta = bandMeta[pbi];
+                    if (!ptBand || !ptBand.pathRef || !ptMeta) continue;
+                    var ptPieceIdx = ptMeta.pieceIdx;
+                    var ptRelVec = (ptMeta.relVec) ? ptMeta.relVec : { dx: 0, dy: 0 };
+                    var ptBaseCenter = null;
+                    if (ptPieceIdx >= 0 && svgPieces.bodies && ptPieceIdx < svgPieces.bodies.length) {
+                        ptBaseCenter = svgPieces.bodies[ptPieceIdx];
+                    } else {
+                        ptBaseCenter = svgFallback;
+                    }
+                    if (!ptBaseCenter) continue;
+                    var ptTargetCx = ptBaseCenter.cx + ptRelVec.dx * bandScaleForPlace;
+                    var ptBounds = ptBand.pathRef.geometricBounds;
+                    var ptCurCx = (ptBounds[0] + ptBounds[2]) / 2;
+                    if (ptPieceIdx >= 0 && svgPieces.bodies && ptPieceIdx < svgPieces.bodies.length) {
+                        var ptSvgBodyTop = svgPieces.bodies[ptPieceIdx].bbox[1];
+                        var ptTargetBottom = ptSvgBodyTop + ptRelVec.dy * bandScaleForPlace;
+                        ptBand.pathRef.translate(ptTargetCx - ptCurCx, ptTargetBottom - ptBounds[3]);
+                    } else {
+                        var ptTargetCy = ptBaseCenter.cy + ptRelVec.dy * bandScaleForPlace;
+                        var ptCurCy = (ptBounds[1] + ptBounds[3]) / 2;
+                        ptBand.pathRef.translate(ptTargetCx - ptCurCx, ptTargetCy - ptCurCy);
+                    }
+                }
+            }
 
-                if (ptMatchCount > 0) {
-                    logWrite("[진단] patternLayer band 이동 시작: ptBands=" + ptPieces.bands.length
-                        + "개 매칭=" + ptMatchCount + "개");
+            // ==============================================================
+            // Phase 2: 전체 1그룹 → CENTER resize → ungroup (1회만) → placeElementGroupPerPiece
+            // 폴백 모드 L1376~1389 + L1439와 완전히 동일한 구조
+            // ==============================================================
+            if (allDups.length > 0) {
+                // 전체를 단일 그룹으로 묶어 1회만 CENTER resize
+                baseDoc.selection = null;
+                for (var si = 0; si < allDups.length; si++) {
+                    allDups[si].selected = true;
+                }
+                app.executeMenuCommand("group");
+                var pastedGroup = baseDoc.selection[0];
 
+                if (Math.abs(adjustedScale - 1.0) > 0.005) {
+                    var pct2 = adjustedScale * 100;
+                    pastedGroup.resize(pct2, pct2, true, true, true, true, pct2, Transformation.CENTER);
+                }
+
+                // ungroup: 1회만 실행 — 가설 D(PageItem 참조 파괴) 회피
+                app.executeMenuCommand("ungroup");
+                baseDoc.selection = null;
+
+                logWrite("[grading-v2] Phase 2: 1회 group/resize/ungroup 완료 (요소 " + allDups.length + "개)");
+
+                // 폴백과 동일한 함수 호출: 각 요소를 자기 svgBody 기준으로 relVec*scale 만큼 개별 translate
+                // 스케일 인자: adjustedScale (폴백 L1399 scaleForPlace와 일치)
+                var scaleForPlace = adjustedScale;
+                placeElementGroupPerPiece(allDups, allElemMeta, svgPieces, svgFallback, scaleForPlace, bandPositions);
+
+                logWrite("[grading-v2] 이름 기반 배치 완료: " + allDups.length + "개 요소 (폴백 함수 재사용)");
+            } else {
+                logWrite("[grading-v2] 이름 기반 모드: 처리할 요소 없음");
+            }
+
+        } else {
+            // ===== 폴백: 기존 유클리드 매칭 (STEP 6~7 원본 코드) =====
+            logWrite("[grading-v2] STEP 6-7: 거리 기반 폴백 모드");
+
+            // STEP 6: 요소 duplicate
+            var pastedItems = [];
+            for (var di = 0; di < elemItems.length; di++) {
+                var dup = elemItems[di].duplicate(designLayer, ElementPlacement.PLACEATEND);
+                pastedItems.push(dup);
+            }
+            logWrite("[grading-v2] STEP 6: " + pastedItems.length + "개 요소 복제");
+
+            // designDoc 닫기
+            try { designDoc.close(SaveOptions.DONOTSAVECHANGES); designDoc = null; }
+            catch (eD) { logWrite("[grading-v2] 디자인 close 실패: " + eD.message); }
+
+            // STEP 7: 스케일(그룹) + 조각별 개별 배치 (B-2안)
+            if (pastedItems.length > 0) {
+                baseDoc.selection = null;
+                for (var si = 0; si < pastedItems.length; si++) {
+                    pastedItems[si].selected = true;
+                }
+                app.executeMenuCommand("group");
+                var pastedGroup = baseDoc.selection[0];
+
+                if (Math.abs(adjustedScale - 1.0) > 0.005) {
+                    var pct = adjustedScale * 100;
+                    pastedGroup.resize(pct, pct, true, true, true, true, pct, Transformation.CENTER);
+                }
+
+                app.executeMenuCommand("ungroup");
+
+                // 매칭 일치/불일치 판정
+                var designBodyCount = designPieces ? designPieces.bodies.length : 0;
+                var svgBodyCount = svgPieces.bodies.length;
+                var matchCount = Math.min(designBodyCount, svgBodyCount);
+                if (DEBUG_LOG) logWrite("[진단] 매칭 결과: designBodies=" + designBodyCount
+                    + "개 svgBodies=" + svgBodyCount + "개");
+
+                // 요소별 개별 배치 (pieceIdx 기반)
+                var adjustedForPlace = Math.pow(linearScale, ELEMENT_SCALE_EXPONENT);
+                var scaleForPlace = (typeof adjustedForPlace === "number" && adjustedForPlace > 0) ? adjustedForPlace : 1.0;
+                var bandScaleForPlace = (typeof linearScale === "number" && linearScale > 0) ? linearScale : 1.0;
+
+                // band 개별 이동 (요소 배치보다 먼저)
+                var bandPositions = [];
+                if (svgPieces.bands.length > 0 && bandMeta.length > 0) {
+                    bandPositions = placeBandsPerPiece(svgPieces.bands, bandMeta, svgPieces.bodies, svgFallback, bandScaleForPlace);
+
+                    var ptPieces = classifyBodyPieces(patternLayer);
+                    var ptMatchCount = Math.min(bandMeta.length, ptPieces.bands.length);
                     for (var pbi = 0; pbi < ptMatchCount; pbi++) {
                         var ptBand = ptPieces.bands[pbi];
                         var ptMeta = bandMeta[pbi];
                         if (!ptBand || !ptBand.pathRef || !ptMeta) continue;
-
-                        // 왜 svgPieces.bodies 기준: patternLayer bodies가 아닌 fillLayer bodies 기준으로
-                        //   이동해야 fillLayer band와 동일한 위치로 정렬된다.
                         var ptPieceIdx = ptMeta.pieceIdx;
                         var ptRelVec = (ptMeta.relVec) ? ptMeta.relVec : { dx: 0, dy: 0 };
-
                         var ptBaseCenter = null;
                         if (ptPieceIdx >= 0 && svgPieces.bodies && ptPieceIdx < svgPieces.bodies.length) {
                             ptBaseCenter = svgPieces.bodies[ptPieceIdx];
@@ -1160,48 +1470,26 @@ function main() {
                             ptBaseCenter = svgFallback;
                         }
                         if (!ptBaseCenter) continue;
-
-                        // X축: 중심 기준 (기존 유지)
                         var ptTargetCx = ptBaseCenter.cx + ptRelVec.dx * bandScaleForPlace;
-
                         var ptBounds = ptBand.pathRef.geometricBounds;
                         var ptCurCx = (ptBounds[0] + ptBounds[2]) / 2;
-
                         if (ptPieceIdx >= 0 && svgPieces.bodies && ptPieceIdx < svgPieces.bodies.length) {
-                            // Y축: body 상단 기준 (band는 body 위에 위치하므로)
-                            var ptSvgBodyTop = svgPieces.bodies[ptPieceIdx].bbox[1]; // body 상단
+                            var ptSvgBodyTop = svgPieces.bodies[ptPieceIdx].bbox[1];
                             var ptTargetBottom = ptSvgBodyTop + ptRelVec.dy * bandScaleForPlace;
-                            var ptCurBottom = ptBounds[3]; // 현재 pattern band 하단
-                            ptBand.pathRef.translate(ptTargetCx - ptCurCx, ptTargetBottom - ptCurBottom);
-
-                            logWrite("[진단] patternLayer band[" + pbi + "] 이동(상단기준):"
-                                + " bodyTop=" + ptSvgBodyTop.toFixed(1)
-                                + " 타겟Bottom=" + ptTargetBottom.toFixed(1));
+                            ptBand.pathRef.translate(ptTargetCx - ptCurCx, ptTargetBottom - ptBounds[3]);
                         } else {
-                            // fallback: 중심 기준 유지
                             var ptTargetCy = ptBaseCenter.cy + ptRelVec.dy * bandScaleForPlace;
                             var ptCurCy = (ptBounds[1] + ptBounds[3]) / 2;
                             ptBand.pathRef.translate(ptTargetCx - ptCurCx, ptTargetCy - ptCurCy);
-
-                            logWrite("[진단] patternLayer band[" + pbi + "] 이동(fallback): 타겟=("
-                                + ptTargetCx.toFixed(1) + "," + ptTargetCy.toFixed(1) + ")");
                         }
                     }
-                } else {
-                    logWrite("[진단] patternLayer band 이동 스킵: ptBands=" + ptPieces.bands.length);
                 }
-            } else {
-                logWrite("[진단] band 이동 스킵: design bands=" + bandMeta.length
-                    + ", svg bands=" + svgPieces.bands.length);
-            }
 
-            // --- 요소 배치 (band 이동 후 실행) ---
-            // 왜 band 뒤: band 소속 요소가 bandPositions(이동 후 좌표)를 참조하므로
-            //              band 이동이 완료된 뒤에 실행해야 정확한 좌표를 얻는다.
-            app.redraw(); // geometricBounds 갱신 (band 외 요소용)
-            placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces, svgFallback, scaleForPlace, bandPositions);
-        } else {
-            logWrite("[grading-v2] 요소 없음 - 스케일/정렬 생략");
+                // 요소 배치 (band 이동 후)
+                placeElementGroupPerPiece(pastedItems, elemMeta, svgPieces, svgFallback, scaleForPlace, bandPositions);
+            } else {
+                logWrite("[grading-v2] 요소 없음 - 스케일/정렬 생략");
+            }
         }
 
         baseDoc.selection = null;
@@ -1232,7 +1520,7 @@ function main() {
                 for (var shi = 0; shi < allItems.length; shi++) {
                     allItems[shi].translate(shiftX, shiftY);
                 }
-                logWrite("[grading-v2] 중앙 정렬: 이동 dx=" + shiftX.toFixed(1) + " dy=" + shiftY.toFixed(1));
+                if (DEBUG_LOG) logWrite("[grading-v2] 중앙 정렬: 이동 dx=" + shiftX.toFixed(1) + " dy=" + shiftY.toFixed(1));
             }
         }
 
@@ -1258,7 +1546,7 @@ function main() {
         try { designLayer.remove(); } catch (e2) {}
         try { patternLayer.remove(); } catch (e3) {}
 
-        logWrite("[grading-v2] 레이어 통합 완료");
+        if (DEBUG_LOG) logWrite("[grading-v2] 레이어 통합 완료");
 
         // ===== STEP 8: EPS 저장 =====
         var outputFile = new File(config.outputPath);
@@ -1270,11 +1558,13 @@ function main() {
         baseDoc = null;
 
         writeSuccessResult(resultPath, config.outputPath,
-            "그레이딩 완료 (v2, " + filledCount + "개 조각 + " + pastedItems.length + "개 요소)");
+            "그레이딩 완료 (v2, " + filledCount + "개 조각 + " + elemItems.length + "개 요소)");
         logWrite("[grading-v2] 완료!");
+        flushLogFile();
 
     } catch (err) {
         logWrite("[grading-v2] 오류: " + err.message);
+        flushLogFile();
 
         // 열린 문서 정리 (역순)
         try { if (designDoc) designDoc.close(SaveOptions.DONOTSAVECHANGES); } catch (eD) {}

@@ -5,3 +5,5 @@ PyMuPDF>=1.25.0
 reportlab>=4.0
 # 엑셀 주문서 파싱: 사이즈/수량 자동 추출
 openpyxl>=3.1.0
+# SVG 표준화: cubic bezier 정확 처리, transform 평탄화 (svg_normalizer.py)
+svgpathtools>=1.6.0

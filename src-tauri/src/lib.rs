@@ -398,12 +398,65 @@ fn remove_file_absolute(path: String) -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| format!("파일 삭제 실패: {}", e))
 }
 
+/// [SVG 표준화] 변환 시뮬레이션 (파일 미수정)
+/// 왜 별도 커맨드로 빼는가:
+///   - 프론트(TS)에서 `invoke("run_python", { command: "preview_normalize", args: [...] })`로 직접 쓸 수도 있지만,
+///     **명시적 네이밍**이 바이브 코더 UX에 유리하다. 어떤 인자가 필수인지 컴파일 타임에 드러난다.
+///   - 내부적으로는 기존 `run_python`을 그대로 호출하는 **얇은 래퍼**. Python subprocess 로직을 중복시키지 않는다.
+///
+/// 인자:
+///   - folder: 대상 폴더 경로 OR ';' 구분 SVG 파일 목록 (Python 측이 자동 분기)
+///   - base_file: 기준 SVG 절대 경로 (예: XL 사이즈)
+///
+/// 반환: Python이 stdout에 출력한 JSON 문자열 그대로 (프론트에서 JSON.parse)
+///       { success, previews?: [...], error? }
+#[tauri::command]
+fn svg_preview_normalize(
+    app: tauri::AppHandle,
+    folder: String,
+    base_file: String,
+) -> Result<String, String> {
+    // run_python 재사용 — command="preview_normalize", args=[folder, base_file]
+    run_python(app, "preview_normalize".to_string(), vec![folder, base_file])
+}
+
+/// [SVG 표준화] 폴더 내 SVG 일괄 변환 (파일 수정 + 자동 백업)
+/// 왜 별도 커맨드로 빼는가: `svg_preview_normalize`와 동일한 이유.
+/// 추가 이유: `--no-backup` 플래그를 bool로 받아서 Rust 측에서 args 구성 실수를 차단.
+///
+/// 인자:
+///   - folder: 대상 폴더 절대 경로
+///   - base_file: 기준 SVG 절대 경로
+///   - no_backup: true면 `.bak` 백업을 생성하지 않음 (기본 false = 백업 ON)
+///
+/// 반환: Python이 stdout에 출력한 JSON 문자열 그대로
+///       { success, folder, total_count, pass_count, fail_count, skipped_count, results: [...], version }
+#[tauri::command]
+fn svg_normalize_batch(
+    app: tauri::AppHandle,
+    folder: String,
+    base_file: String,
+    no_backup: bool,
+) -> Result<String, String> {
+    // args 구성: 기본은 [folder, base_file], no_backup=true일 때만 "--no-backup" 추가
+    let mut args: Vec<String> = vec![folder, base_file];
+    if no_backup {
+        args.push("--no-backup".to_string());
+    }
+    // run_python 재사용 — command="normalize_batch"
+    run_python(app, "normalize_batch".to_string(), args)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())  // 파일 선택 다이얼로그
         .plugin(tauri_plugin_fs::init())      // 파일 읽기/쓰기
+        // 자동 업데이트: 앱 시작 시/Settings에서 GitHub Releases 체크 후 설치
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // 업데이트 설치 후 앱 재시작 권한 제공
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             greet,
             run_python,
@@ -413,7 +466,10 @@ pub fn run() {
             get_illustrator_scripts_path,
             write_file_absolute,
             read_file_absolute,
-            remove_file_absolute
+            remove_file_absolute,
+            // SVG 표준화 Phase 1-4: Python preview_normalize/normalize_batch CLI 래퍼
+            svg_preview_normalize,
+            svg_normalize_batch
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

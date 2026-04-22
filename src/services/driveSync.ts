@@ -613,11 +613,14 @@ export function mergeDriveScanResult(
     const finalCategoryId = scanIdToFinalId.get(sp.categoryId);
 
     if (existing) {
-      // --- 기존 프리셋 갱신: svgPathBySize만 교체, 나머지(사용자 입력) 보존 ---
+      // --- 기존 프리셋 갱신: svgPathBySize 교체 + 신규 사이즈만 sizes에 추가 ---
       // 왜 이렇게 해야 하나:
-      //   - sizes: 사용자가 mm 단위 치수를 직접 입력한 값 → 덮어쓰면 치명적 데이터 유실
+      //   - svgPathBySize: Drive 파일 위치는 늘 최신 스캔 결과로 교체 (5XL 경로 포함됨)
       //   - svgData/svgBySize: local 업로드 프리셋이 가진 인라인 SVG → 보존
-      //   - 오직 "Drive 파일 위치"만 최신 스캔 결과로 교체
+      //   - sizes: 사용자가 mm 단위 치수를 직접 입력한 값 → "기존 사이즈는 덮지 않음"
+      //     다만 Drive에 **신규 사이즈 SVG가 추가**되면 sizes 배열에도 자동 추가해야
+      //     UI(주문 생성 체크박스)에 체크 가능한 상태로 나타난다.
+      //     신규 사이즈의 치수(width/height)는 0으로 초기화 — 나중에 사용자가 입력.
       const updatedPieces = existing.pieces.map((piece, idx) => {
         // Drive 출처 피스(단일 piece 가정 — Phase 1 J-8 기준)만 경로 갱신
         // 왜 idx === 0 체크: 향후 Phase에서 다중 piece 지원 시에도 첫 piece만 Drive 경로 소유
@@ -631,14 +634,44 @@ export function mergeDriveScanResult(
         return piece;
       });
 
+      // === 신규 사이즈 자동 추가 로직 ===
+      // 왜: 이전 구현은 "sizes 전체 보존" → Drive에 5XL 추가해도 UI에 안 뜸.
+      //     기존 치수 보존 목적이 "신규 차단"으로 변질되는 안티패턴이었음.
+      // 방법: 기존 사이즈 이름 Set을 만들고, 스캔된 사이즈 중 없는 것만 골라 추가.
+      const existingSizeNames = new Set(existing.sizes.map((s) => s.size));
+      // 새 사이즈의 pieceId는 "기존 프리셋의 첫 사이즈의 첫 piece의 pieceId"를 재사용해야
+      // 일관성 유지 (기존 프리셋의 piece.id와 연결). 첫 사이즈가 없는 엣지 케이스는
+      // pieces[0].id로 폴백 (Phase 1은 단일 piece 가정).
+      const fallbackPieceId =
+        existing.sizes[0]?.pieces[0]?.pieceId ?? existing.pieces[0]?.id ?? "";
+      const newSizeEntries = Object.keys(sp.svgPathBySize)
+        .filter((size) => !existingSizeNames.has(size))
+        .map((size) => ({
+          size,
+          // 신규 사이즈는 치수 0으로 초기화 — 사용자가 PatternManage에서 입력해야 함
+          pieces: [{ pieceId: fallbackPieceId, width: 0, height: 0 }],
+        }));
+
+      // 기존 + 신규 병합 후 SIZE_LIST 순서(5XS→5XL)로 정렬.
+      // 왜 정렬 필요: UI 체크박스가 sizes 배열 순서 그대로 렌더링되므로 뒤섞이면 가독성↓.
+      const mergedSizes = [...existing.sizes, ...newSizeEntries];
+      mergedSizes.sort((a, b) => {
+        // SIZE_LIST에 없는 사이즈는 99로 밀어내어 항상 뒤로 정렬
+        const aIdx = SIZE_LIST.indexOf(a.size as (typeof SIZE_LIST)[number]);
+        const bIdx = SIZE_LIST.indexOf(b.size as (typeof SIZE_LIST)[number]);
+        return (aIdx === -1 ? 99 : aIdx) - (bIdx === -1 ? 99 : bIdx);
+      });
+
       mergedPresets.push({
         ...existing,
         pieces: updatedPieces,
+        // sizes: 기존 사이즈는 치수 데이터(width/height) 보존을 위해 유지.
+        //        신규 사이즈만 추가 (width/height=0 초기화).
+        //        name, categoryId는 절대 건드리지 않음 (사용자 rename/재분류 보존).
+        sizes: mergedSizes,
         // driveFolder는 폴더 이동 시 반영해야 하므로 갱신
         driveFolder: sp.driveFolder,
         updatedAt: now,
-        // 중요: sizes, name, categoryId는 **절대 건드리지 않음**
-        // 사용자가 PatternManage에서 rename/재분류했을 수 있음
       });
       updatedStableIds.add(sp.stableId);
       updatedPresetCount++;

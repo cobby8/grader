@@ -31,3 +31,6 @@ python-engine/__pycache__/
 *.njsproj
 *.sln
 *.sw?
+
+# Tauri 업데이터 서명 키 (절대 커밋 금지 — G드라이브에 원본 보관)
+keys/

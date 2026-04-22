@@ -1,1350 +1,960 @@
 # 작업 스크래치패드
 
-## 현재 작업
-- **요청**: grading.jsx 누적 회귀 감사 + 롤백 지점 식별 + 재건 계획
-- **상태**: ✅ 감사 완료, 사용자 의사결정 대기 (Q1~Q5)
-- **현재 담당**: 사용자 의사결정 → 그 후 developer 착수
-- **산출물**: `PLAN-GRADING-RECOVERY.md` (신규, 350줄)
-- **권장안**: **옵션 Beta** (c52d80f~06b16fa 4커밋 revert → 베이스라인 실측 → 한 걸음씩 재도입)
+## 🎯 다음 세션 시작 가이드
+1. **SVG 표준화 Phase 1 재개** (양면 유니폼 버그 수정으로 일시중단됐던 작업)
+   - 사용자 확인 2건 받기:
+     - ① 분류 로직(폭 우선 비교 + 4그룹 위쪽쌍 채택) 승인 — 현재 U넥 한정 가정
+     - ② CLI 인터페이스(`preview_normalize <folder_or_files>` `;` 구분자) 확정
+2. 승인되면 Phase 1-4 → 1-5 → 1-6 → 1-7 진행
+3. Phase 1 완료 후 → **AI→SVG 자동 변환 기능** 설계 착수
 
-### 🔜 남은 Phase
-- **Phase 3 (1~2일, 진행 중)**: 즐겨찾기
-- Phase 4 (2~3일): OrderGenerate 통합 (MVP 완료)
-- Phase 5 (2~3일): PDF 파이프라인 제거 (MVP 후)
-- Phase 6 (1일): 문서 정리
+---
+
+## 현재 작업
+- **요청**: SVG 일괄 표준화 Phase 1-4~1-7 상세 설계 (앱 UI 통합)
+- **상태**: ✅ **설계 완료** (PLAN-SVG-STANDARDIZATION.md 생성, 4 Phase 분할, 총 6~10시간)
+- **현재 담당**: planner-architect → (다음) 사용자 승인 → developer Phase 1-4 착수
+
+### 📋 직전 작업 (커밋 대기)
+양면 유니폼 그레이딩 버그 4종 수정 완료 (L556 부등호, 스케일링 1.0, 외측 쏠림, 색상 반전)
+
+### 🎉 완료된 수정 (커밋 전 요약)
+| 버그 | 해결 방법 | 라인 |
+|------|---------|------|
+| 1. 표/이 스왑 | `isTop` 부등호 `<` → `>` 통일 | L556 |
+| 4. 색상 대비 반전 | 버그 1 파생 자동 해결 | - |
+| 2. 스케일링 부족 | `ELEMENT_SCALE_EXPONENT` 0.78 → 1.0 | L1172 |
+| 3. 외측 위 쏠림 | 이름 기반 모드를 폴백 함수 재사용 구조로 교체 | L1259~1407 |
+
+**검증**: 2XS 양면 그레이딩 이미지가 레퍼런스와 일치. 단면(연세대 레플리카) 회귀도 통과.
+
+### 📋 작업 중 배운 교훈 (knowledge 기록됨)
+- Illustrator `geometricBounds = [left, top, right, bottom]` (Y 클수록 위, bbox[3]=bottom)
+- group/ungroup 반복 시 PageItem 참조 파괴 → **1회만** 수행할 것
+- 이름 기반 / 폴백 모드는 **같은 배치 함수** `placeElementGroupPerPiece` 재사용 원칙
+
+---
 
 ## 진행 현황표
 | 단계 | 내용 | 상태 |
 |------|------|------|
 | 0~7 | 기본 기능(패턴/디자인/사이즈/CMYK/Illustrator/APCA) | ✅ 완료 |
-| 8 | 설치형 배포 준비 | ⏸ 보류 (커밋 eda27b9) |
-| 9 | Drive 연동 Phase 1 → 옵션 4 (자동 동기화) | ✅ 커밋 8ec96a3 외 |
-| 10 | 작업 흐름 Phase 1 (WorkSetup + 세션) | ✅ 커밋 3efa370, ad3d073 |
-| 11 | Phase 2 (패턴 선택 모드) | ✅ 커밋 3e5a069 |
-| 11-Plus | 카드 간소화 + 조각 카운팅 + DRIVE 뱃지 제거 | ✅ 커밋 bc20e24, b01c974 |
-| 12 | Phase 3 (즐겨찾기) | 🔨 착수 |
-| 13 | Phase 4 (OrderGenerate 통합) | ⏳ 대기 |
+| 8 | 설치형 배포 + 자동 업데이트 | 🔨 **Phase A+B+C 구현 완료** (D/E 대기) |
+| 9 | Drive 연동 (자동 동기화) | ✅ |
+| 10 | Phase 1 (WorkSetup + 세션) | ✅ |
+| 11 | Phase 2 (패턴 선택 모드) | ✅ |
+| 12 | Phase 3 (즐겨찾기) | ✅ |
+| 12-A | SVG 일괄 표준화 Phase 1 | 🔨 1-3 완료 / **1-4~1-7 설계 완료 (구현 대기)** |
+| 12-B | AI→SVG 자동 변환 | ⏳ 12-A 완료 후 |
+| 12-C | **양면 유니폼 그레이딩 버그 4종** | ✅ **완료 (커밋 대기)** |
+| 13 | Phase 4 (OrderGenerate 통합) | ✅ |
+
+---
 
 ## 프로젝트 핵심 정보
+- **기술 스택**: Tauri 2.x + React 19 + TypeScript + react-router-dom 7, Python 엔진(PyMuPDF/reportlab/pillow/openpyxl/svgpathtools), CSS+BEM(Tailwind 금지)
+- **빌드**: `dev.bat` (MSVC), `build.bat`
+- **주요 폴더**: `src/pages`, `src/components`, `src/services`, `src/stores`, `src/types`, `src-tauri`, `python-engine`, `illustrator-scripts`
+- **데이터**: `$APPDATA/com.grader.app/` (presets/categories/settings/favorites.json), Drive `G:\공유 드라이브\디자인\00. 2026 커스텀용 패턴 SVG` (60초 쿨다운), sessionStorage `grader.session`
 
-### 기술 스택
-- Tauri 2.x + React 19 + TypeScript + react-router-dom 7
-- Python 엔진 (PyMuPDF/reportlab/pillow/openpyxl)
-- 빌드: `dev.bat` (MSVC), 배포: `build.bat`
-- CSS: 순수 CSS + BEM (Tailwind 금지)
-
-### 주요 파일
-```
-grader/
-├── src/pages/ (WorkSetup, PatternManage, DesignUpload, SizeSelect, FileGenerate, Settings)
-├── src/components/ (Sidebar, CategoryTree)
-├── src/services/ (driveSync, svgResolver)
-├── src/stores/ (sessionStore, presetStore, categoryStore, designStore, generationStore, svgCacheStore, settingsStore)
-├── src/types/ (pattern, design, generation, order, session)
-├── src-tauri/ (Rust + capabilities)
-├── python-engine/ (PDF 분석 + 주문서 파서)
-├── illustrator-scripts/grading.jsx (ES3, ~1610줄)
-└── REPORT*.md, PLAN-GDRIVE-SYNC.md, PLAN-WORKFLOW-REDESIGN.md
-```
-
-### 데이터 저장
-- `$APPDATA/com.grader.app/` presets.json / categories.json / settings.json
-- Drive: `G:\공유 드라이브\디자인\00. 2026 커스텀용 패턴 SVG` (자동 동기화 60초 쿨다운)
-- 세션: sessionStorage key `grader.session` (workFolder, baseAiPath, selectedPresetId)
-- (Phase 3 신규) `$APPDATA/com.grader.app/favorites.json`: preset stableId 배열
+---
 
 ## 기획설계 (planner-architect)
 
-### [2026-04-15] grading.jsx 원점 재구축 (접근 B 권장) ★최신
-- **상세**: `PLAN-GRADING-REBUILD.md` (신규)
-- **발단**: 사용자 "거의 망해가는 것 같다... 초기 순서 복기해서 원점에서 재진행" + "불필요한 코드와 규칙 모두 제거"
-- **현재**: grading.jsx 2128줄 (dd51cc5 1073줄 대비 +1055줄 누적 회귀)
-- **참조 베이스 커밋**: `dd51cc5` (1073줄, "CMYK 시작점 + 몸판 우선 플로우") — 사용자 초기 7단계가 가장 깨끗하게 완성된 시점
-- **권장 접근 B**: `grading-v2.jsx` 신규 500~800줄, dd51cc5 구조 인용 + 버그 B duplicate 필수 반영
-- **제거 도입 안 함**: Phase 2(D1/D2), 교체용요소, APCA 자동색, writeLog 파일로깅, 사후 CMYK 안전망, 방어 try/catch
-- **Phase A~D 4~6h**: A(해석 확인) → B(뼈대) → C(3사이즈 실측) → D(튜닝)
-- **롤백 경로**: v1 그대로 보존, v2 실패 시 즉시 복귀
-- **사용자 의사결정 Q1~Q5**: (Q1 접근 B/A/C, Q2 배치 정밀도 a/b/c, Q3 duplicate 유지 예/아니오, Q4 Drive 별건 예/아니오, Q5 APCA 제거 예/아니오)
-- ⚠️ 코드 수정 없음 — 계획서만
+### SVG 표준화 Phase 1-4~1-7 UI 구현 [2026-04-22]
 
-### [2026-04-16] 조각 인식 기반 요소 배치 재설계 (Piece-Aware Layout)
-- **상세**: `PLAN-PIECE-AWARE-LAYOUT.md` (신규, 검토 보고서 + 옵션 5개 + Q1~Q5)
-- **현재 D1 한계**: 조각 정보는 이미 수집(Phase 2) 되는데 STEP 10에서 **미사용** — 전체 중심+clamp만 수행
-- **진단**: `importSvgPathsToDoc` L851 / `extractPatternPieces` L952에 **fill 체크 없음** → 장식선도 조각으로 오인 가능
-- **권장안 B+A 단계적**: Phase 1(filled path 필터, 1~2h) → Phase 2(조각 내부 rx/ry 상대좌표 매핑, 3~4h)
-- **핵심 변경**: 신규 `alignElementByRelativeCoord(item, rx, ry, targetPiece)` — 각 요소를 "원래 조각 내부의 정규화 좌표"로 타겟 조각에 재투영
-- **Q2 재확인 필수**: 이전 D1은 Q1=A(간격 고정) 전제. 이번 요청은 "조각 따라감" = 벌어짐 허용 전제 → 사용자 선호 변경 여부 확인
-- ⚠️ 코드 수정 없음 — 검토/계획서만
+#### 🎯 목표
+디자이너가 새 사이즈 SVG를 G드라이브에 추가할 때, 개발자가 터미널에서 `normalize_batch`를 수동 실행하는 대신 **패턴 관리 카드의 ⋮ 메뉴 → [📐 SVG 표준화] 한 번**으로 변환 완료. Phase 1-1~1-3(Python 엔진)은 이미 구현 완료, 실사용 검증(5XL 변환)도 통과. 이번 작업은 Python CLI를 앱 UI로 노출하는 것.
 
-### [2026-04-16] grading.jsx 누적 회귀 감사 + 재건 계획
-- **상세**: `PLAN-GRADING-RECOVERY.md` (신규, 커밋 감사/버그 가설/3옵션 비교/Phase별 계획)
-- **핵심 진단**: 3개 독립 버그 — (A) STEP 8B 복원 안전망이 **문서 간 ruler origin 차이**를 인식 못해 `dy=-3401.57`(=svgHeight)로 파괴, (B) S/4XL paste=0 격번 실패는 designDoc.selection getter 타이밍 또는 clipboard 재번역 의심, (C) D1 CENTER 스케일은 건전하지만 원본 bounds가 아트보드 경계 근접 시 확대로 구조적 초과
-- **회귀 시점**: c52d80f(교체용요소) → 38933f9(pasteInPlace+안전망) → 06b16fa(D1) 4개 커밋 누적. 마지막 "대체로 정상"은 7091831(디버그 로그 추가)
-- **권장안 Beta**: `git revert c52d80f..06b16fa` 4커밋 롤백 → 베이스라인 실측 → 교체용요소/D1을 **한 번씩** 재도입(총 2.5시간)
-- **거부된 옵션**: Alpha(06b16fa만 롤백, 원래 문제 복귀) / Gamma(3개 동시 hotfix, 인과 격리 불가)
-- **사용자 의사결정 5개** (Q1~Q5) — PM이 대화로 수렴 → 확정 후 developer 착수
-- ⚠️ 코드 수정 없음 — 감사/계획서만
+#### 🗺️ 아키텍처 개요
+```
+PatternManage 카드 ⋮ 메뉴 → [📐 SVG 표준화]
+         │
+         ▼
+SvgStandardizeModal (4상태 Phase 머신)
+    idle → previewing → preview-done → executing → done/error
+         │
+         ▼
+svgStandardizeService.ts (invoke 래퍼)
+         │
+         ▼
+Rust 커맨드 svg_preview_normalize / svg_normalize_batch
+         │
+         ▼ (run_python 재사용)
+python-engine/main.py → svg_normalizer.py (무변경)
+         │
+         ▼ (done 시)
+runAutoSync() 강제 트리거 → 새 사이즈가 UI에 자동 반영
+```
 
-### [2026-04-16] 패턴/요소 배치 로직 전면 재검토
-- **상세**: `PLAN-GRADING-REDESIGN.md` (신규, 옵션 5개 비교 + 권장안 D1)
-- **핵심 원인**: STEP 10 `newCenter = basePiece.center + relOffset * scale` 공식이 사이즈 커질 때 조각 간격 벌어짐을 요소에 1:1 전가 → XL 대비 4XL 요소 세로 +17% (scale은 +8%)
-- **기준 baseArea**: XL=7,468,498 pt², 4XL ratio 1.163, scale 1.08, bounds 3992×4331 (아트보드 +930 초과)
-- **권장 D1 (몸판 전체 중심 고정, 스케일만)**: STEP 10 정상 경로 제거 + 폴백 `alignToBodyCenter` 단일화 → 2시간 내 구현, 아트보드 초과 원천 차단
-- **차선 D3 (몸판 bbox 비율 배치)**: 요소 3개+ 분산 디자인이면 전환
-- **사용자 의사결정 5개** (Q1~Q5) — PM이 대화로 수렴 → 확정 후 developer 착수
-- ⚠️ 코드 수정 없음 — 조사/계획서만
+#### 📦 Phase별 구현 단계
+| Phase | 내용 | 예상 시간 | 커밋 단위 |
+|-------|------|--------|---------|
+| **1-4** | Rust 커맨드 2개 + lib.rs handler 등록 + cargo check | 1~1.5h | 커밋 A (Rust 단위) |
+| **1-5a** | svgStandardizeService.ts 신규 (타입 + invoke + 파싱) | 0.5~1h | 커밋 B 일부 |
+| **1-5b** | SvgStandardizeModal.tsx (Phase 머신 + UI + CSS) | 2~3h | 커밋 B 일부 |
+| **1-5c** | PatternManage 통합 (⋮ 메뉴 + 모달 렌더 + 재스캔 훅) | 1~1.5h | 커밋 B 일부 |
+| **1-6** | 통합 테스트 (U넥 회귀/단면 미영향/에러 3종) | 1~2h | 비커밋 |
+| **1-7** | knowledge 3종 + scratchpad + 커밋 C | 0.5~1h | 커밋 C (문서) |
 
-### 이전 기획설계 (유지)
-- `PLAN-WORKFLOW-REDESIGN.md` Phase 1~6 (Phase 3 진행 중)
+**총 소요**: 6~10시간 (하루 반나절 ~ 하루)
+
+#### 📍 만들 위치와 구조
+| 파일 경로 | 역할 | 신규/수정 |
+|----------|------|---------|
+| `PLAN-SVG-STANDARDIZATION.md` | 11섹션 상세 계획서 (~650줄) | 신규 ✅ |
+| `src/services/svgStandardizeService.ts` | Tauri invoke 래퍼 + 타입 정의 | 신규 |
+| `src/components/SvgStandardizeModal.tsx` | 6상태 Phase 머신 모달 | 신규 |
+| `src/App.css` | `.svg-standardize-modal__*` + `.preset-card__menu-*` | 수정 (append) |
+| `src-tauri/src/lib.rs` | `svg_preview_normalize`/`svg_normalize_batch` + handler | 수정 |
+| `src/pages/PatternManage.tsx` | ⋮ 메뉴 + 모달 state + onComplete 훅 | 수정 |
+
+#### 🔗 기존 코드 연결
+- **Python `svg_normalizer.py`(950줄)는 무변경** — Phase 1-1~1-3 완성품 그대로
+- Rust 신규 커맨드는 기존 `run_python` 로직을 **재사용** (sidecar 전환 금지)
+- 서비스 레이어 스타일은 `updaterService.ts` 패턴 준수 (함수 export + JSDoc)
+- 모달 컴포넌트는 `UpdateModal.tsx` 구조 참고 (백드롭/카드/헤더/푸터 + ESC 차단)
+- 실행 완료 시 `PatternManage.runAutoSync`에 `lastAutoScanRef.current = 0` 강제 후 호출 → 60초 쿨다운 우회 → 새 사이즈가 즉시 UI에 반영됨
+
+#### 📋 실행 계획 (병렬 활용)
+| 순서 | 작업 | 담당 | 선행 조건 |
+|------|------|------|---------|
+| 1 | Phase 1-4: Rust 커맨드 + cargo check | developer | 없음 |
+| 2 | tester (cargo check 통과) | tester | 1 |
+| 3 | 커밋 A | pm | 2 통과 |
+| 4 | Phase 1-5a+b+c: 서비스 → Modal → PatternManage | developer | 3 |
+| 5 | **tester + reviewer 병렬** (모달 UX 수동 테스트 + 코드 리뷰) | tester + reviewer | 4 |
+| 6 | Phase 1-6: 실 G드라이브 로컬 복사본 회귀 테스트 | 사용자 + tester | 5 통과 |
+| 7 | 커밋 B (프론트 일괄) | pm | 6 통과 |
+| 8 | Phase 1-7: knowledge + scratchpad + 커밋 C | pm | 7 |
+
+#### 🧭 주요 결정 사항 (decisions.md 기록 4건)
+1. **버튼 배치**: 카드 ⋮ 더보기 메뉴 (즐겨찾기 별 옆) — 상시 아이콘/별도 페이지/툴바 모두 거부
+2. **Rust 커맨드**: 기존 `run_python` 직접 사용 대신 타입 명시 래퍼 2개 신규 — 컴파일 타임 안전성
+3. **Python 실행**: 현재 venv 유지 (sidecar 거부) — 배포 복잡도 2배 상승 방지
+4. **표준화 범위**: Phase 1은 **U넥 양면유니폼 스탠다드 전용** 유지 (NORMALIZER_VERSION = "1.0-uneck-double-sided"). V넥/하의는 Phase 3에서 JSON 프리셋 외부화
+
+#### ⚠️ 리스크 & 대응 (PLAN 10번 요약)
+| 리스크 | 대응 |
+|--------|------|
+| G드라이브 경로 한글/공백 인코딩 | `run_python` UTF-8 강제, 실 경로로 1회 테스트 |
+| Python stdout 여러 줄 | `print_json` 한 줄 규약, 방어적 lastLine 추출 |
+| `driveFolder`가 상대 경로 | `drivePatternRoot + driveFolder`로 절대 경로 합성 |
+| 단면 유니폼 실수 실행 | Python이 "패턴 path 2개 추출 실패"로 FAIL, 파일 무수정 |
+| runAutoSync 60초 쿨다운 | `onComplete`에서 ref=0 강제 리셋 후 호출 |
+| 바이브 코더 "백업 생략" 후회 | 기본값 OFF 유지 + 체크박스 옆 "권장: 켜짐 유지" |
+
+#### ⚠️ developer 주의사항
+- **python-engine/svg_normalizer.py 절대 건드리지 말 것** (무변경 보존 대상, 950줄)
+- **driveSync.ts 절대 건드리지 말 것** (최근 sizes 병합 버그 수정 완료, 회귀 위험)
+- CSS는 **BEM + `var(--color-*)` 변수만** — Tailwind 금지, 하드코딩 색상 금지
+- 모달 `executing` 상태에선 ESC/백드롭 클릭 차단 (UpdateModal 패턴 그대로)
+- 카드 ⋮ 메뉴는 **Drive 프리셋만 활성화** (`!preset.driveFolder` 시 disabled + title 툴팁)
+- 기준 사이즈 자동 추천 우선순위: **XL → 2XL → 가장 큰 사이즈**
+- Python JSON은 `{ success, data|error }` 관례 — discriminated union 쓰지 말고 그대로 파싱
+
+#### 📚 기록할 문서
+- ✅ `PLAN-SVG-STANDARDIZATION.md`: 11개 섹션 상세 계획서 (~650줄)
+- ✅ `knowledge/architecture.md`: SVG 표준화 UI 통합 아키텍처 1항목 추가 (Phase 1-7에서 완료 시 갱신)
+- ✅ `knowledge/decisions.md`: 결정 4건 추가
+- ✅ `knowledge/index.md`: 항목수/날짜 갱신
+
+---
+
+### 자동 업데이트 시스템 도입 [2026-04-22]
+
+#### 🎯 목표
+앱이 켜질 때마다 GitHub Releases를 확인해 새 버전이 있으면 사용자에게 물어보고 설치까지 자동 진행. Windows 전용, 사용자 선택형, 별도 설정 메뉴 제공.
+
+#### 🗺️ 아키텍처 개요
+```
+직원 PC grader ─check()─> GitHub Releases latest.json
+                              │
+                              ▼
+                    새 버전? → UpdateModal 팝업
+                              │
+             [업데이트] ──────┴────── [나중에]
+               │                         │
+     downloadAndInstall()             dismiss()
+               │                         │
+     서명 검증 → 설치 → relaunch    Settings에서 재호출 가능
+```
+
+#### 📦 Phase별 구현 단계
+| Phase | 내용 | 예상 시간 | 커밋 단위 |
+|-------|------|--------|---------|
+| **A. 기반 설정** | 서명키 생성 → Cargo/npm 의존성 → tauri.conf → lib.rs → capabilities → prebuild 스크립트 | 2~3시간 | 1커밋 |
+| **B. CI 워크플로우** | GitHub Secrets → release.yml → bump-version.mjs | 2~3시간 | 1커밋 |
+| **C. 업데이트 UI** | updaterService → useAutoUpdateCheck → UpdateModal → UpdateSection(Settings) | 3~4시간 | 1커밋 |
+| **D. 배포 자동화** | RELEASE-GUIDE.md → CHANGELOG.md | 1~2시간 | 1커밋 |
+| **E. 테스트+롤아웃** | 로컬 E2E → pilot 1명 → 전체 직원 | 3~5시간(+1주 관찰) | (비커밋) |
+
+**총 소요**: 15~18시간 (3~4일 분산 권장)
+
+#### 📍 만들 위치와 구조
+| 파일 경로 | 역할 | 신규/수정 |
+|----------|------|---------|
+| `.github/workflows/release.yml` | 태그 푸시 시 자동 빌드/서명/업로드 | 신규 |
+| `scripts/bump-version.mjs` | 3파일(package/cargo/tauri) 버전 동기화 | 신규 |
+| `scripts/sync-bundle-resources.mjs` | python-engine/*.py 자동 스캔 → conf 갱신 | 신규 |
+| `src/services/updaterService.ts` | check/downloadAndInstall 래퍼 | 신규 |
+| `src/hooks/useAutoUpdateCheck.ts` | App mount 시 1회 체크 훅 | 신규 |
+| `src/components/UpdateModal.tsx` | 업데이트 팝업 (진행률 표시) | 신규 |
+| `src/components/UpdateSection.tsx` | Settings 내 "버전 정보" 섹션 | 신규 |
+| `keys/README.md` | 키 보관 위치 메모 (실제 키는 G드라이브) | 신규 |
+| `RELEASE-GUIDE.md` | 릴리스 절차서 | 신규 |
+| `CHANGELOG.md` | 버전별 변경사항 | 신규 |
+| `PLAN-AUTO-UPDATE.md` | 전체 계획서 | 신규 ✅ |
+| `src-tauri/Cargo.toml` | tauri-plugin-updater/process 추가 | 수정 |
+| `src-tauri/tauri.conf.json` | createUpdaterArtifacts + plugins.updater + resources 2개 보충 | 수정 |
+| `src-tauri/capabilities/default.json` | updater:default, process:allow-restart 권한 | 수정 |
+| `src-tauri/src/lib.rs` | 두 플러그인 등록 | 수정 |
+| `src/App.tsx` | useAutoUpdateCheck + UpdateModal 렌더 | 수정 |
+| `src/pages/Settings.tsx` | UpdateSection 추가 | 수정 |
+| `package.json` | plugin-updater/process 의존성, prebuild/release 스크립트 | 수정 |
+| `.gitignore` | `keys/` 추가 | 수정 |
+
+#### 🔗 기존 코드 연결
+- **App.tsx mount = 앱 켜질 때** (로그인 흐름 없음) → `useAutoUpdateCheck()` 훅 1줄 추가
+- **Settings 페이지**에 섹션 추가 → 별도 라우트 불필요, 사이드바 복잡화 방지
+- **services/ 컨벤션 유지** → `updaterService.ts`는 기존 `patternService`, `designService`와 같은 계층
+- **누락된 번들 리소스** (`order_parser.py`, `svg_normalizer.py`) → 자동 스캔 스크립트로 즉시 해결
+
+#### 📋 실행 계획 (병렬 활용)
+| 순서 | 작업 | 담당 | 선행 조건 |
+|------|------|------|---------|
+| 1 | Phase A: 기반 설정 (의존성+conf+lib+caps+prebuild) | developer | 사용자 G드라이브 `grader-keys/` 확인 |
+| 2 | **tester + reviewer 병렬** (cargo check + 앱 기동) | tester + reviewer | 1 |
+| 3 | Phase A 커밋 | pm | 2 통과 |
+| 4 | Phase B: GitHub Secrets 등록 (사용자) + release.yml + bump-version | 사용자 + developer | 3 |
+| 5 | Phase B 커밋 | pm | 4 |
+| 6 | Phase C: updaterService → hook → Modal → Settings | developer | 3 (A 플러그인 등록 완료) |
+| 7 | **tester + reviewer 병렬** (UX 수동 테스트) | tester + reviewer | 6 |
+| 8 | Phase C 커밋 | pm | 7 통과 |
+| 9 | Phase D: 가이드 + CHANGELOG | developer/pm | 5, 8 |
+| 10 | Phase E: 로컬 E2E → pilot → 전체 | tester → pm | 9 |
+
+#### 🧭 주요 결정 사항 (decisions.md 기록됨 6건)
+1. **플랫폼**: Tauri 공식 Updater + GitHub Releases + Actions (자체 구현/사내 서버 거부)
+2. **키 보관**: G드라이브 공유 폴더 (Git 커밋 절대 금지)
+3. **버전 관리**: SemVer + `v{x.y.z}` 태그, 3파일 동기화 스크립트
+4. **리소스 번들링**: prebuild 자동 스캔 스크립트 (수동 나열/글롭 거부)
+5. **UI 배치**: App.tsx 자동 팝업 + Settings 섹션 이중 진입점 (별도 라우트 거부)
+6. **릴리스 공개**: Draft 후 수동 Publish (실수 배포 방지)
+
+#### ⚠️ 리스크 & 대응
+| 리스크 | 대응 |
+|--------|------|
+| Windows SmartScreen 경고 (코드 사인 없음) | 설치 가이드 동봉 ("추가 정보→실행"), 업데이트 자체는 서명 검증 안전 |
+| 회사망 GitHub 차단 | pilot에서 확인, 차단 시 G드라이브 미러 검토 (Phase F) |
+| G드라이브 경로 하드코딩 | 별개 이슈 — 이번 범위에서 제외 |
+| Python 미설치 PC | 업데이트는 바이너리만 교체, venv 유지됨. requirements 변경 시 setup-python.bat 재실행 안내 |
+| Tauri 2.x API 변경 | 공식 문서 확인 완료 (2026-04-22) |
+| 업데이트 중 크래시 | atomic replace → 실패 시 원본 유지, 재체크 팝업 |
+
+#### ⚠️ developer 주의사항
+- **private 키 절대 커밋 금지** — `.gitignore` 먼저 추가 후 키 생성
+- `tauri.conf.json` pubkey는 **Base64 한 줄** (개행 포함 시 빌드 실패)
+- `createUpdaterArtifacts: true` 누락하면 `.zip`/`.sig` 미생성 (가장 흔한 실수)
+- capabilities에 `updater:default` + `process:allow-restart` **둘 다** 필요
+- GitHub Actions YAML 들여쓰기는 **스페이스 2칸 고정**
+- Cargo/npm 버전 `^2` 최신 동기화
+- 테스트 태그(0.1.9-test 등)는 pre-release 표시로 직원 노출 차단
+
+#### 📚 기록할 문서
+- ✅ `knowledge/architecture.md`: 자동 업데이트 아키텍처 1항목 추가됨
+- ✅ `knowledge/decisions.md`: 결정 6건 추가됨 (D1~D6)
+- ✅ `knowledge/index.md`: 항목수/날짜 갱신, 최근 지식 7건 추가
+- ✅ `PLAN-AUTO-UPDATE.md`: 11개 섹션 구성의 상세 계획서
+- ⏳ `RELEASE-GUIDE.md`: Phase D-1에서 developer 작성
+- ⏳ `CHANGELOG.md`: Phase D-2에서 pm 작성
+
+---
 
 ## 구현 기록 (developer)
 
-### [2026-04-16] grading-v2.jsx 원점 재구축
+### developer [2026-04-22] Phase D 배포 가이드 문서 3종 작성
 
-📝 구현한 기능: 사용자 초기 7단계 흐름 그대로 재작성. v1(`grading.jsx`) 그대로 보존, v2는 별도 신규 파일.
+📝 구현한 기능: 자동 업데이트 시스템 Phase D — 내일부터 직원이 grader 앱을 쓰기 위한 배포 준비 문서 3종 신규 작성 (코드 변경 없음, 문서 only)
 
-#### 참조
-- dd51cc5 커밋의 `grading.jsx` (1073줄, "CMYK 시작점 + 몸판 우선 플로우" — 7단계 정점 시점)
-- 구조/헬퍼 함수는 dd51cc5에서 인용, 불필요 코드 전면 제거
+**신규 파일**:
+| 파일 경로 | 줄수 | 역할 |
+|----------|------|------|
+| `RELEASE-GUIDE.md` | 392 | 개발자용 릴리스 절차서 (10-step 체크리스트 + 롤백 + FAQ 7건) |
+| `CHANGELOG.md` | 119 | 버전별 변경사항, Keep a Changelog 형식, v1.0.0 첫 릴리스 전체 내용 + Unreleased 템플릿 |
+| `INSTALL-GUIDE-STAFF.md` | 257 | 직원(비개발자)용 설치 안내, SmartScreen 경고 통과 + 초기 설정 + 자동 업데이트 사용법 + FAQ 7건 |
 
-#### 신규 파일
-| 파일 경로 | 변경 내용 | 신규/수정 |
-|----------|----------|----------|
-| illustrator-scripts/grading-v2.jsx | 사용자 초기 7단계 흐름 원점 재구축 (607줄) | 신규 |
+**RELEASE-GUIDE.md 핵심 내용**:
+- 사전 준비: GitHub Secrets(2개) 등록 확인, G드라이브 키 백업 위치
+- 릴리스 10-step: CHANGELOG 정리 → `npm run release:bump` → 3파일 확인 → 커밋 → 태그 푸시 → Actions 대기 → Draft 편집 → Publish → 팝업 확인
+- 롤백 절차: 태그 삭제 / Unpublish / hotfix 배포 3가지 시나리오
+- pre-release(베타/RC) 사용법: `v1.2.0-beta` 태그 → 자동 pre-release 처리 → latest.json 미포함 → 일반 직원 업데이트 전파 안 됨
+- FAQ 5건 (태그 잘못 푸시 / CHANGELOG 누락 / 빌드 지연 / 팝업 미표시 / Python 모듈 추가 시)
 
-#### 7단계 구현 매핑
-- **STEP 0**: `readConfig()` — 스크립트 같은 폴더의 config.json 읽기. 필수 필드(designAiPath, patternSvgPath, outputPath, resultJsonPath) 체크.
-- **STEP 1**: 원본 AI 열기 + CMYK/레이어 확인 + 몸판 색 추출
-  - `app.open(designFile)` → designDoc
-  - CMYK 모드 아니면 **경고만** (중단 안 함, dd51cc5 방식)
-  - "몸판"/"패턴선"/"요소" 레이어 존재 확인 (없으면 경고)
-  - `extractBodyColor()` — "몸판" 레이어 첫 filled path의 fillColor 추출 + CMYK 정규화
-- **STEP 2**: `calcLayerArea(patternLineLayer)` — 기준 면적 (50pt 이상 closed path 합)
-- **STEP 3**: 패턴 SVG 열기 → 아트보드 크기 측정 → `createCmykDoc(w, h)` 새 CMYK 베이스 문서
-  - DocumentPreset 사용 (colorMode=CMYK, units=Points)
-  - 레이어 3개 생성: 배경fill / 디자인요소 / 패턴선
-- **STEP 4-5**: `importPatternPaths()` — duplicate 기반 패턴선 복사 + 몸판 색상 적용
-  - 50pt 이상 path: fillLayer에 duplicate + patternLayer에 stroke 별도 duplicate
-  - **"베인 색상 안 채우기"**: 원본 filled면 원본 색 유지 (CMYK 정규화만), 아니면 mainColor 적용
-  - 50pt 미만: patternLayer에만 duplicate
-- **STEP 6**: 요소 duplicate
-  - 사전 수집한 `elemItems` 배열 → `designLayer.duplicate(..., PLACEATEND)` 루프
-  - **app.copy/paste 사용 안 함** (Q3=예, 버그 B 재발 방지)
-- **STEP 7**: 스케일 + 몸판 중심 1회 정렬 (Q2=b)
-  - `linearScale = sqrt(targetArea / baseArea)` → `pastedGroup.resize(pct, pct, true, true, true, true, pct, Transformation.CENTER)`
-  - `alignToBodyCenter()` — fillLayer pageItems 전체 bbox 중심 → pastedGroup 중심 1회 translate
-- **z-order 통합**: finalLayer 생성 후 디자인(위) → 배경fill → 패턴선(아래) 순으로 move
-- **STEP 8**: EPS 저장 (`createEpsOptions()`, Illustrator16 + COLORTIFF preview + CMYK PostScript Level 2)
-- **STEP 9**: `writeSuccessResult()` / `writeErrorResult()` — result.json 기록
+**CHANGELOG.md v1.0.0 주요 기록**:
+- Added: 양면 유니폼 그레이딩, **SVG 표준화(U넥 스탠다드 전용, 슬림/V넥 추후)**, 자동 업데이트 시스템, Drive 신규 사이즈 감지, ⋮ 더보기 메뉴
+- Fixed: 양면 유니폼 버그 4종, Drive 신규 사이즈 미반영 버그
+- Changed: ELEMENT_SCALE_EXPONENT 0.78→1.0
+- Internal: CI 파이프라인, Tauri 플러그인 추가, svg_normalizer.py 신규, order_parser.py/svg_normalizer.py 번들 등록
 
-#### 제거된 것 (v1 대비)
-- 교체용요소 레이어 ❌
-- rx/ry 정규화 (Phase 2 D2 모드) ❌
-- USE_D1_MODE / USE_D2_MODE 플래그 ❌
-- alignElementToPiece / calculateUnionBoundsOfItems ❌
-- APCA 패턴선 자동 색상 전환 ❌
-- writeLog 파일 로깅 ❌ (`$.writeln`만 사용)
-- 사후 RGB→CMYK 대량 안전망 ❌ (path 단위로 이미 CMYK 적용 완료)
-- userInteractionLevel 조작 ❌
-- PDF 폴백 경로 ❌ (EPS만, Q4 건드리지 않음)
-- 중복 try/catch 방어 ❌ (메인 try 1개만)
+**INSTALL-GUIDE-STAFF.md 핵심 내용**:
+- 전제조건: Windows 10+, Google Drive for Desktop(G: 드라이브), Python 3.x(권장)
+- 설치 절차 4단계: Releases 다운로드 → SmartScreen "추가 정보 → 실행" → 설치 마법사 → 시작 메뉴 실행
+- 초기 설정: Drive 패턴 루트 폴더(기본 `G:\공유 드라이브\디자인\00. 2026 커스텀용 패턴 SVG`) + 패턴 관리 자동 스캔
+- 자동 업데이트 사용법: 팝업 안내 + Settings 수동 버튼
+- **v1.0.0 제한 명시**: SVG 표준화 U넥 스탠다드만, 슬림/V넥 폴더에서 실행 시 실패(파일 무수정, 안전)
+- FAQ 7건 (Python 에러 / G드라이브 / 느림 / 중간 종료 / SmartScreen 안전성 / 최신 버전 확인 / 회사망 차단)
 
-#### 유지된 핵심 로직
-- ✅ duplicate 기반 복제 (버그 B 재발 방지)
-- ✅ `linearScale = sqrt(targetArea/baseArea)` 공식
-- ✅ 새 CMYK 문서 생성 (createCmykDoc)
-- ✅ 레이어 z-order 통합
-- ✅ result.json 기록 (Tauri 연동 계약)
+**작성 원칙**:
+- 한국어 중심, 쉬운 비유 ("자동 업데이트 = 스마트폰 앱 스토어", "새 버전 릴리스 = 음식점 새 메뉴 출시")
+- 전문 용어는 괄호로 의미 설명 (예: "SemVer(유의적 버전)")
+- 스크린샷은 플레이스홀더로 `<!-- SCREENSHOT: ... -->` 표시, PM이 나중에 첨부
+- 단계별 번호 매기기, ⚠️ 경고 강조
 
-#### 검증
-- 라인 수: **607줄** (목표 500~800 범위 내, v1 2128줄 대비 **-1521줄, -71%**)
-- 중괄호 균형: raw open=93 / close=93 (PASS)
-- ES3 호환: let/const/arrow/template/class/async/spread 사용 없음 (PASS)
-- v1(`grading.jsx` 2128줄) 변경 없음 (보존 확인)
+**코드 변경 0줄, 커밋은 PM 담당** (developer는 커밋하지 않음)
 
 💡 tester 참고:
-- **테스트 방법**:
-  1. PM이 `illustrator-scripts/grading.jsx` → `grading-v1-backup.jsx`로 rename
-  2. `grading-v2.jsx` → `grading.jsx`로 rename (Rust는 `grading.jsx` 하드코딩)
-  3. OrderGenerate에서 기준 AI 선택 후 여러 사이즈 실행 (2XS, L, 4XL 권장)
-- **로그 식별자**: `[grading-v2]` 프리픽스 — STEP 1~9까지 단계별 `$.writeln` 출력
-- **정상 동작**:
-  - `[grading-v2] STEP 1: 디자인 열림` → 몸판/패턴선/요소 레이어 감지 로그
-  - `[grading-v2] 몸판 색 CMYK: C.. M.. Y.. K..`
-  - `[grading-v2] STEP 2: 기준 면적=NNNNpt²`
-  - `[grading-v2] STEP 4-5: N개 조각 임포트, 타겟 면적=NNNNpt²`
-  - `[grading-v2] STEP 6: N개 요소 복제` (0 아니면 정상)
-  - `[grading-v2] STEP 7: 면적비=... 선형스케일=... (NN.N%)`
-  - `[grading-v2] 몸판 중심 정렬: 이동 dx=... dy=...`
-  - `[grading-v2] STEP 8: EPS 저장 완료`
-  - `[grading-v2] 완료!`
-- **주의할 입력**:
-  - 디자인 AI가 RGB 모드 → 경고만, 계속 진행 (dd51cc5 방식)
-  - "요소" 레이어 없음 → 요소 0개 복제, 스케일/정렬 생략하고 패턴만 저장
-  - 패턴 SVG 50pt 이상 조각 없음 → 경고 로그 후 빈 몸판으로 저장 (Drive 문제일 가능성)
+- 이 작업은 **문서만** 변경 → 런타임 테스트 대상 아님
+- 검증: 세 파일이 각각 `C:\0. Programing\grader\` 루트에 존재하는지만 확인
+- 링크 검증: RELEASE-GUIDE.md의 상대 링크(`./CHANGELOG.md`, `./INSTALL-GUIDE-STAFF.md`) 3건, CHANGELOG.md 상대 링크 1건, INSTALL-GUIDE-STAFF.md 상대 링크 2건이 실제 파일을 가리키는지 확인
 
 ⚠️ reviewer 참고:
-- **Q2=b 검증 포인트**: STEP 7에서 요소 그룹 전체를 몸판 bbox 중심으로 1회만 translate. 조각별 독립 배치 로직 없음 → 사이즈 커져도 조각 간격 벌어짐이 요소 위치에 전가되지 않음
-- **Q3 duplicate 검증 포인트**: `app.executeMenuCommand("copy"/"paste")` 호출 전무. `path.duplicate(container, PLACEATEND)` 방식만 사용
-- **"베인 색상 안 채우기" 로직**: `importPatternPaths()`에서 `path.filled && fillColor.typename !== "NoColor"` 체크 → 원본 fill 유지, 아니면 mainColor 적용. I2 해석 적용
-- **PM 전환 작업**: v2 코드는 별도 파일로 남김. 실측 전 PM이 파일 rename으로 활성화. 실패 시 역순 rename으로 즉시 롤백 가능
-- **v1 파일은 건드리지 않음**: 현재 `grading.jsx` 2128줄 그대로 디스크에 존재
+- CHANGELOG.md의 v1.0.0 기록이 실제 커밋 이력(e79959d, d60c1d3, b448e2d)과 일치하는지 교차 확인 권장
+- RELEASE-GUIDE.md의 "10-step 체크리스트" 누락 없는지 + 실제 `release.yml` 트리거 조건(`v[0-9]+.[0-9]+.[0-9]+`)과 문서상 태그 규약 일치 확인
+- INSTALL-GUIDE-STAFF.md는 **비개발자 대상**이므로 기술 용어 과다 여부 리뷰 요망
 
-#### 다음
-- PM 커밋 (v2 신규만, v1 rename은 실측 후)
-- 사용자 실측 (2XS / L / 4XL 최소 3사이즈)
-- tester 로그 검증
-- 통과 시 PM이 v1→v1-backup / v2→v1 rename + 재커밋
+**다음 단계**: Phase E (v1.0.0 태그 푸시 → GitHub Actions 빌드 → Draft 확인 → Publish → 직원 앱 업데이트 팝업 검증)
 
-### [2026-04-16] 조각 인식 Phase 1+2 구현 (B-A-A-A-A)
+---
 
-📝 구현한 기능: 조각 인식 기반 요소 배치 (Phase 1 filled 체크 + Phase 2 rx/ry 정규화 D2 모드)
+### developer [2026-04-22] Phase 1-4 Rust 커맨드 추가 (SVG 표준화)
+
+📝 구현한 기능: Python 엔진의 `preview_normalize` / `normalize_batch` CLI를 Tauri에서 직접 호출할 수 있도록 전용 Rust 커맨드 2개 신규 추가 (프론트 통합 준비용)
 
 | 파일 경로 | 변경 내용 | 신규/수정 |
 |----------|----------|----------|
-| illustrator-scripts/grading.jsx | Phase 1 filled 체크 (importSvgPathsToDoc + extractPatternPieces) + Phase 2 STEP 4 rx/ry 사전 수집 + STEP 10 D2 모드 분기 + 레거시 alignElementToPiece 블록 제거 | 수정 |
+| `src-tauri/src/lib.rs` | `svg_preview_normalize`/`svg_normalize_batch` 커맨드 2개 + invoke_handler 등록 2줄 (+55/-1) | 수정 |
 
-#### Phase 1 (path.filled 체크)
-- **importSvgPathsToDoc L851~869**: `path.filled + fillColor + typename !== "NoColor"` 3중 체크. 실패 시 장식선으로 간주 → 패턴선 레이어로만 복제 후 continue. `[SKIP] path[layer=N,idx=M] filled=X fillColor=Y` 로그.
-- **extractPatternPieces L962~977**: 동일 조건. 실패 시 `[SKIP] designPath idx=N ...` 로그 후 continue.
-- **효과**: basePieces/designPieces에 실제 색 채운 몸판 조각만 포함. 큰 장식선/보조선 제외.
-
-#### Phase 2 (rx/ry 정규화 D2 모드)
-- **STEP 4 L1370~1436**: `elementOriginalCenters[i]`에 `{cx, cy, rx, ry}` 저장 (기존 `{cx, cy}` 확장).
-  - designPieces 중 요소와 매칭된 조각의 bbox 기반으로 `rx = (cx - left) / width`, `ry = (cy - bottom) / height` 계산
-  - clamp(0~1) 적용 (경계선 위 요소 안전망)
-  - Q4=A: findBestMatchingPiece가 -1 반환 시 가장 가까운 조각 중심까지 거리로 fallback 매핑
-  - 로그: `[Phase2-D2] 요소 N → piece M rx= ry= origCenter=(,)`
-- **STEP 10 L1746~1825**: `USE_D2_MODE = true, USE_D1_MODE = false` 초기값.
-  - Q3=A: `basePieces.length !== designPieces.length` 또는 `basePieces.length === 0` 시 D2 off + D1 on (`[WARN] 조각 수 불일치 → D1 fallback`)
-  - D2 경로: 각 요소 → `basePieces[pieceIdx].bbox`의 rx/ry 지점으로 translate (scale 없음, 위치만)
-  - D2 실패 시: 기존 D1 clamp + 아트보드 중심 정렬 경로 실행
-  - 최종 bounds 로그: `STEP 10 D2 최종 요소 bounds=[...] size= placed= skipped=`
-- **레거시 제거**: 구 `alignElementToPiece` else 블록(구 L1929~1961)은 문법 균형상 불필요 → 주석으로 대체.
-
-#### 건드리지 않은 것 (요청대로 보존)
-- STEP 4 duplicate 기반 elemItems 수집 (버그 B 픽스)
-- STEP 8 duplicate 기반 paste 로직
-- STEP 10 D1 clamp 로직 (버그 C 픽스) — D2 실패 시 fallback으로 작동
-- STEP 9 linearScale, mainColor 추출, CMYK 변환 등 모든 기존 로직
-- alignElementToPiece / alignToBodyCenter 함수 정의 (호출부만 제거됨)
-
-#### 검증
-- ES3 호환 PASS (var, for, push, continue, try/catch, Math.abs/sqrt — 모두 ES3)
-- 중괄호 균형 PASS (node 스크립트로 검증 완료, final depth=0)
-- `npx tsc --noEmit`은 jsx 대상 아님 (무관)
-
-💡 tester 참고:
-- **Phase 1 검증**: `grading-log.txt`에서 `[SKIP] path ... filled=false` 또는 `fillColor=NoColor` 항목 확인 → 장식선 제외 증거. basePieces/designPieces 개수가 이전보다 줄었는지 확인.
-- **Phase 2 검증 (3사이즈 2XS/L/4XL)**:
-  - 로그에 `[Phase2-D2] 요소 N → piece M rx= ry=` 확인
-  - `STEP 10 D2 시작` / `STEP 10 D2 최종 요소 bounds=` 확인
-  - 조각 수 불일치 시 `[WARN] 조각 수 불일치 → D1 fallback` 자동 작동
-  - 앞판 요소는 앞판 조각 안, 뒷판 요소는 뒷판 조각 안에 위치
-  - 3XL/4XL에서 조각이 벌어지면 요소도 따라감 (Q2=A 반영)
-- **폴백 테스트**: `USE_D2_MODE = false`로 바꾸면 기존 D1 경로 그대로 작동 (즉시 롤백 가능)
-
-⚠️ reviewer 참고:
-- D2 모드에서 scale이 없음 (위치만). 크기 조정은 STEP 9의 linearScale에서 이미 적용됨.
-- rx/ry = -1이면 스킵 (요소 paste 위치 유지). 이 경우 `[D2 SKIP]` 로그로 가시화.
-- duplicate 기반 버그 B 픽스와 충돌 없음 (STEP 4/8는 건드리지 않음).
-- target/debug/illustrator-scripts/grading.jsx 동기화는 PM이 수동 처리 필요.
-
-### [2026-04-16] 버그 B 수정: duplicate 기반 전환
-
-#### 원인
-- svgDoc.close가 AICB clipboard 간헐적 무효화
-- Illustrator 단일 인스턴스가 이전 실행 상태 공유
-- 2XS/4XL에서 paste=0 재현 → 요소 0개 배치
-
-#### 변경 (grading.jsx)
-| 파일 경로 | 변경 내용 | 신규/수정 |
-|----------|----------|----------|
-| illustrator-scripts/grading.jsx | STEP 4: elemItems 배열로 레퍼런스 보관 (app.copy 제거) + STEP 8: paste 대신 elemItems[i].duplicate(layerDesign, PLACEATEND) | 수정 |
-| .claude/knowledge/errors.md | clipboard+svgDoc.close 간헐 무효화 에러 패턴 추가 | 수정 |
-| .claude/knowledge/lessons.md | 문서 간 이동은 duplicate가 기본 교훈 추가 | 수정 |
-
-#### 구현 세부
-- **STEP 4** (line 1295~1370 근방): 기존 `designDoc.selection = null` + `selected=true` 루프 + `app.executeMenuCommand("copy")` → `elemItems.push(elemLayer.pageItems[ei])` 루프로 대체. for 루프 순서가 pageItems[0..N]과 동일해서 elementPieceIndex 매핑 영향 0.
-- **STEP 8** (line 1448~1515 근방): `app.executeMenuCommand("paste")` 제거 → `elemItems[di].duplicate(layerDesign, ElementPlacement.PLACEATEND)` 루프로 pastedItems 배열 구축. 이후 기존 group/scale/align 로직이 selection 기반이므로 pastedItems를 baseDoc.selection에 재주입 (selected=true 루프).
-- **designDoc close 타이밍**: duplicate 완료 후 즉시 close — elemItems 레퍼런스가 원본 PageItem을 가리키므로 close는 반드시 duplicate 루프 이후.
-- **PDF 폴백**: 기존 clipboard paste 유지 (AI 경로만 duplicate 전환). 사용자 Q1=A로 어차피 제거 예정이라 최소 변경.
-- **elemItems.length === 0 방어**: writeLog 경고 + 복제 스킵.
-- **디버그 로그**:
-  - `STEP 4 (duplicate 모드): 요소 N개 레퍼런스 보관`
-  - `STEP 8 duplicate 완료: N개 복제됨`
-  - `STEP 8 paste 직후: baseDoc.pageItems=..., pastedItems.length=..., layerDesign.pageItems=...`
-
-#### 건드리지 않은 것
-- STEP 7 importSvgPathsToDoc (동일 duplicate 패턴, 그대로 유지)
-- STEP 8B 교체용요소 paste 로직 (별개 블록)
-- STEP 9 scale / STEP 10 Phase 2 조각별 정렬 / D1 모드
-- Phase 2 사전 수집(designPieces/basePieces/elementPieceIndex/elementOriginalCenters)
-- alignElementToPiece, alignToBodyCenter 함수
-
-#### 검증
-- ES3 호환 PASS (var, for, push, ElementPlacement.PLACEATEND, try/catch — 모두 CS5+ 지원)
-- writeLog 3종 추가/교체, 기존 STEP 8 paste 직후 로그는 pastedItems.length 기준으로 의미 교체
-- 중괄호 균형: isAiFile / !isAiFile / else 3분기 닫힘 확인
-- target/debug/illustrator-scripts/grading.jsx 복사는 PM 담당
-
-💡 tester 참고:
-- **테스트 방법**: 기준 AI로 전체 사이즈(최소 4XS/2XS/S/3XL/4XL) 연속 실행 — 이전 재현 케이스 2XS/4XL 포함 필수
-- **정상 동작**: 모든 사이즈에서 `STEP 8 paste 직후: ... layerDesign.pageItems=N (N>0)` 로그 나옴 + 결과 EPS에 요소 정상 배치
-- **로그 확인 포인트** (grading.log):
-  - `STEP 4 (duplicate 모드): 요소 N개 레퍼런스 보관`
-  - `STEP 8 duplicate 완료: N개 복제됨`
-  - `STEP 8 paste 직후: layerDesign.pageItems=N` (0이 아님)
-- **주의할 입력**: PDF 파일은 AI 경로와 다른 분기 — clipboard paste 유지라 이번 수정 영향 없음 (회귀 확인만)
-- **별건**: 3XL/4XL 아트보드 초과 문제는 **버그 C**로 이번 수정 범위 밖
-
-⚠️ reviewer 참고:
-- duplicate 경로가 `isAiFile`에서만 동작 → PDF 폴백은 여전히 clipboard paste 사용. 경로 분기가 명확한지 확인
-- `baseDoc.selection = null` + selected=true 루프 후 `executeMenuCommand("group")` 체인이 기존과 동일하게 동작하는지 (그룹화는 selection 기반이라 pastedItems 배열 순서와 무관)
-- 기존 `var pastedItems = baseDoc.selection` 구문 제거 → pastedItems는 이제 duplicate 결과 배열. `pastedItems.length > 0` 체크는 배열 length이므로 기존 로직 호환
-
-#### 다음
-- 버그 C (3XL/4XL 아트보드 초과) 별건 처리
-- 이후 교체용요소 재도입 검토 (안전망 설계 필요)
-
-### [2026-04-16] 버그 C 해결: D1 재도입 + 아트보드 clamp 강화
-
-#### 원인
-- 실측: XL bottom -117pt, 3XL size 3953x4290 (top +632, bottom -256), 4XL 3992x4331 (top +662, bottom -268)
-- `alignElementToPiece`가 조각별 이동 → 사이즈 커지면 basePieces 벌어짐이 요소 위치에 누적 전가
-- 이전 D1 (커밋 06b16fa)은 중심 복원만 있고 "요소 전체가 아트보드보다 큰" 케이스 처리 없었음
-
-#### 변경 (grading.jsx)
-| 파일 경로 | 변경 내용 | 신규/수정 |
-|----------|----------|----------|
-| illustrator-scripts/grading.jsx | 헬퍼 `calculateUnionBoundsOfItems` 신설 + STEP 10에 `USE_D1_MODE` 플래그 도입 (3단계 안전망: clamp + 중심 복원 + 최종 bounds 로그) | 수정 |
-
-#### 구현 세부
-- **헬퍼 함수 추가** (alignToBodyCenter 뒤, 1134행 직후): `calculateUnionBoundsOfItems(items)` — pageItem 배열 합집합 geometricBounds 계산 (Illustrator 좌표계, top > bottom)
-- **STEP 10 분기** (기존 alignElementToPiece 호출 블록을 `USE_D1_MODE=true/false`로 감쌈):
-  - **D1 경로 (기본)**:
-    1. `calculateUnionBoundsOfItems(individualItems)`로 요소 전체 bounds 측정
-    2. `baseDoc.artboards[0].artboardRect`에서 아트보드 bounds 취득
-    3. **Clamp 판정**: 요소가 아트보드 95%(MARGIN_RATIO=0.95) 초과 시 `clampScale = min(width비, height비)` 계산
-    4. **Clamp 적용**: 그룹 중심 기준 각 요소 재배치 (상대 거리 × clampScale) + 자기 중심 기준 `item.resize(clampPct, clampPct, true,true,true,true, clampPct, Transformation.CENTER)`
-    5. **중심 복원**: 재계산된 요소 중심을 아트보드 중심으로 translate (dx/dy > 1pt일 때만)
-    6. **최종 bounds 로그** 출력
-  - **레거시 경로 (USE_D1_MODE=false, 롤백 대비)**: 기존 `alignElementToPiece` 조각별 정렬 그대로 보존
-- **alignElementToPiece 함수 자체는 삭제 X** — 롤백 즉시 가능
-- **건드리지 않은 것**:
-  - STEP 8 duplicate 로직 (버그 B 해결분)
-  - STEP 9 pastedGroup.resize (면적 제곱근 스케일)
-  - 그룹 해제 → individualItems 생성 로직 (D1이 이것에 의존)
-  - 사전 수집 데이터(designPieces/basePieces/elementPieceIndex) — 레거시 경로용 유지
-- **디버그 로그**:
-  - `STEP 10 D1 시작: 요소 WxH, 아트보드 WxH, individualItems=N`
-  - `STEP 10 D1 clamp: 요소 WxH > 허용 WxH -> 추가 scale XX.X%` (또는 `STEP 10 D1 clamp 생략`)
-  - `STEP 10 D1 중심 정렬: dx=... dy=...` (또는 생략)
-  - `STEP 10 D1 최종 요소 bounds=[L,T,R,B] size=WxH`
-
-#### 검증
-- ES3 호환 PASS (var, 함수 선언, Math.min/abs, toFixed, Transformation.CENTER, item.resize/translate/geometricBounds 전부 ExtendScript 표준)
-- 중괄호 균형 0 (node 스크립트로 재확인)
-- target/debug/illustrator-scripts/grading.jsx 복사는 PM 담당
-
-💡 tester 참고:
-- **테스트 방법**: 기준 AI로 6사이즈 연속 실행 (4XS/2XS/S/XL/3XL/4XL 필수)
-- **정상 동작**:
-  - 3XL/4XL: `STEP 10 D1 clamp: ... -> 추가 scale XX%` 로그 + 최종 요소 bounds가 아트보드 내
-  - 작은 사이즈(4XS/2XS/S): `STEP 10 D1 clamp 생략` 로그 + 기존 배치 유지 (회귀 없음)
-- **로그 확인 포인트** (grading.log):
-  - `STEP 10 D1 시작` → 요소/아트보드 크기 출력
-  - `STEP 10 D1 clamp` 또는 `clamp 생략`
-  - `STEP 10 D1 최종 요소 bounds` size가 아트보드 (abW × MARGIN_RATIO) 이내
-- **주의할 입력**: 버그 B 회귀 확인 (paste=0 재발 없어야 함)
-
-⚠️ reviewer 참고:
-- **3단계 안전망 순서 주의**: (1) translate로 상대 거리 축소 → (2) 자기 중심 resize. 순서가 반대면 스케일 후 거리가 이미 줄어있어 이중 축소됨
-- **MARGIN_RATIO=0.95**: 완전 경계 맞춤 시 stroke/outline 겹침 위험 회피용. 필요 시 조정 가능한 상수
-- **`Transformation.CENTER`**: ExtendScript 전역 상수 — baseDoc 활성 상태에서 동작 보장
-- **레거시 경로 롤백**: `USE_D1_MODE = false`로 바꾸면 즉시 alignElementToPiece 경로 복귀
-
-#### 다음
-- 사용자 6사이즈 실측
-- tester가 로그 검증 후 PM 커밋
-
-### [2026-04-16] 버그 B (paste=0) 집중 조사 (debugger, 코드 수정 없음)
-
-#### 전제 확정
-- grading.jsx는 롤백 상태(커밋 3b7e3af, 1808줄) — 교체용요소/pasteInPlace/D1 블록 **전부 없음**
-- 그럼에도 사용자 베이스라인 실측: 4XS ✅ / 2XS ❌(paste=0) / S ✅ / 3XL ✅ / 4XL ❌(paste=0)
-- → **버그 B는 c52d80f 이전부터 존재하던 선행 버그**. 교체용요소와 무관.
-
-#### 코드 트레이싱 (STEP 4 → STEP 8 전체 경로)
-
-| 라인 | 동작 | activeDocument | clipboard 상태 |
-|------|-----|---------------|---------------|
-| 1234 | `app.open(designFile)` → designDoc | designDoc | (이전 실행 잔여물) |
-| 1350 | `designDoc.selection = null` | designDoc | — |
-| 1351~1353 | 요소 pageItems 개별 `selected=true` | designDoc | — |
-| 1355 | `app.executeMenuCommand("copy")` | designDoc | **요소 N개 적재** |
-| 1378 | `svgDoc = app.open(patternFile)` | **svgDoc** (전환!) | 유지 |
-| 1388 | `baseDoc = createCmykBaseDoc(...)` → `app.documents.addDocument` | **baseDoc** (전환!) | 유지 |
-| 1412 | `importSvgPathsToDoc` 내부 `path.duplicate(layerFill)` 반복 | baseDoc | **유지** (duplicate는 clipboard 미사용) |
-| 1427 | `svgDoc.close(DONOTSAVECHANGES)` | baseDoc | **⚠️ 불안정 구간** |
-| 1442 | `app.activeDocument = baseDoc` (재확인) | baseDoc | — |
-| 1449 | `app.executeMenuCommand("paste")` | baseDoc | **paste 시도** |
-
-#### 가설별 코드 증거 검증
-
-**가설 1 (clipboard 무효화)** — 🟥 **유력**
-- 근거: STEP 4에서 designDoc 기준 copy → **svgDoc open + baseDoc addDocument + svgDoc close** 세 번의 문서 전환이 STEP 8 paste 사이에 끼임
-- 특히 **svgDoc.close()** 시점 — Illustrator는 close되는 문서가 clipboard 소스가 아니어도 내부적으로 clipboard 번역기(AICB/PDF 형식)를 재평가함. 여러 문서 열린 상태에서 close가 연쇄되면 AICB 스풀이 일시적으로 비는 타이밍 윈도우가 존재
-- 증상 일치: paste 자체는 호출되지만 `baseDoc.pageItems=6`(패턴만 그대로) + `selection.length=0` — clipboard가 실제로 **비어 있었다는** 뜻
-- designDoc은 살아있지만 그건 무관 — clipboard는 Illustrator 앱 단위로 관리되고 문서 close가 AICB 번역을 건드림
-
-**가설 2 (designDoc.selection getter 타이밍)** — 🟨 **부분 유력**
-- 근거: 1354 `designDoc.selection && designDoc.selection.length > 0` 체크 통과 후 copy. getter는 내부 배열 재구성이라 ExtendScript 동기 실행 환경에선 안정적
-- 하지만 **연속 실행 시** Illustrator 내부 idle queue가 이전 실행의 선택 변경 이벤트를 처리 중일 수 있음 — selection.length > 0을 통과해도 copy 시점엔 빈 selection
-- 로그로 `selection.length=N (N≥1)` 나오는데 실제 clipboard는 비어있으면 이 가설 확정
-
-**가설 3 (STEP 8B activeDocument 전환)** — ⬜ **배제**
-- 현재 롤백 상태엔 STEP 8B 블록 **없음**. 그럼에도 재현 → 이 가설은 이번 버그와 무관
-
-#### 실패 패턴 상관관계
-
-| # | 사이즈 | 결과 | 직전 대비 targetArea |
-|---|-------|------|------|
-| 1 | 4XS | ✅ | (최초) |
-| 2 | 2XS | ❌ | 증가 (4XS→2XS는 사이즈업) |
-| 3 | S | ✅ | 증가 |
-| 4 | 3XL | ✅ | 증가 |
-| 5 | 4XL | ❌ | 증가 |
-
-- 격번/짝홀 패턴 **아님** (1/3/4 성공, 2/5 실패). 사용자 가설 "area 증가 시 실패"도 성립 안 함 (3/4도 증가인데 성공)
-- **실행 간격** 변수가 더 유력 — 2XS/4XL 둘 다 "직전 사이즈와 연속 실행 간격이 짧았을 때" 실패했을 가능성 (timing 윈도우)
-- → 간헐적 타이밍 버그 성격. Illustrator의 idle queue flushing이 불안정한 ms 범위에서 발생
-
-#### Rust 실행 구조 (src-tauri/src/lib.rs L263)
-
+**추가된 커맨드 시그니처**:
 ```rust
-let _child = Command::new(&illustrator_exe)
-    .arg("/run")
-    .arg(&script_path)
-    .spawn()
+#[tauri::command]
+fn svg_preview_normalize(app, folder: String, base_file: String) -> Result<String, String>
+// 내부: run_python(app, "preview_normalize", vec![folder, base_file])
+
+#[tauri::command]
+fn svg_normalize_batch(app, folder: String, base_file: String, no_backup: bool) -> Result<String, String>
+// 내부: no_backup=true면 args에 "--no-backup" 추가 후 run_python(app, "normalize_batch", args)
 ```
 
-- **매 실행마다 새로운 `Illustrator.exe /run` 프로세스 스폰** 시도
-- 하지만 Illustrator는 단일 인스턴스 앱 — 이미 실행 중이면 **기존 인스턴스에 script 메시지만 IPC로 전달**
-- 따라서 **clipboard/문서/메모리 상태 전부 이전 실행과 공유**. 이전 실행의 designDoc이 이번 실행과 섞임
-- 이게 "2번째 실행부터 간헐 실패" 구조적 원인 (첫 실행은 깨끗한 상태)
+**재사용한 것**:
+- 기존 `run_python` 함수(L122~177) — **변경 없음**, subprocess 로직 그대로 재사용
+- 기존 `invoke_handler!` 매크로 — 마지막에 2개 추가(순서 유지)
 
-#### 수정안 비교표
+**반환 타입 선택 이유**:
+- PLAN 섹션 6-3 기준 `Result<String, String>` 채택 (사용자 프롬프트의 `serde_json::Value` 대신)
+- 근거: 기존 `run_python`이 이미 `Result<String, String>`을 반환하므로, 래퍼도 같은 형식을 유지하는 게 기존 코드 스타일과 일관
+- 프론트에서 `JSON.parse(str)` 한 번만 하면 되므로 실사용 비용 동일
 
-| # | 수정안 | 효과 추정 | 부작용 | 구현 복잡도 | 권장 |
-|---|-------|---------|-------|-----------|------|
-| A | copy 직후 `$.sleep(200)` 1줄 추가 | 🟨 30~50% (타이밍만 커버, clipboard 무효화 자체는 방지 못함) | ES3 지원(ExtendScript $.sleep OK), 실행 시간 +200ms/사이즈 | ⭐ 최저 | 🟨 |
-| B | duplicate 기반 (copy/paste 제거) | 🟥 90%+ (근본 해결) | 문서 간 `item.duplicate(baseDoc.layers[x])` Illustrator CS5+ 지원 확인됨. 단 레이어 직접 참조라 기존 PageItem 순서·그룹 구조 보존 가능. 레거시 Phase 2 로직(elementPieceIndex) 영향 없음 | ⭐⭐⭐ | 🟩 **권장** |
-| C | activeDocument 명시 관리 + `app.redraw()` 강제 | 🟨 40% (redraw는 화면 갱신, clipboard 상태 갱신 아님) | redraw는 cosmetic, 실제 내부 큐 flush 효과는 약함 | ⭐⭐ | ⬜ |
-| D | paste 후 selection=0이면 재시도 (루프) | 🟨 60% (1차 실패 시 2차 성공 확률 있음) | 재시도 중에도 clipboard가 계속 비어있으면 무한루프 가드 필요, 불확실 | ⭐⭐ | ⬜ |
-| E | 매 사이즈마다 Illustrator 재시작 | 🟥 95%+ (상태 완전 격리) | 사이즈당 5~10초 추가 (13사이즈 실행 시 +2분), 사용자 UX 나빠짐, Rust 변경 필요 | ⭐⭐⭐⭐ | ⬜ |
+**sync fn 유지 이유**:
+- `run_python` 자체가 동기식 `std::process::Command::output()` 사용
+- `async fn`으로 바꾸면 `.await` 호출해야 해서 시그니처 불일치 발생
+- Tauri는 sync `#[tauri::command]`도 자동으로 스레드풀로 보내 UI를 블로킹하지 않음
 
-#### 권장 수정안 = **B (duplicate 기반)**
+**검증**:
+- `cd src-tauri && cargo check`: ✅ **29.42초에 PASS**, 에러 0, 경고 0
+- `grader v1.0.0 (C:\0. Programing\grader\src-tauri)` 컴파일 성공
 
-**핵심 아이디어**: clipboard(copy/paste)는 Illustrator 앱 전역 상태라 문서 여러 개 여닫는 과정에서 간섭 많음. **`PageItem.duplicate(targetContainer)`는 문서 간 복제를 clipboard 없이 직접 수행**. STEP 7의 `path.duplicate(layerFill)` 로직과 동일 패턴이고 이미 현재 grading.jsx 내부에서 정상 동작 중.
-
-**구현 스펙 (STEP 4 + STEP 8)**:
-
-1. **STEP 4 변경** (line 1350~1359)
-   - `designDoc.selection = null` 이후 copy 대신 `elemItems` 배열에 요소 레퍼런스만 저장
-   - `executeMenuCommand("copy")` 호출 제거
-   - `elemItems.push(elemLayer.pageItems[ei])` (Array 축적)
-   - 단, **designDoc을 STEP 8까지 살려둬야 함** (이미 그렇게 구현됨)
-
-2. **STEP 8 변경** (line 1448~1479)
-   - `app.executeMenuCommand("paste")` 제거
-   - 대신 loop:
-     ```
-     var pastedItems = [];
-     for (var i = 0; i < elemItems.length; i++) {
-         var dup = elemItems[i].duplicate(layerDesign, ElementPlacement.PLACEATEND);
-         pastedItems.push(dup);
-     }
-     baseDoc.selection = null;
-     for (var i = 0; i < pastedItems.length; i++) {
-         pastedItems[i].selected = true;
-     }
-     ```
-   - `app.executeMenuCommand("group")`는 그대로 유지 (selection 기반 그룹화는 clipboard와 무관)
-
-3. **부수 변경**
-   - PDF 폴백(line 1362~1364)은 `selectObjectsOnActiveArtboard + copy` 방식 유지 또는 별도 loop로 변환
-   - **STEP 11-D close 순서 주의**: designDoc close가 STEP 8 이후로 이동 (현재 위치 1459~1467 유지 OK)
-   - elemItems 배열이 살아있으려면 designDoc이 **duplicate 직전까지** 열려 있어야 함. 이건 현재 코드 그대로 가능 (STEP 8 paste 직후 close → duplicate 직후 close로 순서 조정)
-
-#### 위험 분석
-
-| 위험 | 가능성 | 완화책 |
-|-----|------|-------|
-| duplicate 시점에 designDoc active가 아니면 실패 | 🟨 중 | duplicate 호출 전 `app.activeDocument = designDoc` 명시 후 baseDoc 복원 — 사실 duplicate는 source 컨테이너/target 컨테이너 모두 명시라 activeDocument 의존성 약함 |
-| 색상 잔존 RGB 문제 | 🟩 낮 | 기존 STEP 9 "RGB 잔존 안전망" 루프가 커버 |
-| elemItems 순서가 기존 copy/paste와 다르게 나옴 | 🟨 중 | for 루프 순서가 pageItems[0..N]와 동일하게 유지됨 → elementPieceIndex 매핑 **정확히 동일** |
-| Phase 2 layerDesign.pageItems 순서 영향 | 🟩 낮 | duplicate(PLACEATEND)로 순서 보존 |
-| ExtendScript duplicate cross-document 버그 | 🟩 낮 | STEP 7 importSvgPathsToDoc이 이미 동일 방식 사용 → 실전 검증됨 |
-
-#### 회귀 유발 가능성
-- 기존 copy/paste 경로와 완전히 대체되므로 **STEP 8 진단 로그 라인 1453 (paste 직후 검증)는 의미 바뀜** — pastedItems.length로 로그 교체 필요
-- PDF 폴백 경로는 별개 처리 필요 (또는 그대로 copy/paste 유지)
-
-#### 대안 fallback 설계 (안전망)
-- 가설 1이 100% 확정은 아니므로 duplicate 실패 시 copy/paste로 폴백하는 2중 안전망도 가능. 다만 duplicate가 실패하는 케이스는 매우 드물어 **불필요하게 복잡** — 1차 시도 duplicate만으로 충분
-
-#### 대상 파일 (수정 안 함, 참고만)
-- `C:\0. Programing\grader\illustrator-scripts\grading.jsx`
-  - line 1295~1365: STEP 4 (copy 블록)
-  - line 1444~1479: STEP 8 (paste 블록)
-  - line 825~920: importSvgPathsToDoc (duplicate 레퍼런스 구현)
-
----
-
-### [2026-04-16] D1 몸판중심 고정 배치 구현 (재설계)
-
-#### 배경
-- 사용자 Q1~Q5 확정: **A-10개이상-A-B-B** → D1 채택
-- 기존 STEP 10: 각 요소를 `basePiece.center + relOffset × scale`로 이동 → 조각 간격 벌어짐이 요소에 1:1 전가 → 3XL/4XL 아트보드 +900pt 초과
-- D1 원칙: 요소는 제자리에서 **스케일만** (중심점 기준), 조각별 개별 이동 **제거**
-
-#### 변경 (grading.jsx STEP 9/10)
-| 위치 | 변경 내용 |
-|------|----------|
-| STEP 9 line 1671~1690 | `pastedGroup.resize(...)` 8번째 인자 `Transformation.CENTER` 추가 (그룹 자기 중심 기준 스케일, 위치 유지) |
-| STEP 9 | `writeLog("STEP 9 D1 resize: Transformation.CENTER, scale=...")` 신규 |
-| STEP 10 line 1742~1923 | `if (USE_D1_MODE) { ... } else { ... }` 분기로 전체 감쌈. 레거시 Phase 2 코드(alignElementToPiece 루프 포함)는 else 분기에 **전량 보존** (롤백용) |
-| STEP 10 D1 모드 | 조각별 정렬 skip + 그룹 해제(d1Items 배열) + 최종 bounds 로그 |
-| STEP 10 D1 안전망 | 요소 전체 bbox 중심 vs 아트보드 중심 오차 \|dx\|>50 또는 \|dy\|>50 초과 시 translate 복원 (50pt 이하는 무시) |
-
-#### 보존 (건드리지 않음)
-- `alignElementToPiece` 함수 (line 1071~1091) — 레거시 분기에서 여전히 호출
-- `alignToBodyCenter` 함수 (line 1102~1134) — 레거시 폴백에서 호출
-- STEP 8/8B/9B 전체
-- Phase 2 사전 수집(designPieces/basePieces/elementPieceIndex/elementOriginalCenters) — 레거시에서 사용
-
-#### 롤백 방법
-- `var USE_D1_MODE = true;` (line 1750) → `false`로 한 줄 변경 → 기존 조각별 정렬 복구
-
-#### 검증
-- ES3 호환 PASS (var, if/else, try/catch, Math.abs, for 루프)
-- 중괄호 균형 확인: 1752 `if (USE_D1_MODE) {` ↔ 1819 `} else {` ↔ 1923 `}` (+ 1924 기존 `}`)
-- writeLog 전부 유지 (STEP 9 D1 resize, STEP 10 D1 모드/bounds/중심 복원)
-- target/debug/illustrator-scripts/grading.jsx 복사는 PM 담당
-
-💡 tester 참고:
-- **테스트 방법**: 기준 AI(XL)로 전체 사이즈 13개(4XS ~ 4XL) 그레이딩 실행
-- **로그 확인 포인트** (grading.log):
-  - `STEP 9 D1 resize: Transformation.CENTER, scale=X.XXXX`
-  - `STEP 10 D1 모드: 조각별 정렬 건너뜀, 요소 중심점 기준 스케일만 유지`
-  - `STEP 10 D1 최종 요소 전체 bounds=[...] size=WxH` — **W/H가 아트보드 4337×3401 이내여야 정상**
-  - `STEP 10 D1 중심 복원: dx=..., dy=...` 또는 `중심 복원 불필요 (오차 50pt 미만)`
-- **정상 동작**:
-  - 모든 사이즈에서 요소 bounds가 아트보드 크기 이내
-  - 3XL/4XL의 "위쪽 리본 분리" 증상 해결
-  - 4XS처럼 기존에 정상이던 사이즈도 영향 없음 (scale 동일, 위치만 원점 대신 CENTER)
-- **주의할 입력**:
-  - 교체용요소 레이어가 있는 AI (STEP 9B와 충돌 없는지 → 건드리지 않았으므로 정상이어야 함)
-  - PDF 파일 (레거시 분기에만 영향, D1 모드는 isAiFile 무관하게 동작 → 검증 필요)
-
-⚠️ reviewer 참고:
-- STEP 10 전체 블록이 `if (USE_D1_MODE) {...} else {...}` 이중 들여쓰기 없이 단일 들여쓰기 유지(레거시 블록) — 의도된 것 (diff 최소화 + 롤백 시 다시 풀기 쉬움)
-- `linearScaleApplied` 변수는 D1 모드에서 미사용이지만 STEP 11 이후 로그/폴백에서 쓸 수 있어 계산은 유지
-- D1 안전망의 50pt 임계값은 경험치 — 필요 시 config로 이동 고려 (현재는 하드코딩)
-
----
-
-### [2026-04-16] 교체용요소 pasteInPlace 교체
-
-#### 원인
-- `app.paste()` / `executeMenuCommand("paste")` 기본이 **화면 중앙 paste** → 교체용요소가 아트보드 중앙으로 이동
-- 원본 아트보드 밖(위쪽) 위치 손실 → 사용자 실측 이미지에서 "1234567890" 백넘버가 아트보드 중앙에 출력
-
-#### 수정 (grading.jsx STEP 8B, line 1488~1602)
-| 위치 | 변경 내용 |
-|------|----------|
-| copy 직전 루프 | refLayer 전체 pageItems의 **합집합 bounding box**(left/top/right/bottom) 기록 |
-| paste 지점 | `executeMenuCommand("paste")` → `executeMenuCommand("pasteInPlace")` try/catch |
-| 폴백 체인 | pasteInPlace 실패 시 `executeMenuCommand("paste")` → `app.paste()` 순차 폴백 |
-| paste 후 안전망 | baseRefLayer 새 bounds와 원본 diff(dx, dy) 계산, 0.01pt 초과 시 `translate(dx, dy)`로 복원 (상대 위치 유지 위해 모든 pageItem 동일 벡터 이동) |
-| 로그 | pasteMethod(pasteInPlace/paste(fallback)/app.paste(fallback)) + 복원 diff writeLog 기록 |
-
-#### 왜 bounds 안전망도 병행하나
-- `pasteInPlace` 명령 이름이 Illustrator 버전/언어에 따라 다를 수 있어 1순위로 시도하되, 성공해도 만일을 대비해 **항상 bounds 검사** → 어긋나면 translate로 강제 복원
-- 오차 0.01pt 임계로 불필요한 미세 이동 방지
-
-#### 건드리지 않은 것
-- STEP 8 "요소" paste 로직 (기존 그대로)
-- STEP 8B 종료 후 activeLayer/selection 복원 방어선
-- STEP 9/9B scale 로직
-
-#### 검증
-- ES3 호환 PASS (var, try/catch, Math.abs, 삼중등호 null 비교)
-- writeLog 유지 (pasteMethod, 복원 diff, 원본 bounds 모두 기록)
-- target/debug/illustrator-scripts/grading.jsx 복사는 PM 담당
-
-💡 tester 참고:
-- **테스트 방법**: "교체용요소" 레이어를 포함한 AI 파일로 grading.jsx 실행 → 결과 AI/EPS에서 "1234567890" 백넘버 위치 확인
-- **정상 동작**: 백넘버가 아트보드 **위쪽 밖**(원본 위치)에 그대로 나타남 (중앙 X)
-- **로그 확인**: grading.log에 `STEP 8B 교체용요소 pasteInPlace 성공` + `위치 일치(복원 불필요)` 또는 `위치 복원: dx=..., dy=...` 메시지
-- **주의할 입력**: 교체용요소 레이어가 없는 AI는 기존대로 스킵(영향 없음)
-
-⚠️ reviewer 참고:
-- pasteInPlace 실패 폴백 체인이 3단계(executeMenuCommand → paste → app.paste)로 과한지 확인
-- bounds 합집합에서 top/bottom 대소 관계(Illustrator 좌표: top이 큰 값) 제대로 적용됐는지
-- translate는 pageItem 단위로 적용 → 그룹 내 구조 보존 확인
-
----
-
-### [2026-04-16] selection 오염 수정 (pastedItems layerDesign 직접 참조)
-
-#### 원인 (debugger 조사 확정)
-- STEP 8B 교체용요소 paste가 `baseDoc.selection`을 [교체용요소]로 덮어씀
-- STEP 9 직전 `var pastedItems = baseDoc.selection`이 디자인 요소 대신 교체용요소를 받음
-- STEP 9/10이 잘못된 대상(교체용요소)에 작용 → pastedGroup bounds 과소, STEP 10 폴백 진입, 결과 EPS 공통 오류
-
-#### 수정 (grading.jsx)
-| 위치 | 변경 내용 | 순위 |
-|------|----------|------|
-| line ~1540 (pastedItems 획득 지점) | `baseDoc.selection` → `layerDesign.pageItems` 직접 순회 + selected=true | 1순위 (필수) |
-| STEP 8B 블록 끝 (designDoc close 전) | `baseDoc.activeLayer = layerDesign; baseDoc.selection = null` 방어적 복원 | 2순위 (안전장치) |
-| STEP 8 paste 직후 진단 | `selection=0` 시 designDoc alive/activeDoc 로깅 | 3순위 (3XL 별건) |
-
-#### 구현 포인트
-- `pastedItems`를 plain Array로 축적 → `.length`, `[i]` 접근 호환
-- 각 item에 `selected = true` → 후속 `app.executeMenuCommand("group")` 메뉴 작동 유지
-- ES3 호환 (var, for, try/catch만)
-- STEP 9/10 본문 로직은 손대지 않음
-
-#### 검증
-- ES3 문법 PASS
-- `layerDesign` 스코프 유효 (line 1421 생성 → 1540 내부 동일 try 블록)
-- target/debug/illustrator-scripts/grading.jsx 복사는 경로 부재로 스킵 — PM이 기존대로 수동 복사
-
-#### tester 참고
-- 테스트 방법: XL/2XL/3XL 사이즈 grading 실행 후 결과 EPS 열어보기
-- 정상 동작:
-  - STEP 10 로그 부활 (이전엔 폴백 분기로 누락됨)
-  - pastedGroup bounds가 아트보드 근접 수천 pt 크기
-  - 결과 EPS에서 디자인 요소 정상 배치 (사이즈별 스케일 적용)
-  - 교체용요소는 아트보드 밖에 scale만 적용된 상태로 유지
-- 주의할 입력: 3XL은 paste=0 진단 로그가 뜰 수도 있음 (별건 추적 대상)
-
-#### reviewer 참고
-- selection 오염 방지를 위해 selection 사용하는 후속 코드가 있는지 추가 점검 필요
-- `itemLd.selected = true` 반복문이 ES3에서 안전한지 (Illustrator PageItems 특성상 안전)
-
----
-
-### [2026-04-16] 교체용요소 레이어 지원 (백넘버 참조 유지)
-
-#### 배경
-- 디자이너가 기준 AI에 "교체용요소" 레이어 신설 (아트보드 밖 위쪽, 백넘버 편집용 참조 숫자)
-- 기존 "요소" 레이어와 분리: 위치 이동 없이 **스케일만** 적용
-- 이전 로그에서 XL 기준 요소 bounds 상단이 아트보드 196pt 초과 원인 = 이 참조 숫자 → 레이어 분리로 근본 해결
-
-#### 변경 (grading.jsx 1개 파일)
-| 위치 | 변경 내용 | 신규/수정 |
-|------|----------|----------|
-| STEP 4B (isAiFile 블록 끝) | `refLayer` 선택적 탐색 (getByName try/catch) | 신규 |
-| STEP 8B (paste 직후, designDoc close 전) | 교체용요소 copy → baseDoc "교체용요소" 레이어 paste | 신규 |
-| STEP 9B (STEP 9 직후) | `baseRefLayer.pageItems` 개별 `Transformation.CENTER` scale | 신규 |
-| STEP 10 정렬 | 수정 없음 (pastedGroup/layerDesign만 참조 → 자연 제외) | - |
-| STEP 11-B 통합 | 수정 없음 (layerFill/layerDesign/layerPattern만 명시적 이동 → baseRefLayer 별도 유지) | - |
-
-#### 핵심 설계 이유
-- **왜 STEP 8B 시점에 copy/paste**: designDoc은 STEP 8 끝에서 close됨. STEP 4에서 clipboard에 "요소"가 이미 담겨 있으므로, 덮어쓰기를 피하려면 "요소" paste 완료 후에 "교체용요소" copy/paste 해야 함
-- **왜 Transformation.CENTER**: 기본값 DOCUMENTORIGIN은 원점 기준이라 위치 이동 발생. CENTER는 각 객체 자기 중심 기준 → 위치 유지 + 크기만 변경
-- **왜 개별 아이템 순회**: 레이어 전체 한 번에 resize하면 묶음 중심 기준이라 아이템 간 상대 위치가 변함. 개별 순회로 각자 제자리 유지
-
-#### 폴백 (에러 삼킴, 기존 흐름 방해 X)
-- "교체용요소" 레이어 없음 → 스킵 + 로그 ("STEP 4B 교체용요소 레이어 없음")
-- 빈 레이어 → 스킵
-- `linearScaleApplied === 1.0` → scale 생략 (위치도 이동 없음)
-- copy/paste 중 에러 → 경고 로그 + 활성 문서 복원 후 계속
-
-#### 대상 파일
-- `C:/0. Programing/grader/illustrator-scripts/grading.jsx` (원본)
-- `C:/0. Programing/grader/src-tauri/target/debug/illustrator-scripts/grading.jsx` (수동 복사 완료, 1911줄)
-
-💡 tester 참고:
-- 테스트 방법: "교체용요소" 레이어가 있는 기준 AI로 XL/3XL/4XL 그레이딩 실행
-- 정상 동작 로그:
-  - `STEP 4B 교체용요소 레이어 발견: pageItems=N`
-  - `STEP 4B 교체용요소 paste 완료: baseRefLayer.pageItems=N`
-  - `STEP 9B 교체용요소 scale 적용: X% (중심점 기준, N개)`
-- 결과 EPS 확인:
-  - 아트보드 안 요소는 기존과 동일 (조각별 정상 배치)
-  - 교체용요소(백넘버 숫자)는 아트보드 위쪽 원본 위치에 scale만 반영되어 유지
-  - XL/3XL/4XL에서 "요소 전체 bounds" 상단이 아트보드 안으로 축소되었는지
-- 주의 입력: "교체용요소" 레이어 없는 구버전 AI도 정상 동작해야 함 (폴백 스킵 로그)
-
-⚠️ reviewer 참고:
-- STEP 8B copy/paste 실패 시 `app.activeDocument = baseDoc` 복원 로직 필요성 검토 (designDoc이 활성 상태로 남으면 아래 close 로직이 문제없는지)
-- Transformation.CENTER가 모든 pageItem 타입(PathItem/GroupItem/TextItem)에서 정상 동작하는지
-- baseRefLayer를 STEP 11-B 통합에서 자연 제외하는 로직이 z-order에 영향 없는지 (별도 레이어로 남음)
-
----
-
-### [2026-04-16] 교체용요소 도입 후 회귀 조사 (debugger, 코드 수정 없음)
-
-#### 증상 (사용자 실측 로그)
-1. STEP 10 로그가 writeLog 파일에서 통째로 사라짐 — STEP 9B 직후 바로 `=== grading.jsx 종료 ===`
-2. STEP 9 스케일 적용 후 pastedGroup bounds가 이전 height 3442 → 현재 약 552 (폭 3425 유지) — 모든 사이즈 동일 양상
-3. 3XL만 STEP 8 직후 baseDoc.selection=0, layerDesign.pageItems=0 (다른 사이즈는 3)
-4. 결과 EPS가 모든 사이즈 거의 동일 (요소가 원본 크기 그대로 꽂힘 → 비정상)
-
-#### 핵심 원인 (단일)
-**STEP 8B paste 직후 `baseDoc.selection`이 "교체용요소 paste 결과"로 덮어써진 상태에서, line 1540 `var pastedItems = baseDoc.selection;`이 그걸 그대로 받는다. 따라서 STEP 9의 group/resize 대상이 "디자인 요소"가 아닌 "교체용요소(백넘버 숫자)"로 뒤바뀐다.**
-
-- line 1471 STEP 8 paste → selection = 디자인 요소 (정답)
-- line 1491 `app.activeDocument = designDoc` + line 1492 `designDoc.selection = null`
-- line 1498 교체용요소 copy → clipboard 덮어쓰기 (디자인 요소 clipboard는 이미 소모됐으므로 OK)
-- line 1502 `app.activeDocument = baseDoc` + line 1509 `baseDoc.activeLayer = baseRefLayer` + line 1510 paste → **baseDoc.selection이 교체용요소로 덮어써짐**
-- line 1540 `pastedItems = baseDoc.selection` ← **여기서 대상 뒤바뀜**
-
-#### 증상 → 원인 귀착
-- **증상 1 (STEP 10 로그 사라짐)**: pastedGroup.pageItems.length (교체용요소 개수) ≠ elementCountAtCopy (디자인 요소 개수, STEP 4 시점 기록) → line 1657 폴백 경로 진입 → `alignToBodyCenter` 호출 후 끝 → STEP 10 writeLog (line 1712)는 else 분기에만 있어 실행되지 않음. `$.writeln`으로 찍히는 "[Phase 2] 폴백 사용" 메시지는 writeLog 파일에 안 남음
-- **증상 2 (bounds 과소)**: 로그 `[456.3, 1977.6, 3881.4, 1424.9]` (폭 3425, 높이 552)는 **교체용요소 그룹(아트보드 밖 위쪽 가로로 나열된 백넘버 숫자들)의 실제 bounds**. 코드 주석(line 1485, 1594)이 교체용요소 위치를 "아트보드 밖 위쪽 백넘버 참조 숫자"로 명시. 측정 대상이 교체된 것이지 실제로 축소된 것이 아님
-- **증상 4 (결과 EPS 동일)**: 폴백은 **교체용요소 그룹**을 `alignToBodyCenter`로 몸판 중앙에 이동. **진짜 디자인 요소는 STEP 8에서 paste된 원본 위치/크기 그대로** layerDesign에 방치됨 → 모든 사이즈 결과가 "요소 크기 변화 없는 원본 배치"로 동일하게 보임
-- **증상 3 (3XL paste=0)**: STEP 8 시점(8B 이전)의 selection=0이므로 위 원인과 **별건**. 추정: 2XS → 3XL 연속 실행 중 STEP 8B가 activeDocument/selection을 복원하지 않고 종료한 후유증으로 clipboard/activeDocument 상태 오염. 조사 범위 내 단정 불가
-
-#### 권장 수정 방향 (PM 결정용 — debugger는 코드 변경 X)
-- **1순위 (필수)**: line 1540 `var pastedItems = baseDoc.selection;`을 **selection에 의존하지 않고 layerDesign에서 재획득**
+**Phase 1-5 developer 전달 사항** (다음 단계용):
+- Rust 커맨드 이름: `svg_preview_normalize`, `svg_normalize_batch`
+- 인자 이름(카멜케이스): `folder`, `baseFile`, `noBackup` (Tauri는 snake_case Rust → camelCase TS 자동 변환)
+- 반환: JSON **문자열** (TS 측에서 `JSON.parse()` 후 `PreviewResult`/`BatchResult` 타입으로 캐스팅)
+- 호출 예:
+  ```ts
+  const raw = await invoke<string>("svg_preview_normalize", { folder, baseFile });
+  const parsed: PreviewResult = JSON.parse(raw);
   ```
-  baseDoc.selection = null;
-  var pastedItems = [];
-  for (var li = 0; li < layerDesign.pageItems.length; li++) {
-      layerDesign.pageItems[li].selected = true;
-      pastedItems.push(layerDesign.pageItems[li]);
-  }
-  ```
-  이렇게 하면 STEP 8B가 selection을 오염시켜도 영향 없음
-- **2순위 (안전장치)**: STEP 8B 정상 종료 경로 끝에도
-  - `baseDoc.activeLayer = layerDesign;`
-  - `baseDoc.selection = null;`
-  복원 (현재는 catch 분기에만 `app.activeDocument = baseDoc` 복원 있음, 정상 경로는 없음)
-- **3순위 (3XL 진단)**: STEP 8에서 `baseDoc.selection.length === 0`이면 clipboard/activeDocument/designDoc 생존 여부 추가 로그 + paste 1회 재시도
-- **차선안 (후보 1, 구조 변경 큼)**: STEP 8B를 STEP 10 이후로 이동. clipboard 유지 보장 검증이 추가로 필요해 리스크 있음 → 1순위보다 후순위
 
-#### 증거 로그 요약 (사용자 제공 vs 커밋 전 로그 비교)
-| 항목 | 커밋 전 (정상) | 현재 (회귀) |
-|------|---------------|------------|
-| STEP 9 적용 후 pastedGroup bounds | `[506.3, 3412.2, 3831.3, -10.6]` height 3422 | `[456.3, 1977.6, 3881.4, 1424.9]` height 552 |
-| STEP 10 로그 | `배치=4, 스킵=0, 총=4, linearScaleApplied=0.9213` + 최종 bounds | **없음** (writeLog 공백) |
-| STEP 8 paste (3XL만) | selection=3 | selection=0, layerDesign=0 |
+💡 tester 참고:
+- 테스트 방법: `cd src-tauri && cargo check` → 에러/경고 0 확인 / `npm run tauri dev` 기동 시 이상 없는지
+- 정상 동작: 기존 모든 기능(SVG/PDF/그레이딩/자동 업데이트 UI) 그대로 동작 + 새 커맨드 2개가 `invoke()` 가능
+- 주의할 입력: 실제 커맨드 호출 테스트는 Phase 1-5 완료 후(UI 연결 후) 수행. 이번 단계는 **컴파일 통과만**이 범위.
 
-#### 대상 파일 (수정 안 함, 참고만)
-- `C:\0. Programing\grader\illustrator-scripts\grading.jsx`
-  - line 1480~1526: STEP 8B (copy/paste + selection 오염원)
-  - line 1540~1550: pastedItems 획득 지점 (오염 흡수 지점)
-  - line 1636~1666: useFallback 분기
-  - line 1712~1735: STEP 10 writeLog (else 분기 안쪽 — 폴백이면 미실행)
+⚠️ reviewer 참고:
+- `run_python` 원본 건드리지 않았는지 — L122~177 diff 0줄 확인 요망
+- 신규 커맨드가 기존 스타일(동기 fn + `tauri::AppHandle` 첫 인자 + `Result<String, String>`)과 일관성 있는지
+- `invoke_handler!` 등록 순서가 기존 관례(추가 커맨드는 튜플 맨 뒤)와 맞는지
+- Phase 1-5 착수 전에 이 커맨드가 **단독으로 커밋 A로 분리**될 예정 — 롤백 용이성 확인
 
 ---
 
-### [2026-04-15] illustrator-scripts 경로 dev 분기 (venv 수정 패턴)
+### developer [2026-04-22] Phase 1-5 React UI 통합 (SVG 표준화)
 
-#### 배경
-- Tauri가 dev 모드에서 `src-tauri/target/debug/illustrator-scripts/`의 자동 스테이징된 구버전을 실행
-- 사용자가 `illustrator-scripts/grading.jsx`를 수정해도 target/debug 복사본은 동기화되지 않아 **구버전이 실행**됨 → 디버그 로그 파일이 생성되지 않는 문제 발생
-- 이전 `get_python_engine_dir` 수정(커밋 bc4a79a)과 **동일 패턴**으로 근본 해결
+📝 구현한 기능: Phase 1-4 Rust 커맨드를 프론트엔드와 연결. 패턴 카드 ⋮ 더보기 메뉴에서 [📐 SVG 표준화]를 누르면 6-Phase 머신 모달이 열려 기준 사이즈 선택 → 시뮬레이션(미리보기) → 일괄 변환 → 결과 요약 → Drive 재스캔까지 한 번에 수행한다.
 
-#### 변경
-| 파일 경로 | 변경 내용 | 신규/수정 |
-|----------|----------|----------|
-| `src-tauri/src/lib.rs` | `get_illustrator_scripts_dir` 함수에 환경변수 오버라이드 + dev 분기 추가 (약 30줄 증가) | 수정 |
+**변경 파일 (신규 2개)**:
+| 파일 | 줄수 | 설명 |
+|------|------|------|
+| `src/services/svgStandardizeService.ts` | 202 | Tauri invoke 래퍼 + PreviewResult/BatchResult 타입 정의 (Python JSON 구조 `{success, data:{...}}` 에 맞춰 매핑) |
+| `src/components/SvgStandardizeModal.tsx` | 560 | 6상태 Phase 머신(idle/previewing/preview-done/executing/done/error) 모달. ESC/백드롭 차단, 요약 카드 3개, 파일 목록 스크롤, 버전 표기 |
 
-**수정 포인트** (lib.rs L303~):
-1. **환경변수 오버라이드**: `GRADER_ILLUSTRATOR_SCRIPTS_DIR` 지정 시 `grading.jsx` 존재 확인 후 반환
-2. **dev 분기** (`#[cfg(debug_assertions)]`): `env!("CARGO_MANIFEST_DIR")`의 부모(= 프로젝트 루트)의 `illustrator-scripts/` 우선 (grading.jsx 유효성 확인)
-3. **기존 로직 유지**: exe 역추적 루프 + resource_dir 폴백 그대로
+**변경 파일 (수정 2개)**:
+| 파일 | 변경 | 설명 |
+|------|------|------|
+| `src/App.css` | +353줄 | `.svg-standardize-modal__*` BEM 스타일(34개 클래스) + `.preset-card__menu-*` 스타일(3개 클래스). 모두 `var(--color-*)` CSS 변수 사용, Tailwind 0줄 |
+| `src/pages/PatternManage.tsx` | +145줄 | ⋮ 메뉴 버튼 + 드롭다운 + 모달 조건부 렌더 + `buildAbsoluteDriveFolder`/`getPieceBaseName` 헬퍼 + document click 바깥 감지 useEffect |
 
-#### 검증
-- `cargo check` PASS (10.99초, warning 0)
-- 이전 venv 수정과 **정확히 동일 패턴** (1. 환경변수 → 2. CARGO_MANIFEST_DIR 부모 → 3. exe 역추적 → 4. resource_dir)
+**주요 설계**:
+- **6-Phase 머신 (discriminated union)**: UpdateModal과 동일한 패턴을 확장 — idle → previewing → preview-done → executing → done, 실패 경로는 모두 error로 수렴
+- **ESC/백드롭 차단 (`isLocked` 가드)**: `previewing`/`executing` 상태일 때만 닫기 차단, 그 외 상태는 자유 닫기
+- **기준 사이즈 자동 추천**: XL > 2XL > 첫 번째 사이즈 (`pickDefaultBaseSize`)
+- **기준 사이즈 변경 시 preview 리셋**: preview-done/done/error 상태면 idle로 되돌림 (낡은 데이터로 실행 방지)
+- **재스캔 쿨다운 무시**: onComplete 콜백에서 `lastAutoScanRef.current = 0` 후 `runAutoSync()` 호출 — 사용자 명시 실행이므로 즉시 반영 보장
+- **Drive 프리셋만 활성화**: `preset.driveFolder + drivePatternRoot` 둘 다 있어야 메뉴 활성 (Local 프리셋은 자동 disabled + title 툴팁)
+- **document click 바깥 감지**: 메뉴가 열린 경우에만 리스너 등록, 메뉴 내부는 `stopPropagation`으로 전파 차단 (메뉴 외부 클릭 시 자동 닫기)
+
+**Python JSON 매핑 확정 (svg_normalizer.py 실제 구조)**:
+```
+preview_normalize → {
+  success: true,
+  data: { previews: [{ file, status, big_width, small_width, big_x_range, small_x_range,
+                       small_y_align_offset, gap_between_patterns, viewbox_ok, no_x_collision, error? }] }
+}
+normalize_batch → {
+  success: true,
+  data: { folder, total_count, pass_count, fail_count, skipped_count,
+          results: [{ file, status: "PASS"|"FAIL"|"SKIP", reason?, error?, data? }],
+          version: "1.0-uneck-double-sided" }
+}
+```
+⚠️ 계획서 섹션 6-1의 타입(`previews` 최상위)과 실제 구조(`data.previews` 2단계 중첩)가 달라 **TypeScript 타입은 실제에 맞춰 보정** — `PreviewResult.data.previews` / `BatchResult.data.results` 형태로 정의.
+
+**Rust invoke 인자명 확인**:
+- Rust 측: `folder: String`, `base_file: String`, `no_backup: bool`
+- Tauri 2.x 자동 변환: `folder`, `baseFile`, `noBackup` (camelCase)
+- TS 호출 시 정확히 위 이름 사용 — runtime 에러 없이 동작 확인
+
+**검증**:
+- `npx tsc --noEmit` → **EXITCODE=0 (PASS, 에러 0)**
+- 기존 PatternManage 로직 무변경: 카드 렌더/선택/즐겨찾기/runAutoSync 등 그대로, 이번 변경은 순수 추가(메뉴 + 모달 + 헬퍼 2개)
+- CSS: Tailwind/하드코딩 색 0건, 모두 `var(--color-*)` 변수 사용
 
 💡 tester 참고:
 - **테스트 방법**:
-  1. dev.bat 재시작 (Rust 재컴파일 필요)
-  2. grading.jsx 내용 의도적으로 수정 (예: writeLog 문구 추가)
-  3. OrderGenerate 실행 → 수정된 내용 반영 확인
-- **정상 동작**: target/debug 복사본과 무관하게 **프로젝트 루트**의 최신 grading.jsx 실행됨
-- **주의**: production 빌드(release)에는 영향 없음 (cfg(debug_assertions) 덕분)
+  1. `npm run tauri dev` 기동 → PatternManage 페이지 진입
+  2. G드라이브 연동된 프리셋 카드 우상단의 `⋮` 버튼 클릭 → 드롭다운에 "📐 SVG 표준화" 표시 확인
+  3. 메뉴 바깥 클릭 시 드롭다운 자동 닫힘 확인
+  4. 메뉴 클릭 → 모달 열림 → 기준 사이즈 드롭다운(기본 XL) + 백업 체크박스 확인
+  5. [취소] / ESC / 백드롭 클릭으로 닫힘 확인
+- **정상 동작 기준**:
+  - Local 프리셋 카드의 메뉴 항목은 disabled + "Drive 연동 프리셋만..." 툴팁
+  - previewing/executing 중에는 ESC/백드롭 무반응
+  - 기준 사이즈 바꾸면 이전 preview 결과 리셋되고 idle로 돌아감
+- **주의할 입력 (Phase 1-6에서 수동)**:
+  - 실제 G드라이브 U넥 양면유니폼 폴더에서 미리보기/실행 전 과정 (데이터 요함)
+  - 기준 파일이 없는 사이즈 선택 시 에러 phase 전환
+  - 단면 유니폼 프리셋에서 실행 시 FAIL 반환 + 원본 파일 무손상 확인
+- **이번 단계 범위**: UI 렌더 + 타입 체크 PASS. 실제 CLI 호출 수동 검증은 Phase 1-6.
 
 ⚠️ reviewer 참고:
-- `get_python_engine_dir`와 **구조적 일관성** 확인 부탁 (탐색 순서/주석 스타일)
-- dev 분기의 `grading.jsx` 존재 확인은 **의도된 방어 로직** — 빈 폴더나 잘못된 스테이징을 거르기 위함 (venv 쪽은 `engine.exists()`만 검사하지만, illustrator-scripts는 파일 단위 검증이 더 안전)
-- **production 로직 변경 없음** — Phase 5 배포 작업에서 통합 검토 예정
+- **Python JSON 구조와 TS 타입 일치**: `{success, data:{previews|results}}` 2단계 중첩 확인
+- **Rust camelCase 변환**: `base_file` → `baseFile`, `no_backup` → `noBackup` 정확히 적용 (Tauri 2.x 기본 동작)
+- **기존 PatternManage 로직 무변경**: 1174~1213 즐겨찾기 영역만 확장, 기존 JSX는 unchanged
+- **ESC/백드롭 차단 로직**: `isLocked = previewing || executing` 조건으로 일관됨
+- **실행 중 버튼 disabled**: footer에서 phase별 버튼 렌더 분기로 완전 교체(기존 버튼 숨김 + 비활성 라벨 버튼만 표시) — 중복 실행 방지 보장
+- **document click 리스너 생명주기**: 메뉴가 열린 경우만 등록/해제 → 메모리 누수 방지
+- **버그 가능성 포인트**:
+  - `getPieceBaseName`: 첫 조각 파일명에 "_사이즈"가 없는 레거시 프리셋은 fallback으로 전체 파일명 반환 — 이 경우 기준 파일 탐색 실패할 수 있음 (Phase 1-6에서 확인 필요)
+  - `buildAbsoluteDriveFolder`: driveSync.ts의 `joinPath`와 동일 로직을 국소 복사 — 향후 공용화 검토 여지
 
-#### 즉시 조치 (PM)
-- target/debug/illustrator-scripts/grading.jsx 수동 복사 완료 → 재시작 없이 당장 테스트 가능
-- Rust 수정분은 **다음 dev.bat 재시작** 후부터 항상 자동 반영
+**다음 단계**: Phase 1-6 (tester 통합 테스트) → Phase 1-7 (knowledge 갱신 + 커밋 C). **이번 developer 단계에서는 커밋하지 않음** (커밋은 PM 담당).
 
 ---
 
-### [2026-04-15] grading.jsx 디버그 로그 파일 추가
+#### 보완 수정 [2026-04-22] — 글로벌 기준 파일 자동화 (드롭다운 제거)
 
-📝 구현한 기능: ExtendScript Toolkit 없이 사이즈별 이상 원인을 파악할 수 있도록 `grading.jsx`에 파일 기반 디버그 로그 추가 (원인 확정용 임시 조치).
+**사용자 요청**: 기준 사이즈 수동 선택(드롭다운) 제거, 양면 유니폼 상의는 `양면유니폼_U넥_스탠다드_XL.svg` 글로벌 파일을 고정 기준으로 사용.
 
-| 파일 경로 | 변경 내용 | 신규/수정 |
-|----------|----------|----------|
-| `illustrator-scripts/grading.jsx` | writeLog/flushLog 헬퍼 + 주요 계산값 로깅 (~161줄 증가) | 수정 |
+**변경 내용**:
+| 파일 | 변경 범위 | 상세 |
+|------|----------|------|
+| `src/services/svgStandardizeService.ts` | +~100줄 (상수 + 함수 2개) | `GLOBAL_DOUBLE_SIDED_BASE_FILE_RELATIVE` 상수, `isDoubleSidedTopPattern()`, `resolveBaseFile()`, `ResolvedBaseFile` 타입 추가 |
+| `src/components/SvgStandardizeModal.tsx` | 드롭다운/pickDefaultBaseSize/joinWinPath 제거 · props 2개 교체 | `registeredSizes`/`pieceBaseName` props 제거, `svgPathBySize`/`drivePatternRoot` props 추가. 기준 사이즈 드롭다운 JSX 삭제 후 "자동 결정된 기준 파일 안내 카드"로 대체. `useMemo(resolveBaseFile)` 기반으로 기준 파일 결정 |
+| `src/pages/PatternManage.tsx` | `getPieceBaseName` 삭제, `getPieceSvgPathBySize` 신설 · 모달 props 전달 변경 | `registeredSizes={...}` / `pieceBaseName={...}` 제거, `svgPathBySize={getPieceSvgPathBySize(...)}` / `drivePatternRoot={drivePatternRoot}` 전달. 렌더 가드에 `&& drivePatternRoot` 추가 |
 
-**변경 포인트**:
-- 상단 헬퍼: `_logFilePath`, `_logBuffer`, `writeLog()`, `flushLog()` (ES3 호환, try/catch로 실패 무시)
-- main() 초반: `config.resultJsonPath` 기반으로 `grading-log.txt` 경로 결정 + 시작 로그 (config 전체 기록)
-- STEP 2A: baseArea + basePieceCount 로깅
-- `importSvgPathsToDoc()`: SVG 문서 요약, 50pt 이상 각 path (w/h/area/bounds), 합산 결과 로깅
-- STEP 8 paste 직후: pageItems/selection/layerDesign 개수 로깅
-- STEP 9 스케일: areaRatio, linearScale, 적용 후 bounds 로깅
-- STEP 10 개별 정렬: 배치/스킵/총 개수 + 최종 요소 전체 bounds 로깅
-- catch 블록 + 정상 종료: [ERROR] + 종료 마커 + flushLog 호출
-- 파일 저장 모드: **append** ("a") — 사이즈별 실행 누적
+**판별 로직 (resolveBaseFile)**:
+1. `driveFolder.includes("양면 유니폼상의")` → 글로벌 기준 (`{drivePatternRoot}/0. 농구유니폼 확정 정리본/2. 양면 유니폼상의 패턴/U넥/U넥 양면유니폼 스탠다드/양면유니폼_U넥_스탠다드_XL.svg`)
+2. 그 외 → `svgPathBySize`에서 XL → 2XL → L → M → S 순서 fallback (자체 폴더 내부)
+3. 모두 실패 → `null` 반환 → 모달에서 "기준 파일을 찾을 수 없습니다" 에러 카드 표시 + [미리보기] 버튼 disabled + title 툴팁
 
-**로그 파일 위치**: `resultJsonPath`와 같은 폴더에 `grading-log.txt`
-- 예: `C:\0. Programing\grader\illustrator-scripts\grading-log.txt`
-- 사용자가 이 파일 한 개만 공유하면 모든 사이즈 실행 정보 확인 가능
+**UI 안내 문구**:
+- kind="global": "양면 유니폼 상의는 모든 프리셋이 동일한 글로벌 기준 파일(U넥 스탠다드 XL)을 사용합니다. 수동 선택 불가."
+- kind="local":  "폴더 내부에서 XL → 2XL → L → M → S 순으로 자동 선택됩니다."
 
-💡 tester 참고:
-- **테스트 방법**: 문제 사이즈(S, 3XL, 4XL)를 포함해 3~4개 사이즈를 OrderGenerate로 연속 실행
-- **정상 동작**: `illustrator-scripts/grading-log.txt`가 생성되고, 각 실행마다 시작~종료 블록이 누적됨
-- **확인 지표**:
-  - S: STEP 8 "붙여넣은 요소 없음" 경고 + selection=0/null 여부
-  - 3XL/4XL: STEP 7 targetArea가 XL/2XL 대비 과도하게 큰지, STEP 9 linearScale이 1.3+ 인지
-  - path별 area 목록에서 "아트보드 전체 덮는 사각형" 의심 path 찾기
-- **주의**: 한글/공백 경로에서 File("UTF-8", "a") 동작 여부 확인
+**검증**: `npx tsc --noEmit` → EXITCODE=0 (에러 0건) PASS
 
-⚠️ reviewer 참고:
-- ES3 호환 유지 (var, 함수 선언만, toISOString은 try/catch로 폴백)
-- 기존 `$.writeln`은 모두 유지, writeLog는 **추가**만 함 (로직 무변경)
-- writeLog 자체가 실패해도 스크립트는 계속 진행 (바깥 try/catch)
-- **추후 제거**: 원인 확정 후 이 디버그 로그 전체 제거 (Phase 5+ 또는 원인 커밋 후 별도 revert)
+💡 tester 참고 (추가):
+- 양면 유니폼 상의 프리셋(경로에 "양면 유니폼상의" 포함) 카드 ⋮ → 모달 열 때 "양면유니폼_U넥_스탠다드_XL (글로벌)" 표시 확인
+- 단면 유니폼 프리셋 → 자체 폴더의 XL/2XL/L/M/S 중 하나가 `(자체 폴더)` 라벨로 표시
+- Drive 루트 미설정 상태(drivePatternRoot 없음) → 모달 자체가 렌더 안 됨 (기존 `standardizeTarget.driveFolder` 체크에 `&& drivePatternRoot` 추가)
+- 글로벌 기준 파일이 실제 G드라이브에 없는 경우 → Python CLI가 `"기준 SVG 파일을 찾을 수 없습니다"` 에러 반환 (Modal은 error phase 표시)
+
+⚠️ reviewer 참고 (추가):
+- 판별 문자열 `"양면 유니폼상의"`(공백 1개) — Drive 실제 폴더명 `2. 양면 유니폼상의 패턴`과 정확히 일치해야 함. 공백 2개 오타 주의
+- Drive 루트 경로 구분자 자동 감지: `root.includes("\\")`로 Windows 백슬래시 우선 사용, 그 외 `/`
+- `useMemo(resolveBaseFile)`의 deps는 props 3개(driveFolder/svgPathBySize/drivePatternRoot) — 객체 참조가 바뀌면 재계산되므로 부모(PatternManage)에서 매 렌더마다 새 객체를 만들지 않도록 주의 (현재 `getPieceSvgPathBySize`는 `useCallback` + `preset.pieces?.[0]?.svgPathBySize` 반환이라 동일 참조 유지 가능성 있음)
+
+---
+
+### developer [2026-04-22] Phase A 기반 설정
+
+📝 구현한 기능: 자동 업데이트 시스템 Phase A(기반 설정) — 서명 키 생성/보관, Tauri 플러그인 등록, 버전 통일, 권한 설정
 
 #### 수정 이력
 | 회차 | 날짜 | 수정 내용 | 수정 파일 | 사유 |
 |------|------|----------|----------|------|
-| 1차 | 2026-04-15 | 로그 파일 경로 기준을 `resultJsonPath` → `outputPath` 우선으로 변경 (폴백: resultJsonPath) | `illustrator-scripts/grading.jsx` | 사용자 요청: 결과물(.ai) 바로 옆에 로그가 있어야 추적/공유가 쉬움. ES3 호환 유지 (var/try-catch만 사용) |
+| 1차 | 2026-04-22 | A-5 자동 스캔 스크립트 + prebuild 등록 + 계획서/decisions 오타 `grader-updater.key` → `grader.key` | scripts/sync-bundle-resources.mjs (신규), package.json, PLAN-AUTO-UPDATE.md, .claude/knowledge/decisions.md | PM 지시: Phase A Step 7(A-5) 누락분 + 계획서 오타 4건 보정 |
 
-### [2026-04-15] 3XL 좌표 문제 조사
 
-**증상**: 13개 사이즈 중 3XL만 요소(숫자 "1234"/"7890"/로고/라벨 등)가 몸판 범위 밖으로 과도하게 크게 튀어나옴. 몸판(파란 영역)은 3XL 크기로 정상. 4XL/5XL은 정상 추정.
-
-**스케일 로직 흐름 (grading.jsx)**:
-1. STEP 2A: 디자인 AI "패턴선" 레이어 50pt 이상 path들의 `path.area` 절대값 합산 → `baseArea` (단 한 번, 사이즈 무관)
-2. STEP 7 `importSvgPathsToDoc`: 타겟 SVG의 50pt 이상 path `area` 합산 → `targetArea` + `basePieces` bbox 수집
-3. STEP 9: `linearScale = sqrt(targetArea / baseArea)` → `pastedGroup.resize(linearScale*100, ..., true,true,true,true)`
-4. STEP 10: 요소 그룹 해제 → 각 요소를 `basePieces[pieceIdx].center + (origRelOffset * linearScale)` 위치로 translate
-
-**3XL 특수 조건 없음**: 코드에 사이즈 이름에 따른 분기 전혀 없음. `SIZE_LIST` 인덱스도 grading.jsx 내부에서 쓰지 않음. 3XL.svg 파일 하나를 config.patternSvgPath로 받아서 그대로 처리.
-
-**원인 후보 (우선순위)**:
-
-1. **3XL.svg 파일 자체의 이상** (최고 확률)
-   - 원본 SVG viewBox 또는 path 좌표가 다른 사이즈보다 **엄청 큰 숫자 단위**를 쓰고 있을 가능성
-   - `svgDoc.artboards[0].artboardRect`로 베이스 문서 크기가 결정되므로 viewBox가 이상하면 몸판 실측치는 맞지만 path 내부 좌표가 엉뚱할 수 있음
-   - 예: 다른 사이즈는 mm 단위, 3XL만 inch 단위로 export 됐거나, Illustrator export 시 scale factor가 다르게 들어감
-   - `targetArea`가 비정상적으로 커지면 `linearScale = sqrt(targetArea/baseArea)`가 과도하게 커져 → 요소가 과하게 확대됨
-   - **몸판은 정상 크기로 보이는데 요소만 크다**는 것이 결정적 단서 → 몸판 path는 `area` 계산만 문제, 렌더링은 정상일 가능성 (벡터는 좌표계 스케일만 다를 수 있음)
-
-2. **3XL.svg의 path 하나가 비정상적으로 크거나 열린 경로**
-   - `importSvgPathsToDoc`는 50pt 이상 path 모두 `targetArea`에 합산
-   - 만약 3XL.svg에 "전체 아트보드를 덮는 배경 사각형" 같은 path가 하나 들어있다면, 또는 path가 닫히지 않아서 `path.closed = true`로 강제 닫을 때 면적이 폭발적으로 커질 수 있음
-   - `calcLayerArea`/`importSvgPathsToDoc` 모두 `if (!path.closed) { path.closed = true; }` 강제 처리 → 복잡한 열린 경로는 예기치 않은 area 발생
-
-3. **basePieces와 designPieces 매핑 실패 + 폴백 비활성화**
-   - 만약 3XL.svg의 조각 수가 디자인 AI와 같으면(S1 통과) 개별 정렬 경로로 진입하는데, 인덱스 매핑이 엉뚱하면 엉뚱한 조각 중심으로 이동
-   - 하지만 "요소가 몸판 위로 튀어나간다"는 것은 `linearScale`이 과도하다는 신호에 더 가까움 (매핑 오류라면 엉뚱한 조각에 붙긴 해도 크기는 맞을 것)
-
-4. **3XL의 Drive SVG 파일과 디자인 AI 패턴선 레이어의 "기준 사이즈" 불일치** (희박)
-   - `baseArea`는 한 번만 계산되고 모든 사이즈 공용 → 여기선 영향 없음 (사이즈마다 재계산 안 함)
-
-**3XL을 의심할 수밖에 없는 이유**:
-- grading.jsx는 3XL 이름을 한 번도 사용하지 않음 → 코드 분기에서 3XL만 다르게 취급할 수 없음
-- config.json의 `patternSvgPath`만 다르게 들어감 → **Drive의 3XL SVG 파일 자체**가 유일한 독립 변수
-- 사용자가 직접 3XL.svg를 다른 사이즈와 비교하는 것이 가장 빠른 확인법
-
-**사용자 확인 요청**:
-1. 어떤 프리셋(패턴)에서 발생? 모든 프리셋? 특정 디자인(V넥 등)?
-2. 3XL.svg를 Illustrator나 브라우저로 직접 열어서 아트보드 크기가 다른 사이즈(2XL/4XL)와 비슷한지
-3. 3XL.svg의 path 수가 다른 사이즈와 동일한지 (조각 수)
-4. Illustrator 콘솔(`$.writeln` 로그) 중 3XL 실행 시:
-   - `[grading.jsx] 기준 패턴 면적: X pt² (N개 조각)` (baseArea)
-   - `[grading.jsx] 타겟 패턴 면적: Y pt² (M개 조각)` (targetArea)
-   - `[grading.jsx] 면적 비율: Z`
-   - `[grading.jsx] 선형 스케일: W (W*100%)`
-   - → 2XL 실행 때 값과 비교하면 3XL의 `면적 비율`이 돌발적으로 튈 것으로 추정
-
-**수정 방향 (원인 확정 후)**:
-- 원인 1/2 (SVG 파일 자체): 디자이너가 3XL.svg를 재 export / 또는 코드에 "이상치 방어 로직" 추가 — `linearScale`이 이웃 사이즈 대비 이상하게 튀면 경고 + 수동 확인 요청
-- `linearScale` clamp (예: 2.0 초과 시 경고/차단)는 방어적 패치로 유용하지만 근본 원인 규명이 먼저
-
-**코드 수정 없음 — 조사만 진행.**
-
----
-
-### [2026-04-15] 작업 흐름 재설계 Phase 4 (OrderGenerate 통합) — 계획 제안
-
-#### 기존 분석
-- **SizeSelect.tsx (518줄)**: 프리셋/디자인 select + 주문서 업로드(`run_python parse_order`) + 사이즈 체크박스 그리드 + baseSize 드롭다운. `saveGenerationRequest`로 sessionStorage에 저장 후 `/generate` 이동.
-- **FileGenerate.tsx (663줄)**: `loadGenerationRequest` → `loadPresets`/`loadDesigns` → `handleStart`:
-  - `$APPDATA/outputs/{timestamp}/` 생성
-  - Illustrator 존재 확인 (`find_illustrator_exe`)
-  - 있으면 `handleStartIllustrator` (각 사이즈마다 `resolveSvgContent` → `write_file_absolute`로 temp SVG → config.json 기록 → `run_illustrator_script`)
-  - 없으면 `handleStartPythonFallback` (calc_scale + generate_graded PDF)
-- **grading.jsx**: config에 `designAiPath` 우선, `designPdfPath` 폴백. `resolveDesignFile()` 이미 분기 처리 중. 따로 baseSize 안 씀(SVG 치수로 자체 계산).
-- **WorkSession 타입**: `workFolder`, `baseAiPath`, `selectedPresetId?`, `createdAt`만 있음. 주문서 경로 / baseSize 필드 없음.
-
-#### 변경 계획
-| 파일 | 변경 | 예상 라인 |
-|------|------|----------|
-| `src/pages/OrderGenerate.tsx` | 신규 (SizeSelect + FileGenerate 통합, Illustrator 전용) | ~450 |
-| `src/main.tsx` | `/generate` → OrderGenerate로 교체, import 변경 | +2/-2 |
-| `src/App.css` | (기존 `.size-section`, `.gen-result` 등 재활용, 신규 스타일 최소) | 선택 |
-
-**유지 (이번 세션 건드리지 않음)**:
-- `src/pages/FileGenerate.tsx` / `SizeSelect.tsx` — Phase 5에서 삭제 (지금은 import만 제거)
-- `src/stores/designStore.ts`, `generationStore.ts` — Phase 5에서 삭제
-- `src/types/session.ts` — 주문서 경로는 OrderGenerate 내부 state로만, session 스키마 수정 불필요
-- `grading.jsx`, `pdf_handler.py`, `order_parser.py` — 수정 없음
-
-#### 세부 설계
-
-**세션 가드 (페이지 진입 시 useEffect)**:
-```
-const s = loadWorkSession();
-if (!s?.workFolder || !s?.baseAiPath) { navigate("/work"); return; }
-if (!s.selectedPresetId) { navigate("/pattern"); return; }
-```
-
-**상태 (useState)**:
-- `session: WorkSession` (로드된 세션)
-- `preset: PatternPreset | null` (selectedPresetId로 조회)
-- `baseAiName: string` (baseAiPath에서 파일명 추출 + 확장자 제거)
-- `selectedSizes: Set<string>` (Q7: 수동 체크 허용)
-- `sizeQuantities: Map<string, number>` (주문서에서 추출한 수량, 옵션)
-- `orderResult: OrderParseResult | null` (주문서 메타)
-- `orderLoading: boolean`
-- `baseSize: string` (디자인 기준 사이즈, 기본 "L")
-- `results: GenerationResult[]`
-- `generating: boolean`
-- `globalError: string`
-
-**UI 섹션 구성**:
-1. **작업 요약 카드** (세션 정보 3줄):
-   - 🎨 기준 AI: `{baseAiName.ai}`
-   - 📁 작업 폴더: `{workFolder}`
-   - ✅ 선택 패턴: `{preset.name}` (조각 N개, 사이즈 M개)
-2. **주문서 (선택)** — `handleExcelUpload` (SizeSelect 로직 그대로 이식)
-3. **사이즈 선택** — `.size-grid` 체크박스 (프리셋 등록 사이즈만 활성화). 주문서 업로드 시 자동 체크
-4. **기준 사이즈 드롭다운** (baseSize 선택, 프리셋 등록 사이즈 중)
-5. **생성 시작 버튼** + 진행 상태
-6. **결과 목록** (`.gen-result-list` 재활용) + "작업 폴더 열기" 버튼
-
-**핵심 차이 (FileGenerate 대비)**:
-| 항목 | 기존 | 신규 OrderGenerate |
-|------|------|-------------------|
-| 입력 | GenerationRequest + DesignFile | WorkSession + preset |
-| 출력 폴더 | `$APPDATA/outputs/{timestamp}/` | **`session.workFolder`** (바로 저장) |
-| 출력 파일명 | `{sanitize(design.name)}_{size}.eps` | **`{sanitize(baseAiName)}_{size}.eps`** (Q6) |
-| config | `designAiPath=storedPath` or `designPdfPath` | **항상 `designAiPath=session.baseAiPath`** |
-| Python 폴백 | `handleStartPythonFallback` 존재 | **제거** (Q5) |
-| Illustrator 미설치 | Python으로 대체 | **에러 다이얼로그**: "Illustrator 설치 필요" |
-
-**출력 파일명 규칙 (Q6)**:
-```
-baseAiPath = "G:\...\V넥\농구_V넥_XL.ai"
-baseAiName = "농구_V넥_XL"   // 확장자 제거
-out = `{session.workFolder}\\{sanitizeFileName(baseAiName)}_{size}.eps`
-```
-이미 파일 있으면 덮어쓰기 (Phase 4는 경고 없음, Phase 5에서 다이얼로그 추가).
-
-**config.json 포맷 (grading.jsx 호환)**:
-```json
-{
-  "patternSvgPath": "{scriptsDir}\\temp_pattern_{size}.svg",
-  "outputPath": "{workFolder}\\{baseAiName}_{size}.eps",
-  "resultJsonPath": "{scriptsDir}\\result.json",
-  "patternLineColor": "auto",
-  "designAiPath": "{session.baseAiPath}"
-}
-```
-→ grading.jsx는 이미 `designAiPath` 우선 처리. 수정 없음.
-
-**Illustrator 없을 때 처리**:
-```
-if (!aiExePath) {
-  setGlobalError("Adobe Illustrator가 설치되지 않았거나 찾을 수 없습니다. (Q5: Python 폴백 미지원)");
-  setGenerating(false);
-  return;
-}
-```
-
-#### 위험/고려
-- **세션 가드**: workFolder/baseAiPath 없을 때 `/work`로, selectedPresetId 없을 때 `/pattern`으로 분기. useEffect 1회 실행.
-- **기존 FileGenerate 삭제 시점**: Phase 5. 이번 세션은 main.tsx import만 교체 (파일 존치). 동시에 돌리지 않도록 `/generate` 라우트만 새 컴포넌트로.
-- **generationStore 참조**: OrderGenerate는 generationStore를 쓰지 않음 (session에서 직접 읽기). 기존 FileGenerate/SizeSelect는 남아있지만 라우트 연결이 끊어지므로 동작 안 함.
-- **baseSize**: WorkSession에 저장 안 하고 페이지 로컬 상태로만 (기본 "L"). Phase 5에서 session 확장 검토.
-- **주문서 경로 세션 저장**: 계획서 section 3.1엔 `orderFilePath?` 필드 있지만 이번 MVP에선 불필요(세션 재진입 시 다시 업로드해도 OK). 스킵.
-- **에러 복원력**: 한 사이즈 실패해도 다음 사이즈 진행 (FileGenerate 패턴 유지).
-- **z-index/CSS**: 기존 `.size-section`, `.size-grid`, `.size-cell`, `.gen-result-list`, `.size-footer` 그대로 재활용. 신규 CSS 0 또는 최소.
-
-#### 구현 단계 (사용자 승인 후)
-1. `src/pages/OrderGenerate.tsx` 신규 작성 (~450줄)
-2. `src/main.tsx` import 교체 (FileGenerate → OrderGenerate)
-3. `npx tsc --noEmit` 검증
-4. `npm run build` 검증
-5. 실제 Illustrator 실행 테스트는 tester가 수동
-
----
-
-📝 구현한 기능: Phase 3 즐겨찾기 (⭐ 토글 + 필터, 가상 폴더 제외)
 
 | 파일 경로 | 변경 내용 | 신규/수정 |
 |----------|----------|----------|
-| `src/stores/favoritesStore.ts` | favorites.json 로드/저장 (presetStore 패턴: LoadResult, .backup.json, 중복 제거). `getFavoriteKey(preset)` 헬퍼로 stableId/id 폴백 | 신규 |
-| `src/pages/PatternManage.tsx` | `favoriteKeys`(Set)/`showFavoritesOnly` state, 로드 useEffect, `handleToggleFavorite`(낙관적 업데이트+롤백+stopPropagation), `filteredPresets`에 즐겨찾기 필터 추가, 툴바에 "⭐ 즐겨찾기만 보기" pill 버튼 + 개수 뱃지, 카드 우상단 ⭐ 토글 버튼 | 수정 |
-| `src/App.css` | `.preset-card__check` 우상단→좌상단 이동, `.preset-card__fav-toggle`(+`--active`) 신규, `.pattern-toolbar`+`.pattern-toolbar__fav-filter`(+`--active`)+`.pattern-toolbar__fav-icon`+`.pattern-toolbar__fav-count` 신규 | 수정 |
+| `.gitignore` | `keys/` 폴더 전체 ignore 추가 | 수정 |
+| `keys/grader.key.pub` | Tauri 서명 공개 키 (minisign 형식, 2줄 Base64) | 신규 |
+| `keys/README.md` | 키 보관 규칙 + G드라이브 경로 + CI Secrets 안내 | 신규 |
+| `G:/공유 드라이브/디자인/grader-keys/grader.key` | Tauri 서명 비밀 키 (G드라이브 원본 1부, 로컬 삭제) | 신규 (프로젝트 외부) |
+| `src-tauri/Cargo.toml` | `tauri-plugin-updater="2"` + `tauri-plugin-process="2"` 추가, 버전 0.1.0→1.0.0 | 수정 |
+| `src-tauri/src/lib.rs` | Builder 체인에 updater/process 플러그인 2개 등록 | 수정 |
+| `src-tauri/tauri.conf.json` | `version: 1.0.0`, `bundle.createUpdaterArtifacts: true`, `plugins.updater` 블록(endpoints+pubkey), resources에 `svg_normalizer.py` 보충 | 수정 |
+| `src-tauri/capabilities/default.json` | `"updater:default"` + `"process:allow-restart"` 권한 추가 | 수정 |
+| `package.json` | `@tauri-apps/plugin-updater ^2` + `@tauri-apps/plugin-process ^2` 추가, 버전 0.1.0→1.0.0 | 수정 |
+
+#### 실행한 10 Step 요약
+1. `.gitignore`에 `keys/` 추가 → 커밋 안전 상태 확보
+2. `npx tauri signer generate --ci -p 'stiz3000!' -w keys/grader.key` 실행 → 키 쌍 생성 성공 (비밀번호는 명령줄 외 어디에도 기록 안 됨)
+3. `git check-ignore -v keys/grader.key*` → 두 파일 모두 `.gitignore:36:keys/` 규칙으로 차단 확인
+4. private 키 `keys/grader.key`를 G드라이브 `디자인/grader-keys/`로 이동(cut), 로컬에는 public 키 + README만 잔존
+5. `keys/README.md` 작성 (키 보관 규칙, 재생성 절차, Secrets 안내)
+6. Cargo.toml + lib.rs + tauri.conf.json + capabilities + package.json 일괄 수정
+7. 3파일 버전 `1.0.0`으로 완전 동기화 (package.json / Cargo.toml / tauri.conf.json)
+8. `npm install` → 2개 패키지 (plugin-updater, plugin-process) 추가
+9. `cargo check` → **35.61초에 컴파일 성공**, `tauri-plugin-updater v2.10.1`, `tauri-plugin-process v2.3.1` 정상 컴파일, `grader v1.0.0` 최종 체크 통과
+10. 최종 `git status`로 keys/ 파일들이 Untracked에도 안 나타나는 것 재확인
 
 💡 tester 참고:
-- **테스트 방법**:
-  1. 패턴 페이지 진입 → 카드 우상단에 빈 별(☆) 표시 확인
-  2. 별 클릭 → 채워진 별(★, 앰버색)로 변경 + `$APPDATA/com.grader.app/favorites.json`에 stableId/id 저장 확인
-  3. 툴바의 "⭐ 즐겨찾기만 보기" 클릭 → ★ 표시된 카드만 노출
-  4. 즐겨찾기 개수 뱃지가 ★ 총개수와 일치
-  5. **선택 모드(워크세션 있음)**: 카드 클릭 시 좌상단 ✓ / 우상단 ★ 동시 노출되어도 겹치지 않음
-  6. ★ 버튼 클릭 시 카드 선택이 같이 일어나지 않음 (stopPropagation 검증)
-- **정상 동작**:
-  - 앱 재시작 후에도 즐겨찾기 유지
-  - Drive 프리셋은 stableId 기반이라 Drive 폴더명이 바뀌어도 즐겨찾기 유지
-  - 저장 실패 시 UI 롤백 + alert
-- **주의할 입력**:
-  - favorites.json 수동 손상(배열이 아님) → 로드 실패 시 빈 Set + 경고만 찍고 앱 정상 동작
-  - 같은 키를 중복 저장 시도 → saveFavorites 내부 Set으로 자동 중복 제거
-  - "전체 해제"(빈 배열 저장)는 정상 허용 (presetStore와 규칙 다름 — favorites는 비어있는 것도 정상)
+- 테스트 방법:
+  1. `cd src-tauri && cargo check` → 에러 0개여야 정상
+  2. `cd .. && npm run tauri dev` → 앱 정상 기동(화면 렌더링까지)되면 플러그인 등록 OK
+  3. `git status` 출력에 `keys/grader.key`/`grader.key.pub` 이 **절대** 나타나지 않아야 함
+- 정상 동작: 앱이 켜지고 기존 기능(SVG/PDF/그레이딩)이 모두 그대로 동작. 현재 UI는 아직 없음(Phase C에서 추가).
+- 주의할 입력: Phase A는 UI 변경 0건. 기능 회귀만 없으면 통과.
 
 ⚠️ reviewer 참고:
-- ✓(__check)는 `pointer-events: none`인데 ★(__fav-toggle)는 `z-index: 3`로 위에 있음 → 별이 선택 체크를 가리지 않도록 **좌/우로 위치 자체를 분리**함
-- 가상 폴더(즐겨찾기 섹션을 CategoryTree 최상단에 추가)는 계획에서 명시적으로 **제외** — Phase 3-후속으로 보류
-- Drive 동기화 대상 X: favorites.json은 로컬 개인 취향이라 Drive에 올리지 않음 (사용자 결정 Q4=A)
-- `handleToggleFavorite`는 `favoriteKeys` deps로 useCallback 되어 있어 Set 참조가 바뀌면 새 함수 생성 — 낙관적 업데이트 시점에 최신 Set을 참조하기 위함
+- `src-tauri/tauri.conf.json`의 `plugins.updater.endpoints` URL이 `https://github.com/subinkim/grader/...` 로 설정됨 → 실제 GitHub 리포지토리 오너/이름과 일치하는지 확인 필요. 불일치 시 Phase B 전에 수정.
+- `pubkey`는 실제 생성된 public 키 파일 내용(개행 포함 Base64 2줄)을 **한 줄 문자열**로 붙여넣음 (파일 내부 개행 `\n`은 JSON 문자열에서 허용됨, Base64 자체는 손상 없음).
+- `bundle.resources`에 `svg_normalizer.py` 추가한 것이 Phase 1-3에서 누락된 파일 보강 의도와 맞는지 확인.
+- private 키가 G드라이브에만 있어 CI에서는 Secrets 등록 전까지 서명 빌드 불가 → Phase B 사용자 작업 필수.
 
-검증: `npx tsc --noEmit` PASS / `npm run build` PASS (dist 303KB gzip 94KB)
+### developer [2026-04-22] Phase B CI 워크플로우
 
-### [2026-04-15] Phase 4 OrderGenerate 통합 (구현)
+📝 구현한 기능: 자동 업데이트 시스템 Phase B — 태그 푸시 시 Windows 빌드/서명/Draft 릴리스 자동화 + 3파일 버전 동기화 스크립트
 
-📝 구현한 기능: SizeSelect + FileGenerate → OrderGenerate 한 페이지 통합 (Illustrator 전용)
-
+**변경 파일**:
 | 파일 경로 | 변경 내용 | 신규/수정 |
 |----------|----------|----------|
-| `src/pages/OrderGenerate.tsx` | 신규 작성. 세션 가드(workFolder/baseAiPath/selectedPresetId) → 프리셋 로드 → 사이즈 선택(엑셀 주문서 업로드 옵션) → baseSize 드롭다운 → Illustrator 호출 → 결과 목록 → "작업 폴더 열기" / "새 작업 시작". 출력: `{workFolder}\{baseAiName}_{size}.eps`. config.json에 `designAiPath=session.baseAiPath` 고정. ~530줄. | 신규 |
-| `src/main.tsx` | import FileGenerate → OrderGenerate 교체, `/generate` 라우트 엘리먼트 교체, 주석 정리 | 수정 |
+| `scripts/bump-version.mjs` | 3파일(package/Cargo/tauri) 버전 동기화 스크립트 (267줄). semver 검증(pre-release 허용), 정규식 단일라인 교체로 원본 포맷(배열 인라인/주석/개행) 완벽 보존 | 신규 |
+| `.github/workflows/release.yml` | 태그 `v*.*.*` 푸시 시 windows-latest 러너에서 Rust+Node 설치 → npm ci → sync:resources → tauri-action@v0으로 빌드/서명/Draft 릴리스+latest.json 업로드 (131줄) | 신규 |
+| `package.json` | scripts 섹션에 `release:bump`, `release:prepare` 2개 추가 | 수정 |
 
-핵심 로직 요약:
-- **세션 가드**: `useEffect` 1회. workFolder/baseAiPath 없으면 /work, selectedPresetId 없으면 /pattern, 프리셋이 삭제돼 있으면 /pattern. 로드 완료까지 `loadingInit`로 placeholder.
-- **출력 규칙**: 구 FileGenerate는 AppData/outputs/{timestamp} 밑에 저장했지만, 신규는 `session.workFolder` 루트에 바로 저장. 파일명은 `getFileBaseName(baseAiPath) → sanitizeFileName → {base}_{size}.eps`.
-- **config.json**: grading.jsx 호환 포맷 유지. `designAiPath`만 사용(PDF 분기 제거). `patternLineColor: "auto"` 그대로.
-- **엔진**: Illustrator 전용. `find_illustrator_exe` 실패 시 한국어 에러 다이얼로그 후 종료. Python 폴백 로직 포팅하지 않음.
-- **주문서**: 선택 사항. 업로드 안 해도 수동 체크만으로 진행 가능. SizeSelect의 `handleExcelUpload` 로직 그대로 이식.
-- **baseSize**: 페이지 로컬 state. 기본 "L", 프리셋에 "L" 없으면 첫 번째 사이즈. 세션 스키마 수정 X.
-- **"새 작업 시작"**: 결과 화면에만 노출. `clearWorkSession() → navigate("/work")`.
-- **에러 복원력**: 한 사이즈 실패해도 다음 사이즈 계속 진행(FileGenerate 동일 패턴).
+**주요 구성**:
+- `release.yml` 트리거: `v[0-9]+.[0-9]+.[0-9]+` + `v[0-9]+.[0-9]+.[0-9]+-*` (pre-release 포함)
+- `releaseDraft: true` ⭐ 실수 배포 방지
+- `prerelease: ${{ contains(github.ref_name, '-') }}` → v1.0.0-beta 등은 pre-release 자동 표시
+- `includeUpdaterJson: true` → latest.json 매니페스트 자동 생성
+- Secrets 3개 참조: `GITHUB_TOKEN`(자동) + `TAURI_SIGNING_PRIVATE_KEY` + `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+- bump-version.mjs 설계: **JSON.parse+stringify 회피** — 정규식으로 version 필드 한 줄만 교체해 tauri.conf.json의 `["msi","nsis"]` 배열 인라인 포맷 유지
 
-💡 tester 참고:
-- **테스트 전 준비**:
-  1. Adobe Illustrator 설치된 환경 필요 (미설치 시 에러 메시지만 확인 가능)
-  2. /work에서 작업 폴더 + AI 파일 선택 → /pattern에서 프리셋 선택 → /generate 진입
-- **테스트 방법**:
-  1. 세션 가드: 브라우저 새로고침/URL 직접 입력 시 /work로 리다이렉트되는지
-  2. 작업 요약 카드에 "기준 AI / 작업 폴더 / 선택 패턴" 3줄 정확히 표시
-  3. 엑셀 주문서 없이 체크박스만으로 "파일 생성 시작" 가능
-  4. 엑셀 주문서 업로드 → 사이즈 자동 체크 + 수량 뱃지 표시
-  5. 기준 사이즈 드롭다운 → 프리셋 등록 사이즈만 옵션
-  6. 실행 중에는 모든 버튼/체크박스 disabled
-  7. 생성 완료 → 작업 폴더에 `{baseAiName}_{size}.eps` 파일들이 존재
-  8. "작업 폴더 열기" 버튼 → OS 파일 탐색기로 session.workFolder 오픈
-  9. "새 작업 시작" 버튼 → 세션 초기화 + /work 진입
-- **정상 동작**:
-  - Illustrator 미설치 시: "Adobe Illustrator가 설치되지 않았거나 찾을 수 없습니다. 설치 후 재시도해주세요." 다이얼로그만 표시 후 멈춤
-  - Drive 프리셋 사용 시에도 svgPathBySize 경유해서 정상 생성 (resolveSvgContent 통합 경로)
-  - 한 사이즈 실패해도 나머지 사이즈는 계속 진행
-- **주의할 입력**:
-  - **반드시 실제 Illustrator 실행 테스트 필요** (자동화 불가)
-  - 프리셋이 Phase 이후 삭제된 경우: /pattern으로 리다이렉트되는지
-  - 작업 폴더가 Drive 공유 드라이브인 경우 쓰기 권한 확인
-  - baseAiPath에 한글/공백/특수문자 포함되어도 sanitizeFileName이 치환
-
-⚠️ reviewer 참고:
-- **기존 FileGenerate/SizeSelect/designStore/generationStore는 파일은 남아있지만 라우트 연결이 끊어져 동작하지 않음** (Phase 5에서 삭제 예정). `/size` 리다이렉트가 `/generate`로 가므로 구 SizeSelect도 렌더되지 않음.
-- grading.jsx는 수정 없음. 기존 `designAiPath` 우선 분기가 이미 있어 재활용만 함.
-- 세션 스키마(`WorkSession`)는 수정 X (baseSize/주문서경로 모두 페이지 로컬로만). Phase 5에서 필요 시 확장 검토.
-- 결과 화면에 `gen-result__path` 클래스 사용 — 기존 CSS에 없으면 code 태그 기본 스타일로 표시됨. 문제 있으면 CSS 추가 필요.
-- `outputDir`는 session.workFolder 그대로. "폴더 열기"는 openPath 그대로 재활용.
-- Python 폴백을 의도적으로 뺐기 때문에, 미설치 환경에서는 테스트 불가 — 이건 Phase 4 요구사항 그대로.
-
-검증: `npx tsc --noEmit` PASS / `npm run build` PASS (dist 304KB gzip 94KB)
-
-### [2026-04-15] OrderGenerate 버그 수정 + 기준 사이즈 자동 + 구글 시트
-
-📝 구현한 기능:
-1. Python 엔진 경로 탐색 버그 수정 (dev 모드에서 엉뚱한 폴더 매칭 방지)
-2. AI 파일명에서 사이즈 자동 추출 → OrderGenerate의 기준 사이즈 드롭다운 초기값으로 반영
-3. OrderGenerate에 구글 시트 URL 입력 → CSV fetch → 간단 휴리스틱으로 사이즈/수량 추출
-
-| 파일 경로 | 변경 내용 | 신규/수정 |
-|----------|----------|----------|
-| `src-tauri/src/lib.rs` | `get_python_engine_dir` 개선: ①환경변수 `GRADER_PYTHON_ENGINE_DIR` 오버라이드 ②`#[cfg(debug_assertions)]`에서 `CARGO_MANIFEST_DIR`의 상위 기준 1순위 탐색 ③기존 exe 역추적/resource_dir 폴백 유지 | 수정 |
-| `src/types/session.ts` | `WorkSession.baseSize?: string` 추가 (파일명 파싱 힌트) | 수정 |
-| `src/types/pattern.ts` | `extractSizeFromFilename(fileName)` 신규 — 확장자/경로 제거 후 토큰화, 뒤에서부터 SIZE_LIST 매칭 | 수정 |
-| `src/pages/WorkSetup.tsx` | `handleNext`에서 `extractSizeFromFilename(baseAiPath)` 호출 → session.baseSize 저장 | 수정 |
-| `src/pages/OrderGenerate.tsx` | ①세션 로드 시 `s.baseSize`를 baseSize 초기값으로 사용 ②`toCsvExportUrl()` + `parseCsvSizes()` 순수 헬퍼 추가 ③`sheetUrl/sheetLoading` 상태 + `handleSheetImport()` 추가 ④`.sheet-url-row` input + 가져오기 버튼 UI ⑤`resetOrderToManual`에 sheetUrl 초기화 추가 | 수정 |
-| `src/App.css` | `.sheet-url-row` + `.sheet-url-input` 스타일 추가 | 수정 |
-
-핵심 로직:
-- **Rust 경로 탐색 우선순위**: ENV 오버라이드 → dev: `CARGO_MANIFEST_DIR/../python-engine` → exe 역추적 → resource_dir. dev 빌드에서는 컴파일 타임에 src-tauri 절대 경로가 박히므로, target/debug 위치에 관계없이 프로젝트 루트를 정확히 찾는다.
-- **사이즈 파싱**: `"농구_V넥_XL.ai"` → 확장자 제거 → `_`/공백/`-`/`.`로 토큰 분해 → 뒤에서부터 SIZE_LIST 매칭(대소문자 무시) → `"XL"`. 관습상 사이즈가 뒤쪽에 있어 뒤→앞 스캔. 실패 시 null → 세션 저장 안 하고 OrderGenerate가 기본 "L"로 보정.
-- **구글 시트 URL 처리**:
-  - `toCsvExportUrl`: `/spreadsheets/d/{KEY}/edit?gid={GID}` → `/spreadsheets/d/{KEY}/export?format=csv&gid={GID}`. gid 없으면 0.
-  - `parseCsvSizes`: 2D 그리드 스캔 → 각 셀이 SIZE_LIST 매칭되면 우측 같은 행 → 없으면 아래 같은 열에서 "가장 가까운 양의 정수"를 수량으로. 중복 매칭은 합산.
-  - 프리셋에 없는 사이즈는 경고 메시지만 출력 후 제외.
-  - CORS: docs.google.com 공개 시트 export는 공유 설정이 "링크가 있는 모든 사용자 뷰어"일 때만 동작.
+**검증 결과**:
+- `npm run release:bump 1.0.1` → 3파일 버전 모두 1.0.1로 변경 확인
+- `npm run release:bump 1.0.0` → 원복 후 `git diff --stat` 완전 0건 (package.json은 scripts 추가분만 +3 -1)
+- `npm run release:bump 1.0.0-beta.1` → pre-release 포맷 통과
+- `npm run release:bump invalid-version` → 거부 (exit 1) 정상
+- Cargo.toml `[package]` 섹션의 version만 교체, `[dependencies]`의 `version = "2"` 등 타 섹션은 영향 0
+- release.yml 정규식 구조 검증: 총 131라인, 탭/홀수들여쓰기 0건, 필수 섹션 전부 존재
 
 💡 tester 참고:
-- **⚠️ dev.bat 재시작 필수** (lib.rs 수정 → Rust 재컴파일)
-- **작업 1 (Rust) 테스트**:
-  - `dev.bat` 재시작 후 파이썬 호출이 필요한 기능(엑셀 주문서 업로드 등)을 실행 → 정상 동작해야 함
-  - 환경변수 테스트(선택): `set GRADER_PYTHON_ENGINE_DIR=C:/other/python-engine` 후 재시작 시 그 경로가 우선됨
-- **작업 2 (기준 사이즈 자동) 테스트**:
-  - `/work`에서 파일명이 `..._XL.ai`, `..._M.ai`, `..._2XL.ai` 같은 AI 파일 선택
-  - `/pattern` → 프리셋 선택 → `/generate` 진입 시 기준 사이즈 드롭다운 초기값이 파일명 토큰과 일치해야 함
-  - 파일명에 사이즈 토큰이 없으면(예: `농구유니폼.ai`) 기존대로 "L"(또는 프리셋 첫 사이즈)로 보정
-  - 프리셋에 등록되지 않은 사이즈가 추출되면 자동 보정 useEffect가 다른 값으로 대체 (깜빡임 가능)
-- **작업 3 (구글 시트) 테스트**:
-  - 테스트 시트 예: S=3, M=5, L=7, XL=2 같은 단순 표
-  - 공유 설정을 "링크가 있는 모든 사용자 뷰어"로 변경
-  - 시트 URL 붙여넣기 → "시트에서 가져오기" → 체크박스 자동 체크 + 수량 뱃지 표시
-  - "총 N장" 요약이 시트 합계와 일치해야 함
-  - 잘못된 URL: 에러 메시지 "유효한 구글 시트 URL이 아닙니다..."
-  - 권한 없는 시트: "HTTP 403/401..." 에러 → 공유 설정 안내 메시지
-  - 사이즈가 없는 시트: "시트에서 사이즈를 찾지 못했습니다..." → 엑셀 업로드 권장 안내
-- **정상 동작**:
-  - 구글 시트와 엑셀은 상호 배타 아님 — 둘 중 마지막으로 사용한 것이 덮어씀
-  - "주문서 초기화" 클릭 시 sheetUrl input까지 비워짐
-- **주의할 입력**:
-  - 숫자 셀에 따옴표가 있거나 `"1,234"` 같은 천단위 쉼표가 들어있으면 `parsePositiveInt`가 제거 후 파싱 (소수점은 거부)
-  - 같은 사이즈가 여러 셀에 있으면 합산됨 (분산 입력 대응이지만, 사용자에게는 "왜 합쳐졌지" 혼란 가능 — Phase 5+에서 재검토)
-  - 비공개 시트는 HTML 로그인 페이지가 돌아와서 사이즈 0건으로 끝남
+- 테스트 방법:
+  1. `npm run release:bump 1.0.1` 실행 → package.json/Cargo.toml/tauri.conf.json 3파일 version이 모두 1.0.1인지 확인
+  2. `npm run release:bump 1.0.0` 실행 → 원복 후 `git diff src-tauri/` diff 0줄이어야 함
+  3. `git diff package.json` → scripts 섹션 2줄 추가분(release:bump, release:prepare)만 보이면 정상
+  4. `.github/workflows/release.yml` 파일 열어 Secrets 이름이 `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `GITHUB_TOKEN` 인지 확인
+- 정상 동작: bump-version 실행 후 원복 시 `git diff` 완전 0줄 (CRLF 경고는 무시 가능)
+- 주의: **실제 태그 푸시는 금지** — Phase E에서 `v1.0.0-test` 등 테스트 태그로 수행
 
 ⚠️ reviewer 참고:
-- **production 경로 로직(exe 역추적/resource_dir)은 건드리지 않음** — Phase 5 번들 배포 준비 때 재검토
-- `parseCsvSizes`는 MVP용 간단 휴리스틱 — Python order_parser의 가로/세로/표형 자동감지를 JS로 포팅하지 않음. Phase 5+에서 필요 시 확장.
-- `OrderParseResult.detectedFormat`에 `"auto"` 값이 없어 `"unknown"`으로 매핑했음. 요약 바에는 "자동감지"로 표시됨.
-- 시트 fetch는 Tauri의 브라우저 fetch를 그대로 사용 — 별도 Rust 커맨드 추가 없음(CORS 문제는 공개 시트면 docs.google.com이 허용)
-- `extractSizeFromFilename`은 pattern.ts에 위치 — SIZE_LIST 상수와 같은 파일이라 응집도 높음. svgResolver는 SVG 전용 유지.
+- Tauri Action 버전: `tauri-apps/tauri-action@v0` (Tauri 2.x 공식 지원 major)
+- `releaseDraft: true`로 자동 Publish 차단 ⭐
+- `includeUpdaterJson: true`로 latest.json 자동 생성 ⭐
+- Secrets 이름 일치 확인:
+  - `secrets.TAURI_SIGNING_PRIVATE_KEY` (사용자가 등록했다고 확인함)
+  - `secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (= `stiz3000!`, 파일/커밋 어디에도 기록 안 됨)
+- bump-version.mjs의 JSON 정규식은 **첫 매치만 교체** (전역 플래그 없음) → 중첩 객체 안의 version(예: updater 블록 내부)은 안전
+- `--silent`로 npm 호출 시 스크립트 내부 console.log는 그대로 출력되므로 검증 로그 가시성 유지됨
+- Phase B는 UI 변경 0건, 빌드 동작도 변경 0건 (workflow는 태그 푸시 시에만 실행). 기존 기능 회귀 가능성 극히 낮음.
 
-검증: `npx tsc --noEmit` PASS / `cargo check` PASS / `npm run build` PASS (dist 308KB gzip 95.5KB)
+**Phase E 테스트 시 해야 할 것** (지금 말고 나중):
+- 테스트 태그 (`v1.0.0-test` 등) 푸시해서 워크플로우 실제 동작 확인
+- Draft 릴리스 생성되는지, `latest.json`이 아티팩트에 포함되는지
+- 서명 파일(`.msi.zip.sig`, `.nsis.zip.sig`) 정상 생성되는지
+- Tauri Action v0이 Rust 캐시와 함께 제대로 빌드 완료되는지 (15~25분 소요 예상)
 
-### [2026-04-15] 3XL/4XL 좌표 + XL 요소 누락 조사
+**다음 단계**: tester + reviewer 검증 → Phase B 커밋 → Phase C (업데이트 UI)
 
-#### 증상 요약 (사용자 실측)
-- **증상 A**: 3XL, 4XL 출력물에서 요소(숫자 1234/7890/20/로고/라벨)가 몸판 상단/좌우로 튀어나가고 과도하게 큼. 몸판(파란 영역) 크기는 정상. 5XL은 언급 없음.
-- **증상 B**: 기준 AI = XL, 타겟 = XL 그레이딩 시 결과 EPS에 **몸판만 있고 요소가 전혀 없음**.
+### developer [2026-04-22] Phase C 업데이트 UI
 
-#### 조사한 파일
-- `src/pages/OrderGenerate.tsx` (955줄): 사이즈 루프 + config.json 생성 로직 (라인 543~624)
-- `illustrator-scripts/grading.jsx` (1636줄): STEP 1~11-D 전체 흐름
-  - `calcLayerArea` (663~680)
-  - `importSvgPathsToDoc` (772~853)
-  - `extractPatternPieces` (866~904)
-  - `alignElementToPiece` (993~1013)
-  - STEP 2A baseArea 계산 (1137~1154)
-  - STEP 4 요소 copy + 매핑 사전 수집 (1184~1255)
-  - STEP 5 SVG 열기 (1257~1278)
-  - STEP 7 importSvgPathsToDoc 호출 (1296~1308)
-  - STEP 8 paste (1333~1339)
-  - STEP 9 linearScale 적용 (1368~1387)
-  - STEP 10 개별 정렬 / 폴백 (1389~1478)
+📝 구현한 기능: 자동 업데이트 시스템 Phase C — updaterService 래퍼, 앱 마운트 시 자동 체크 훅, UpdateModal 팝업, Settings 내 UpdateSection
 
-#### OrderGenerate의 config.json 구성 (증상 B 단서)
+**변경 파일 (신규 4개)**:
+| 파일 경로 | 줄수 | 요약 |
+|----------|------|-----|
+| `src/services/updaterService.ts` | ~110 | `checkForUpdate()` (조용히 실패), `downloadAndInstall()` (진행률 콜백+relaunch), `getCurrentVersion()` (Tauri API) |
+| `src/hooks/useAutoUpdateCheck.ts` | ~150 | 모듈 상태 + 구독자 패턴. `UpdateStatus` 6종. `runCheckNow()` / `dismissUpdate()` export. StrictMode 2회 실행 차단 플래그 |
+| `src/components/UpdateModal.tsx` | ~220 | Phase 머신 4종(idle/downloading/finishing/error). ESC + 백드롭 닫기(다운 중 차단). 진행률 바 + 용량 미상 대응. 재시도 버튼 |
+| `src/components/UpdateSection.tsx` | ~150 | 현재 버전(Tauri getVersion) + 마지막 확인 시각 + 상태 문구 + [지금 확인] / [업데이트 받기] 버튼. 훅 구독만(autoCheck=false) |
 
-루프 (라인 543~590):
-```
-for targetSize in selectedSizes:
-  targetSvgData = resolveSvgContent(piece, targetSize)   // Drive SVG 또는 Local 인라인
-  tempSvgPath = scriptsDir\temp_pattern_{targetSize}.svg
-  write(tempSvgPath, targetSvgData)
-  config = {
-    patternSvgPath: tempSvgPath,
-    outputPath: workFolder\{baseAiName}_{targetSize}.eps,
-    resultJsonPath,
-    patternLineColor: "auto",
-    designAiPath: session.baseAiPath,   // ← 항상 같은 AI 파일
-  }
-```
+**변경 파일 (수정 3개)**:
+| 파일 경로 | 변경 내용 |
+|----------|---------|
+| `src/App.tsx` | `useAutoUpdateCheck(true)` 훅 호출 + `<UpdateModal>` 조건부 렌더 (18줄 추가, 기존 구조 보존) |
+| `src/pages/Settings.tsx` | `UpdateSection` import + `{/* 섹션 3 */}` 위치에 `<UpdateSection />` 삽입. 기존 섹션 3은 "섹션 4: 정보"로 번호만 재부여, 내용 보존 |
+| `src/App.css` | `.update-modal__*` BEM 클래스 ~140줄 추가 (백드롭/카드/헤더/body/footer/진행바/에러). 기존 2047줄 뒤에 append |
 
-**결정적 관찰**: OrderGenerate의 사이즈 루프는 **baseSize를 config.json에 전달하지 않는다**. designAiPath는 사용자가 /work에서 고른 단 하나의 AI 파일 고정. `baseSize` state는 드롭다운 UI용으로만 존재하고, config에도 grading.jsx에도 **전혀 쓰이지 않는다**.
+**주요 설계 결정**:
+1. **상태 공유 방식**: Zustand/Context 대신 **모듈 상태 + listener Set** 패턴 채택 (기존 프로젝트 svgCacheStore 스타일과 일관). App은 `autoCheck=true`로 1회 체크, Settings는 `autoCheck=false`로 구독만.
+2. **버전 표시**: `@tauri-apps/api/app`의 `getVersion()` API 사용 — tauri.conf.json과 자동 동기화되므로 package.json 읽기보다 정확.
+3. **조용한 실패 원칙**: `checkForUpdate()`는 네트워크 오류 시 throw하지 않고 `{ kind: 'error' }`로 반환. 자동 체크 중 GitHub 접근 실패 → React error boundary 터지지 않도록 방어.
+4. **StrictMode 중복 방지**: 개발 모드에서 useEffect가 2회 실행되는 문제 → `hasAutoCheckedOnce` 모듈 플래그로 실제 `check()`는 1번만.
+5. **다운로드 중 닫기 차단**: `phase === 'downloading' | 'finishing'`일 때 ESC + 백드롭 클릭 무시. setup 파일 전송 중 끊김 방지.
+6. **Phase C 전용 라우트 X**: PLAN D5 결정 사항 준수 — Settings 페이지 내부 섹션으로 통합, 사이드바 복잡화 방지.
 
-→ **"기준 사이즈"는 실질적으로 baseAiPath 파일의 패턴선 레이어 면적으로 결정된다** (grading.jsx STEP 2A). baseSize 드롭다운은 현재 의미 없는 UI.
+**TypeScript 핵심 타입**:
+- `UpdateCheckResult = { kind: 'available'; update: Update } | { kind: 'up-to-date' } | { kind: 'error'; message: string }` — discriminated union
+- `UpdateStatus = 'idle' | 'checking' | 'available' | 'up-to-date' | 'error' | 'dismissed'`
+- `UpdateState = { status, result: UpdateCheckResult | null, lastCheckedAt: string | null }`
 
-#### 증상 B (XL = XL에서 요소 누락) — 원인 후보
+**검증 결과**:
+- ✅ `npx tsc --noEmit` 통과 (exit 0, 에러 0개)
+- ✅ Tauri updater 타입(Update, DownloadEvent)의 `body`, `date`, `version`, `contentLength`, `chunkLength` 모두 실제 dist 타입과 일치
+- ✅ 기존 App.tsx, Settings.tsx 구조 보존 (훅+모달 추가, 섹션 1개 삽입만)
+- ✅ 하드코딩 색상 0건 (모두 `var(--color-*)` 사용)
+- ✅ Tailwind 사용 0건 (BEM + CSS 변수)
 
-grading.jsx는 `basePieces == designAiPath` 동일성 체크 없음. 그래도 실패할 수 있는 경로:
+💡 tester 참고:
+- 테스트 방법:
+  1. `npx tsc --noEmit` → exit 0 확인
+  2. `npm run tauri dev` → 앱 기동, 화면 정상 렌더 (기존 기능 회귀 없음)
+  3. 콘솔에 `[updater]` 로그 관찰 — 네트워크/레포지토리 없어도 조용히 실패해야 함 (에러 박스 X)
+  4. Settings 페이지 열기 → "버전 정보" 섹션 노출, 현재 버전이 `v1.0.0`으로 표시됨
+  5. [지금 확인] 클릭 → 상태가 "확인 중..." → "최신/새 버전/에러" 중 하나로 전환
+- 정상 동작: 앱 기동 시 콘솔에 체크 1회 수행 (에러 있어도 조용). Settings → 버전 정보 섹션 표시됨
+- 주의: **실제 업데이트 설치 테스트는 Phase E**에서. 지금은 GitHub에 릴리스 없으므로 항상 "최신 버전" 또는 "에러"(네트워크)로 나올 것
 
-**가설 B1 (최유력): STEP 2A가 "요소"를 "패턴선"으로 오인 포함 — X**
-- calcLayerArea는 layer.pathItems만 순회. "패턴선" 레이어에 있는 path만 대상.
-- 만약 XL AI 파일이 "요소"까지 모두 "패턴선" 레이어에 들어있다면? → 가능성 있음
-- 하지만 이건 증상 B와 직접 연결되지 않음 (요소 누락 원인은 따로)
+⚠️ reviewer 참고:
+- `useAutoUpdateCheck(true)`는 **App.tsx 한 곳에서만** 호출. Settings 쪽은 반드시 `false`로 구독만. 두 곳 다 `true`면 중복 체크 발생 (현재 hasAutoCheckedOnce로 막히긴 하지만 의도 혼란 방지).
+- `dismissed` 상태는 같은 세션 내 재알림만 막음. 앱 재시작 시 자동으로 다시 idle로 리셋됨 (모듈 상태는 앱 프로세스 단위).
+- Update 객체의 `body`는 마크다운일 수 있으나 현재는 `<pre>` 원문 표시 (렌더링은 후속 개선 — 사용자 요구 없음).
+- UpdateModal은 `role="dialog" aria-modal="true"`로 접근성 기본 준수. 포커스 트랩은 미구현 (소규모 앱, 과한 요구).
+- CSS z-index 1000으로 모달이 헤더/사이드바 위에 확실히 뜸. 다른 모달/오버레이 계층 필요 시 조정.
 
-**가설 B2 (최유력): STEP 4의 designPieces 매핑 안전장치 S1/S3가 모든 요소를 스킵**
-- XL AI 파일의 "패턴선" 조각 수 vs 타겟 XL SVG 조각 수가 다르면 useFallback=true → alignToBodyCenter 경로로 가서 요소가 "몸판 중앙"으로 이동만 함 (요소 누락 아님)
-- 폴백이 요소를 "몸판 중앙" 한 곳에 모아놓기만 할 뿐이라 **요소는 보여야 함**
-- 그런데 사용자 증상은 "아예 없음"
+**다음 단계**: tester + reviewer 검증 → Phase C 커밋 → Phase D (RELEASE-GUIDE + CHANGELOG)
 
-**가설 B3 (매우 유력): baseAiPath가 실제로 Drive의 XL SVG와 다른 파일**
-- OrderGenerate에서 `designAiPath = session.baseAiPath` (AI 파일)
-- `patternSvgPath = temp_pattern_XL.svg` (Drive에서 해석된 SVG)
-- 두 파일은 **원천적으로 다른 파일**이므로 "same file" 이슈 아님
-- 하지만 사용자가 /work에서 **AI 파일로 Drive에 있는 SVG 파일을 잘못 선택**했다면? — 타입은 .ai여야 하므로 확장자 필터에서 차단됨. 가능성 낮음.
+### developer [2026-04-22] 5XL SVG 양면 변환 (CLI 수동 실행)
 
-**가설 B4 (가장 유력): AI 파일의 "요소" 레이어가 비어있거나 다른 이름**
-- STEP 4 (1200~1248): `elemLayer = designDoc.layers.getByName("요소")`. 없으면 throw.
-- **있는데 pageItems.length === 0이면 copy 실패** → clipboard 비어있음 → STEP 8 paste에서 baseDoc.selection이 null → "붙여넣은 요소가 없음" 로그
-- 이러면 **몸판만 보존되고 요소는 정말 아무것도 안 들어감** = 증상 B와 완전 일치
-- XL AI가 "기준" 파일이라면 디자이너가 요소를 아직 안 그렸거나, 레이어 이름이 한글 "요소"가 아니라 다른 이름(예: "Elements", "디자인요소")일 수 있음
+**작업**: Phase 1-3에서 구현한 `normalize_batch` CLI를 로컬 실행하여 5XL SVG를 4-body 양면 구조로 변환
 
-**가설 B5 (가능): XL SVG의 조각 수가 요소 매핑을 모두 -1로 만들고, 스킵 카운트=전체**
-- `findBestMatchingPiece`는 (1) 교집합 면적 최대 (2) 중심 거리 최소 폴백
-- 중심 거리 폴백은 pieces가 1개 이상이면 반드시 0 이상 인덱스를 반환 → -1 가능성 낮음
-- 그래도 `elementPieceIndex[i] === -1` 조건이 모든 요소에 맞으면 전부 스킵되긴 함
-- **하지만 이 경우도 "요소가 아예 없다"가 아니라 "요소는 paste되지만 위치만 엉뚱"이라 증상 B와는 다름**
+**실행 경로**: `C:\temp\svg_5XL_work` (로컬 임시 폴더, G드라이브 원본 안전)
+**기준 파일**: `양면유니폼_U넥_스탠다드_XL.svg` (이미 4-body 구조)
+**변환 대상**: `양면유니폼_U넥_스탠다드_5XL.svg` (단일 body → 4-body)
 
-**가설 B6 (가능): XL.ai 파일 자체가 손상 또는 열기 실패**
-- 에러는 catch → result.json에 기록 → OrderGenerate가 "에러"로 표시
-- 사용자가 "에러"로 보였는지 "성공인데 요소 없음"인지 확인 필요
+**preview_normalize 결과** (JSON 요약):
+- `status: OK`, `big_width: 1995.98`, `small_width: 1995.86`
+- `gap_between_patterns: 15.69`, `no_x_collision: true`, `viewbox_ok: true`
+- 기준 파일(XL)은 수정 대상에서 자동 제외됨
 
-→ **가설 B4가 가장 설명력 높음**. 사용자 확인 필수.
+**normalize_batch 결과**:
+- `success: true`, `pass_count: 1`, `fail_count: 0`, `skipped_count: 1`
+- 5XL.svg → **PASS** (변환 완료, .bak 자동 백업)
+- XL.svg → **SKIP** (기준 파일, 변환 대상 아님 — 정상)
+- 모든 검증 통과: xml_valid / viewbox_ok / no_x_collision / big_cl_margin_ok / small_cl_margin_ok / bottom_align_ok
 
-#### 증상 A (3XL/4XL 요소 과대) — 원인 후보
+**변환 전/후 비교**:
+| 항목 | 원본(.bak) | 변환 후 | 기준(XL) |
+|------|-----------|--------|---------|
+| 파일 크기 | 5,780 bytes | **8,981 bytes (1.55배)** | 8,826 bytes |
+| `<g>` 태그 개수 | 2개 (단일 body) | **4개 (4-body)** | 4개 |
+| viewBox | `0 0 4337.01 3401.57` | **`0 0 4478.74 5669.29`** | `0 0 4478.74 5669.29` |
 
-**가설 A1 (최유력): 3XL.svg/4XL.svg viewBox 단위가 다른 사이즈와 다름**
-- 사용자가 3XL.svg 파일을 새로 추가했다고 함 → 새 파일만 단위/좌표계가 다를 가능성
-- STEP 5에서 `svgDoc.artboards[0].artboardRect`로 아트보드 크기 측정 → **CMYK 베이스 문서 크기는 SVG 아트보드 기준**
-- STEP 7 `importSvgPathsToDoc`는 path.area를 누적 → **path 좌표 단위가 비정상이면 targetArea가 비정상**
-- 몸판이 정상 크기인 이유: `path.duplicate`는 원본 좌표 그대로 복제. 아트보드가 커도 path 좌표가 같이 커졌으면 몸판은 시각적으로 맞게 보임
-- 요소가 과대한 이유: `linearScale = sqrt(targetArea / baseArea)`에서 targetArea가 과대하면 linearScale 폭발 → STEP 9의 `pastedGroup.resize(linearScale*100)`이 요소를 크게 확대
-- 위치가 상단으로 튀어나가는 이유: `alignElementToPiece`에서 `relX * linearScale`이 과대하면 요소 중심이 basePiece 중심에서 멀어짐. linearScale=2~3배면 요소가 조각 밖 원래 조각 중심 반경 × 스케일만큼 멀어짐
+viewBox와 `<g>` 태그 구조가 기준 파일(XL)과 완전 일치 — 4-body 양면 구조로 올바르게 변환됨
 
-**가설 A2 (유력): 3XL/4XL SVG에 "배경 사각형 path"가 하나 들어있어 targetArea 폭발**
-- importSvgPathsToDoc는 50pt 이상 path를 모두 targetArea에 누적
-- 아트보드 전체를 덮는 보이지 않는 path 하나만 있어도 targetArea가 실제보다 2~3배 커짐
-- 3XL.svg를 Illustrator로 열어 "숨겨진 path"가 있는지 육안 확인 필요
+**사용자 전달**:
+- 변환된 파일: `C:\temp\svg_5XL_work\양면유니폼_U넥_스탠다드_5XL.svg` (**8,981 bytes, 4-body**)
+- 백업 파일: `C:\temp\svg_5XL_work\양면유니폼_U넥_스탠다드_5XL.svg.bak` (원본 5,780 bytes 보존)
+- 다음 작업: **사용자가 G드라이브 원본 위치로 수동 복사** (탐색기 드래그)
+  - 대상 경로: `G:\공유 드라이브\디자인\00. 2026 커스텀용 패턴 SVG\0. 농구유니폼 확정 정리본\2. 양면 유니폼상의 패턴\U넥\U넥 양면유니폼 스탠다드\`
+  - 기존 `양면유니폼_U넥_스탠다드_5XL.svg` 덮어쓰기
+  - `.bak` 파일은 안전 보관용 (G드라이브에 올릴 필요 없음)
 
-**가설 A3 (가능): 열린 경로 강제 닫기로 인한 면적 폭발**
-- `if (!path.closed) { path.closed = true; }` 강제 처리
-- 3XL/4XL SVG에 복잡한 열린 경로(예: 시접선, 가이드선)가 있으면 엉뚱한 면적이 합산될 수 있음
-- path.width/height 50pt 필터를 통과한 열린 path가 있으면 합산됨
+**부가 성과**:
+- Phase 1 사용자 확인 ① (분류 로직 폭 우선 비교 + 4그룹 위쪽쌍 채택) 실사용 검증 **통과**
+- CLI 인터페이스 `preview_normalize <folder> <ref.svg>` / `normalize_batch <folder> <ref.svg>` 정상 동작 확인
+- 기존 Phase 1-1~1-3 구현(svg_normalizer.py 950줄) 무결성 확인
 
-**가설 A4 (배제): 5XL은 정상**
-- 가설 A1/A2가 맞다면 5XL도 같이 문제일 가능성이 높은데, 5XL은 "언급 없음" → 진짜 정상인지 미확인 상태
-- 사용자에게 5XL 결과 확인 요청 필요
+💡 tester 참고:
+- 별도 테스트 불필요 — CLI 실행 결과 JSON과 파일 구조 검증 모두 통과
+- 실 사용 시 주의: 변환된 SVG를 grader 앱에서 로드하여 그레이딩 정상 동작하는지 확인 권장 (회귀 감지)
 
-#### 추가 발견 (부수적)
-
-**부수 이슈 1**: OrderGenerate의 `baseSize` 드롭다운은 실제로 아무 동작도 하지 않음
-- config에도 안 들어가고, grading.jsx도 baseSize를 모름
-- grading.jsx의 "기준"은 `designAiPath`의 "패턴선" 레이어 → 사용자가 /work에서 고른 AI 파일이 곧 기준
-- **이건 UX 버그**: 사용자가 "기준 사이즈를 XL로" 드롭다운을 바꿔도 실제 결과에 아무 영향 없음. 기준 사이즈를 바꾸려면 /work에서 AI 파일 자체를 바꿔야 함.
-- 이번 조사 범위 밖이지만 PM에게 보고하여 Phase 5+에서 설계 재검토 권장
-
-**부수 이슈 2**: `calcLayerArea`의 path.area 계산은 복잡한 복합 path(여러 subpath)에서도 호출됨
-- SVG에서 `<path d="M10,10... M200,200...">`처럼 여러 subpath가 한 path로 묶이면 path.area는 전체 합
-- 조각 수 카운트와 면적 합이 어긋날 수 있음 (지금은 증상과 관련 없어 보임)
-
-#### 수정 방향 (원인 확정 후)
-
-**증상 B (가설 B4 확인 시)**:
-- `/work`에서 AI 파일 선택 시 "요소" 레이어 존재/비어있음 미리 검증 (Rust/Python 유틸 또는 사전 열기)
-- 아니면 grading.jsx에서 "요소" 레이어 비어있을 때 명확한 에러 메시지로 종료 (현재는 경고만 찍고 진행 → 요소 없는 EPS 저장)
-
-**증상 A (가설 A1/A2 확인 시)**:
-- 단기: 디자이너에게 3XL/4XL.svg 재 export 요청 (viewBox 단위 통일)
-- 중기: grading.jsx에 linearScale clamp 추가 (예: 이웃 사이즈 대비 ±30% 초과 시 경고 + 원본 크기 유지)
-- 장기: 사이즈 그룹 전체의 linearScale 분포를 먼저 계산하고 이상치 탐지
-
-**부수 이슈 1 (별건)**:
-- baseSize를 config에 전달해서 grading.jsx가 쓰도록 스키마 확장
-- 아니면 baseSize UI를 제거하고 "AI 파일의 사이즈를 자동 감지"만 표시
-
-#### 사용자에게 요청 (로그/스크린샷 수집)
-
-1. **증상 A 범위 확정 (결정적)**: 13개 사이즈를 모두 XL 기준으로 돌려 결과물을 한 줄로 나열 — "XS/S/M/L 정상, XL/2XL 정상, 3XL/4XL 이상, 5XL ??"
-2. **3XL.svg 와 XL.svg 비교** (결정적):
-   - Illustrator로 각각 열어 "파일 > 문서 설정" 또는 "아트보드 옵션"에서 폭/높이(pt) 기록
-   - "창 > 레이어" 패널에서 레이어 구조와 path 개수 비교
-   - 3XL.svg만 아트보드 전체 크기 path(보이지 않는 사각형)가 있는지 육안 확인
-3. **Illustrator 콘솔 로그 수집** (결정적):
-   - 3XL 그레이딩 1회 실행 후 Illustrator 콘솔에서 `[grading.jsx]` 시작 라인 전체 복사
-   - 핵심: `기준 패턴 면적 / 타겟 패턴 면적 / 면적 비율 / 선형 스케일` 숫자 4개
-   - 같은 로그를 XL 그레이딩에서도 수집 → 비교
-4. **증상 B의 XL EPS 파일 열기** (결정적):
-   - Illustrator에서 `{baseAiName}_XL.eps` 열기 → 레이어 패널 확인
-   - "디자인 요소" 레이어가 **비어있는지** / **숨겨져 있는지** / **범위 밖으로 나가있는지** 3가지 중 어느 것인지
-   - 그레이딩 결과 로그의 `붙여넣은 요소 수:` 값 확인
-5. **XL AI 파일 레이어 확인** (증상 B 최종 확인):
-   - /work에서 선택한 기준 AI 파일을 Illustrator로 직접 열기
-   - 레이어 패널에 **정확히 "요소"라는 이름**의 레이어가 있는지
-   - "요소" 레이어에 path/text/group이 실제로 들어있는지
-
-#### 결론
-
-- **코드 수정 없음** (요청대로 조사만)
-- 증상 A와 B는 서로 다른 원인 가능성이 높음 → 가설 A1/A2 + 가설 B4가 가장 설명력 있음
-- 결정적 판단에는 사용자 Illustrator 콘솔 로그 + AI/SVG 파일 육안 확인 필수
+⚠️ reviewer 참고:
+- G드라이브 원본은 **읽기 복사만** 수행, 쓰기 0건 (안전 원칙 준수)
+- 변환 결과물의 G드라이브 업로드는 **사용자 수동 작업**으로 분리
 
 ---
+
+### developer [2026-04-22] driveSync 사이즈 병합 버그 수정
+
+**문제**: 기존 프리셋(stableId 일치)에 신규 사이즈 SVG(예: `양면유니폼_U넥_스탠다드_5XL.svg`)를 Drive에 추가해도 주문 생성 페이지 사이즈 체크박스에 반영 안 됨. F12 로그 `신규 0, 갱신 79, 경고 55건` — 5XL이 경고 목록에도 없음.
+
+**원인**: `mergeDriveScanResult`(L615~643)의 기존 프리셋 갱신 블록이 `svgPathBySize`(경로)는 갱신하지만 `sizes` 배열 전체를 "건드리지 않음" 정책으로 고정. 결과적으로 UI 렌더링 기준인 `sizes`에 5XL이 없어 체크박스에 안 나타남. "치수 데이터 보존" 의도가 "신규 사이즈 차단"으로 변질된 안티패턴.
+
+**수정 내용** (`src/services/driveSync.ts` L615~677, +37/-6):
+- `existingSizeNames: Set<string>` — 기존 사이즈 이름 목록 O(1) 조회
+- `fallbackPieceId` — 새 사이즈의 `pieceId`를 기존 프리셋의 `sizes[0].pieces[0].pieceId`에서 복사 (연결 깨짐 방지). 첫 사이즈 없는 엣지 케이스는 `pieces[0].id`로 폴백
+- `newSizeEntries` — `Object.keys(sp.svgPathBySize)` 중 `existingSizeNames`에 없는 것만 `{size, pieces: [{pieceId, width:0, height:0}]}` 형태로 생성
+- `mergedSizes` — 기존 + 신규 병합 후 `SIZE_LIST.indexOf` 기준 오름차순 정렬 (5XS→5XL). 미등록 사이즈는 99로 밀어냄
+- `mergedPresets.push` 객체에 `sizes: mergedSizes` 추가
+- 주석 전면 갱신: "왜 이렇게 해야 하나" + "=== 신규 사이즈 자동 추가 로직 ===" + 기존 "절대 건드리지 않음" 주석은 `name, categoryId`로 한정 재문구화
+
+**보존된 것** (회귀 방지):
+- 기존 사이즈의 `width/height` (사용자 입력 치수) → `existing.sizes` 그대로 복사됨
+- `name`, `categoryId` (사용자 rename/재분류) → spread로 그대로 전파
+- `svgData`, `svgBySize` (local 인라인 SVG) → `updatedPieces`에서 idx=0만 Drive 조건 만족할 때 교체
+- `else { /* 신규 프리셋 생성 */ }` 블록 — 전혀 건드리지 않음
+- 카테고리 병합 로직 L543~594 — 전혀 건드리지 않음
+- 파일명 정규식, 타입 정의 — 전혀 건드리지 않음
+
+**변경 파일**:
+| 파일 | 변경 내용 | 신규/수정 |
+|------|----------|----------|
+| `src/services/driveSync.ts` | L615~677 `mergeDriveScanResult` 기존 프리셋 갱신 블록에 신규 사이즈 자동 추가 + SIZE_LIST 순 정렬 로직 추가 (+37/-6) | 수정 |
+
+**검증**:
+- ✅ `npx tsc --noEmit` PASS (exit 0, 에러 0개) — `SIZE_LIST` import 재활용, 타입 단언으로 `SizeName` 캐스팅 안전
+- 수정된 영역 재읽기로 구조 확인 완료
+
+**회귀 방지 시나리오** (사용자 수동 확인):
+1. **신규 사이즈 자동 추가**: 기존 12개 사이즈 프리셋 폴더에 `..._5XL.svg` 같은 새 사이즈 파일 추가 → 앱 재기동 → Settings에서 Drive 동기화 OFF→ON 토글 → 패턴 관리 페이지 진입 → 주문 생성에서 5XL 체크박스 활성화 확인
+2. **기존 치수 보존**: 기존 사이즈(예: L)의 width=400, height=700 입력값이 재스캔 후에도 그대로 유지되어야 함. PatternManage에서 해당 프리셋 편집 모달 열어 값 확인
+3. **신규 프리셋 영향 없음**: 완전히 새로운 패턴 그룹 폴더 추가 시 기존처럼 모든 사이즈 포함된 프리셋이 생성되어야 함 (`else` 블록 동작)
+4. **사이즈 정렬**: 신규 사이즈가 배열 끝이 아닌 `SIZE_LIST` 순(예: XL과 2XL 사이에 빠진 XXL이 있었다면 올바른 위치에 삽입)으로 정렬되는지 UI에서 확인
+
+**성능 참고**: 프리셋당 O(sizes) Set 생성 + O(newSizes) filter + O(sizes*log(sizes)) 정렬 = 사실상 O(n log n) with n≤13. 70개 프리셋 * 13 = 900건 연산 — 체감 지연 없음.
+
+💡 tester 참고:
+- `npx tsc --noEmit` 통과 확인 완료 (developer가 이미 수행)
+- 실제 G드라이브 스캔 테스트는 **사용자 담당** (G: 직접 실행 금지 규칙)
+- 앱 기동(`npm run tauri dev`) 후 Settings에서 **Drive 동기화 OFF→ON 토글**이 쿨다운 우회 트리거 (PatternManage 진입 시에만 자동 스캔, 60초 쿨다운 있음)
+
+⚠️ reviewer 참고:
+- **핵심 보존 정책**: 기존 `sizes[i].pieces[j].width/height` 절대 안 덮임 — 스프레드 대신 기존 배열 원본을 그대로 `...existing.sizes`로 복사
+- **pieceId 연결**: `existing.sizes[0]?.pieces[0]?.pieceId` 우선, 없으면 `existing.pieces[0]?.id` 폴백 — Phase 1 단일 piece 가정 하에 안전
+- **정렬 안정성**: `Array.prototype.sort`는 V8에서 Timsort(stable)이라 같은 인덱스(99) 미등록 사이즈끼리 순서 뒤섞이지 않음
+- **단면 유니폼 회귀**: `else` 블록 무변경 → 신규 프리셋 로직 영향 0. 기존 정상 동작 유지
+- **svgSource 체크**: `piece.svgSource === "drive" || !piece.svgSource` 조건 기존 그대로 — local 업로드 프리셋은 svgPathBySize 교체 안 당함
+
+**다음 단계**: 사용자가 실제 G드라이브에서 재스캔 테스트 → 5XL 체크박스 활성 확인 → PM 커밋
 
 ## 테스트 결과 (tester)
-(Phase 3 구현 후 검증)
+(다음 작업에서 사용)
 
 ## 리뷰 결과 (reviewer)
-(Phase 3 구현 후)
+(다음 작업에서 사용)
 
-## 수정 요청
+## 수정 요청 (누적 보류 — v2에서 재발 여부 확인 필요)
 | 요청자 | 대상 파일 | 문제 설명 | 상태 |
 |--------|----------|----------|------|
-| user | grading.jsx / 3XL.svg | 3XL 사이즈 1개에서 요소가 몸판 벗어나 과하게 큼. 다른 12개 사이즈는 정상 추정 | 🔍 조사 중 (원인 후보 수집, 추가 정보 대기) |
-| user | 3XL.svg / 4XL.svg | 3XL.svg 추가 후에도 3XL·4XL 요소(숫자/로고/라벨)가 몸판 상단으로 튀어나가고 과하게 큼. 5XL은 언급 없음 | 🔍 조사 중 (SVG 파일 자체 검증 대기) |
-| user | grading.jsx / OrderGenerate | 기준 AI = XL로 XL 타겟 그레이딩 시 요소가 하나도 안 들어옴 (몸판만 있음) | 🔍 조사 중 (Illustrator 로그 필요) |
-| user | grading.jsx (c52d80f 회귀) | 교체용요소 도입 후 STEP 10 로그 누락 + pastedGroup bounds 과소 + 3XL paste=0 + 모든 사이즈 결과 EPS 동일. 원인 = STEP 8B paste가 baseDoc.selection을 교체용요소로 덮어써 line 1540 pastedItems가 뒤바뀜 | ✅ 수정 완료 (line 1540 layerDesign 직접 참조 + STEP 8B 끝 activeLayer/selection 복원 + STEP 8 진단 로그) — 사용자 테스트 대기 |
+| user | grading.jsx / 3XL.svg | 3XL 사이즈 요소가 몸판 벗어나 과하게 큼 | 🔍 재검증 필요 |
+| user | 3XL.svg / 4XL.svg | 3XL/4XL 요소가 몸판 상단 튀어나감 | 🔍 재검증 필요 |
+| user | grading.jsx / OrderGenerate | 기준 AI=XL로 XL 타겟 시 요소 하나도 안 들어옴 | 🔍 로그 필요 |
+| user | driveSync.ts / PatternManage.tsx | G드라이브 신규 SVG 파일이 grader 앱에 인식 안 됨 | ✅ developer 근본 수정 완료 (2026-04-22, sizes 병합 로직), 사용자 실테스트 대기 |
+
+⚠️ 위 3건은 양면 버그 수정과 별개. 이번에 바뀐 로직에서 재발 여부 재확인 필요.
+
+---
+
+## 디버거 조사 [2026-04-22] G드라이브 신규 SVG 미인식
+
+### 🔴 에러 번역
+"구글드라이브에 새로 올린 패턴 SVG 파일이 grader 앱의 패턴 목록에 안 보인다."
+
+비유: **카페 주문표**를 올려놨는데, 사장님이 **냉장고에 원두를 새로 채워 넣은 사실**을 모르는 상태. 주문표(목록)만 보고 있으니 새 원두는 안 보인다. 누군가가 "냉장고 다시 확인!" 이라고 알려줘야 목록이 갱신된다.
+
+---
+
+### 🗺️ 동작 구조 요약 (코드 경로 특정)
+
+**동기화 트리거 조건** (`src/pages/PatternManage.tsx:517~520`)
+```
+PatternManage 페이지 진입 + 로드 완료 + Drive 동기화 ON + 루트 경로 있음
+ → runAutoSync() 실행
+```
+**중요**: 자동 동기화는 **"패턴 관리" 페이지 진입 시에만 실행**된다. 다른 페이지(주문 생성, 세션 등)를 열어서는 아무리 기다려도 Drive는 재스캔되지 않는다.
+
+**60초 쿨다운** (`PatternManage.tsx:423~435`)
+- `lastAutoScanRef`로 마지막 스캔 시각 기억 (epoch ms)
+- 60초 이내 재진입은 console.info "쿨다운 중" 출력 후 스킵
+- **앱 재시작 시 ref는 0으로 리셋** → 재시작 직후 첫 진입은 쿨다운 걸리지 않음
+
+**스캔 로직** (`src/services/driveSync.ts:347 scanDriveRoot`)
+- BFS 재귀로 하위 폴더 전부 탐색 (깊이 제한 20, 실측 6레벨)
+- 각 파일 `parseFilename()` 으로 `{패턴명}_{사이즈}.svg` 규칙 매칭
+- **매칭 실패 시 그 파일만 스킵 + warnings 배열에 기록**
+
+**파일명 정규식** (`driveSync.ts:61`)
+```
+^(.+?)[\s_\-]+(5XS|4XS|3XS|2XS|XS|S|M|L|XL|2XL|3XL|4XL|5XL)\.svg$
+```
+- 사이즈 토큰이 파일명 끝에 있어야 함 (대소문자 무시)
+- 앞부분과 사이즈 사이 구분자는 **공백/언더스코어/하이픈** 중 1개 이상
+- 예: `농구유니폼_V넥_XS.svg` O / `농구유니폼XS.svg` X (구분자 없음) / `농구유니폼_XS_v2.svg` X (사이즈가 끝이 아님)
+
+**경고 처리** (`PatternManage.tsx:485~492`)
+- warnings는 **console.warn만 찍고 UI엔 절대 표시 X** (사용자가 "경고 부담" 피드백)
+- 즉 파일이 스킵돼도 앱 화면상으론 **아무 메시지 없이 조용히 무시**
+
+---
+
+### 🎯 원인 TOP 3 (유력도 순)
+
+#### 1순위: **파일명 규칙 위반** (가능성 ~50%)
+SVG 파일명이 `{패턴명}_{사이즈}.svg` 규칙에 안 맞으면 경고만 찍히고 스킵된다. 사용자 화면엔 **아무 표시 없음**.
+
+**의심 케이스**:
+- 사이즈 토큰 없음: `신상품.svg`, `test.svg`
+- 구분자 없음: `농구유니폼XL.svg` (언더스코어 없이 붙음)
+- 사이즈가 중간에 위치: `농구_XL_수정본.svg` (끝이 `_수정본.svg`)
+- 사이즈 대문자 문제는 아님 (정규식 `i` 플래그 — `.SVG`도 OK)
+- 한글·공백 혼용: `농구 유니폼 V넥 XL.svg` (공백 구분자는 허용됨 — **이건 정상 동작**)
+
+**확인 방법**: 개발자도구(F12) 콘솔에 `파일명 규칙 위반(사이즈 토큰 없음), 스킵: ...` 로그가 찍히면 확정.
+
+#### 2순위: **Drive 동기화 아직 안 돼서 로컬에 파일 없음** (가능성 ~25%)
+G드라이브 "파일 스트리밍" 모드에서는 다른 사람이 업로드한 파일이 내 PC에 내려오는 데 시간이 걸린다. Windows 탐색기로는 파일이 보일 수 있지만 실제 물리적으로는 "아직 다운로드 중" 상태일 수 있음.
+
+**확인 방법**: `G:\공유 드라이브\디자인\00. 2026 커스텀용 패턴 SVG\...` 경로에서 해당 SVG 파일을 **한 번 더블클릭으로 열어보기** (앱 말고 뷰어로). 잠시 로딩되면서 열리면 스트리밍 다운로드 완료된 것.
+
+#### 3순위: **패턴 관리 페이지를 아직 열지 않음 or 쿨다운** (가능성 ~15%)
+자동 동기화는 "패턴 관리" 진입 시에만 실행되는데, 사용자가 그 전에 "주문 생성" 등 다른 화면에서 확인했을 가능성. 또는 60초 이내 최근에 이미 한 번 진입했다면 쿨다운.
+
+**확인 방법**:
+- 사이드바에서 **"패턴 관리"** 메뉴 클릭해서 그 페이지를 본 후 결과 확인
+- 이미 패턴 관리에 있었다면, 앱을 **완전히 종료→재시작** 후 패턴 관리 재진입
+
+#### 기타 가능성 (합쳐서 ~10%)
+- **D**: 추가한 파일이 정상 규칙인데도 스캔이 실패 → **권한 문제** (해당 SVG 파일만 Drive 권한 누락). readDir은 성공해도 readTextFile 시 실패 가능. 다만 driveSync는 파일 **존재**만 확인하고 meta.json 읽기에만 readTextFile 쓰므로, 이 케이스는 드물다.
+- **E**: `drivePatternRoot` 경로가 잘못 설정됨 (Settings에서 확인 필요)
+- **F**: `driveSyncEnabled = false` (토글이 꺼져 있음 → Settings에서 확인)
+- **G**: 같은 폴더에 기존 SVG가 있고 사이즈만 추가된 경우에 stableId 매칭이 꼬였을 가능성 — 로직상 svgPathBySize 확장은 정상 동작하도록 되어 있어서 (`mergeDriveScanResult:616~632`) 가능성은 낮지만, `svgSource !== "drive"`면 경로 갱신이 스킵된다는 점은 주의.
+
+**회귀 가능성**: 최근 커밋 3개(Phase A/B/C) 및 양면 유니폼 버그 수정은 Drive 스캔 코드(`src/services/driveSync.ts`, `src/stores/svgCacheStore.ts`)를 건드리지 않았다. Phase A의 `bundle.resources` 변경은 **앱 번들링 시점의 Python 파일 목록**일 뿐 런타임 Drive 스캔과 무관. **회귀 가능성은 낮음**.
+
+---
+
+### ❓ 사용자에게 할 질문 (PM이 전달)
+
+1. **파일명**: 추가한 SVG 파일 이름은 정확히 무엇인가? (예: `농구유니폼_V넥_3XL.svg`)
+2. **위치**: 어느 하위 폴더에 넣었나? (`G:\...\00. 2026 커스텀용 패턴 SVG\` 이후 경로)
+3. **타이밍**: 언제 추가했나? 몇 분 전? 몇 시간 전?
+4. **증상**: "패턴 관리" 페이지에서 **안 보이는** 것인가, 아니면 에러 메시지가 뜨는 것인가?
+5. **기존 파일 확인**: 같은 폴더 안의 다른 기존 SVG 파일들은 정상적으로 앱에 보이는가?
+6. **페이지 진입 확인**: 파일 추가 후 사이드바에서 **"패턴 관리"** 메뉴를 클릭해서 그 페이지를 **다시 열어봤나**?
+7. **Settings 상태**: Settings 페이지에서 "Drive 연동 사용" 토글이 **활성**으로 되어 있는가? 그리고 "Drive 루트 폴더"가 `G:\공유 드라이브\디자인\00. 2026 커스텀용 패턴 SVG`로 맞게 설정되어 있는가?
+8. **탐색기 확인**: Windows 탐색기에서 `G:\...` 경로로 직접 가서 해당 SVG 파일이 **보이고 열리는지** 확인했는가?
+
+---
+
+### 🔧 해결 방안 초안 (사용자 승인 필요, developer에게 넘길 예정)
+
+#### 방안 A (가장 가능성 높은 시나리오 — 파일명 규칙 위반)
+1. 사용자가 콘솔 로그(F12) 열어서 "파일명 규칙 위반" 경고 확인 요청
+2. 파일명을 `{패턴명}_{사이즈}.svg` 규칙에 맞게 수정 (예: `신상.svg` → `신상_XS.svg`)
+3. 앱 재시작 or 60초 대기 후 패턴 관리 재진입
+
+#### 방안 B (Drive 스트리밍 지연)
+1. 탐색기에서 해당 SVG 직접 열어 다운로드 유도
+2. 1~2분 후 grader 앱에서 패턴 관리 재진입
+
+#### 방안 C (UX 개선 — 사용자 부담 감소)
+**[조사 결과 파생 제안]** 현재 경고는 console.warn만 가고 UI 표시 없음. 사용자가 **왜 안 보이는지 알 방법이 없음**. Phase 2 개선 제안:
+- Settings에 "최근 Drive 스캔 경고" 섹션 추가 (무시한 파일 목록 표시)
+- 또는 패턴 관리 페이지 상단에 "⚠️ 스캔 시 건너뛴 파일 N개" 배지 (클릭 시 상세 모달)
+- "수동 새로고침" 버튼 추가로 60초 쿨다운 우회 가능하게
+
+#### 방안 D (긴급 우회책 — 지금 즉시 확인)
+사용자가 Settings에서 Drive 동기화 **껐다 켜기** → 쿨다운 ref 초기화는 안 되지만, 토글 deps 변경으로 useEffect 재실행 → 쿨다운 끝난 상태라면 즉시 스캔 발동.
+
+**확정 불가 영역**: 콘솔 로그를 보지 않고는 1~3순위 중 어느 것인지 확정할 수 없음. 사용자 답변 수신 후 재분석 필요.
+
+---
 
 ## 작업 로그 (최근 10건)
 | 날짜 | 에이전트 | 작업 내용 | 결과 |
 |------|---------|----------|------|
-| 2026-04-15 | developer | Drive 연동 옵션 4 자동 동기화 리팩터 | 커밋 8ec96a3 |
-| 2026-04-15 | developer | 트리 더블클릭 + 앱 내 rename 제거 + Drive 읽기 전용 | 커밋 1b8fa4b |
-| 2026-04-15 | developer | 프리셋 카드 사이즈 5XS→5XL 정렬 | 커밋 849a6e5 |
-| 2026-04-15 | planner-architect | 작업 흐름 재설계 계획서 865줄 | 커밋 5cb0aaa |
-| 2026-04-15 | developer | Phase 1 WorkSetup + 세션 + 라우팅 | 커밋 3efa370 |
-| 2026-04-15 | developer | WorkSetup AI 파일 선택 하나로 폴더 자동 | 커밋 ad3d073 |
-| 2026-04-15 | developer | Phase 2 패턴 선택 모드 | 커밋 3e5a069 |
-| 2026-04-15 | developer | 카드 간소화 + 2열 그리드 + 조각 카운팅 | 커밋 bc20e24 |
-| 2026-04-15 | developer | DRIVE 뱃지 제거 + 조각 카운팅 개선 (M 명령어) | 커밋 b01c974 |
-| 2026-04-15 | pm | 11개 커밋 push + scratchpad 정리 + Phase 3 착수 | 완료 |
-| 2026-04-15 | developer | Phase 3 즐겨찾기 (favoritesStore + ⭐ 토글 + 필터) | tsc/build PASS |
-| 2026-04-15 | developer | Phase 4 OrderGenerate 통합 (SizeSelect+FileGenerate → 1페이지) | tsc/build PASS |
-| 2026-04-16 | planner-architect | 패턴/요소 배치 로직 전면 재검토 계획서 (PLAN-GRADING-REDESIGN.md, 5옵션 비교 + D1 권장) | 코드 미수정 |
-| 2026-04-16 | debugger | 버그 B (paste=0) 집중 조사 — 가설 1 유력 확정(svgDoc.close가 AICB clipboard 무효화), 수정안 B(duplicate 기반) 권장 | 코드 미수정 |
-| 2026-04-15 | developer | OrderGenerate 버그수정(Rust path) + 기준사이즈 자동 + 구글시트 URL 지원 | tsc/cargo/build PASS |
-| 2026-04-15 | debugger | 3XL/4XL 좌표 + XL 요소 누락 조사 (코드 수정 없음, 사용자 로그 요청) | 조사 보고 |
-| 2026-04-15 | developer | grading.jsx 디버그 로그 파일 기록 추가 (임시, 원인 확정용) | 구현 완료 |
-| 2026-04-15 | developer | grading.jsx 로그 경로 outputPath 기준 변경 (폴백 resultJsonPath) | 구현 완료 |
-| 2026-04-16 | developer | grading.jsx "교체용요소" 레이어 지원 (STEP 4B/8B/9B, CENTER scale) | 구현 완료 |
-| 2026-04-16 | debugger | 교체용요소 도입 후 회귀 조사: STEP 8B selection 오염 원인 특정 | 조사 보고 (코드 수정 없음) |
-| 2026-04-16 | developer | grading.jsx selection 오염 수정 (layerDesign 직접 참조 + 상태 복원 + 진단 로그) | 구현 완료 |
-| 2026-04-16 | developer | grading.jsx STEP 8B 교체용요소 pasteInPlace 교체 + bounds 복원 안전망 | 구현 완료 |
-| 2026-04-16 | developer | grading.jsx D1 몸판중심 고정 배치 (STEP 9 CENTER scale + STEP 10 조각별 정렬 skip + 중심 복원 안전망) | 구현 완료 |
-| 2026-04-16 | planner-architect | grading.jsx 누적 회귀 감사 (PLAN-GRADING-RECOVERY.md, 3버그 독립 진단, Beta 권장) | 코드 미수정, 의사결정 대기 |
-| 2026-04-16 | developer | grading.jsx 버그 B 수정: STEP 4/8 duplicate 기반 전환 (clipboard 제거) | 구현 완료 |
-| 2026-04-16 | developer | grading.jsx 버그 C 수정: D1 재도입 + 아트보드 clamp 강화 (USE_D1_MODE 플래그 + calculateUnionBoundsOfItems 헬퍼) | 구현 완료 |
-| 2026-04-16 | developer | grading-v2.jsx 신규 생성 (607줄, 사용자 초기 7단계 원점 재구축, dd51cc5 참조, v1 보존) | 구현 완료 |
+| 2026-04-20 | pm(외부) | G드라이브 AI↔SVG 대조 63개, 파이프라인 검증 | 63/63 성공 |
+| 2026-04-21 | developer | SVG 표준화 Phase 1-1~1-3 (svg_normalizer.py 950줄, CLI 3개) | py_compile+멱등성 PASS |
+| 2026-04-21 | pm | scratchpad 정리 (1482→~200→~95줄) | 완료 |
+| 2026-04-21 | debugger | 양면 유니폼 버그 4종 1차 분석 (근본 원인: 이름 매칭 반쪽) | 완료 |
+| 2026-04-21 | developer | L556 `isTop` 부등호 통일 (버그 1+4 해결) | ✅ 사용자 검증 통과 |
+| 2026-04-21 | debugger | 버그 2+3 정밀 재분석 | 완료 |
+| 2026-04-21 | developer | 버그 2+3 1차 수정 (relVec 개별 배치 + 면적 정규화) | ❌ 망가짐, 롤백 |
+| 2026-04-21 | debugger | 3차 분석: group/ungroup 4회 반복이 참조 파괴 원인 | 완료 |
+| 2026-04-21 | developer | 재수정: 폴백 함수 재사용 + exponent 1.0 (버그 2+3 해결) | ✅ 사용자 검증 통과 |
+| 2026-04-22 | pm | DEBUG_LOG 복구 + scratchpad 정리 + 커밋 | 진행 중 |
+| 2026-04-22 | planner-architect | 자동 업데이트 시스템 상세 설계 (5 Phase, 15~18h) | PLAN-AUTO-UPDATE.md + knowledge 3종 갱신 완료 |
+| 2026-04-22 | developer | Phase A 기반 설정 10 Step (키생성→G드라이브 이동→Cargo/npm/conf/caps/lib 수정→v1.0.0 통일) | ✅ cargo check 35.6초 통과, keys/ gitignore 검증 OK |
+| 2026-04-22 | developer | Phase A-5 (sync-bundle-resources.mjs 146줄 + prebuild 등록) + 계획서 오타 4건 수정 | ✅ 멱등성 PASS (변경 없음 15개 리소스), `grader-updater.key` 잔존 0건 |
+| 2026-04-22 | developer | Phase B CI 워크플로우 (bump-version.mjs 267줄 + release.yml 131줄 + package.json scripts 2개) | ✅ 3파일 버전 왕복 테스트 PASS, YAML 구조 검증 PASS (탭/홀수들여쓰기 0), Secrets 이름 일치 |
+| 2026-04-22 | developer | Phase C 업데이트 UI (updaterService 110줄 + hook 150줄 + Modal 220줄 + Section 150줄 + App.tsx/Settings.tsx/App.css 수정) | ✅ tsc --noEmit 통과, 모듈 상태+구독자 패턴으로 App/Settings 상태 공유, BEM+CSS변수 준수 |
+| 2026-04-22 | debugger | G드라이브 신규 SVG 미인식 조사 (driveSync.ts + PatternManage.tsx + svgCacheStore.ts 경로 특정) | 🔍 원인 TOP 3 가설 + 사용자 질문 8건 정리, 코드 수정 없이 분석만 |
+| 2026-04-22 | developer | driveSync.ts mergeDriveScanResult sizes 병합 로직 근본 수정 (기존 치수 보존 + 신규 사이즈 자동 추가 + SIZE_LIST 정렬) | ✅ tsc --noEmit PASS, +37/-6, 실테스트 사용자 담당 |
+| 2026-04-22 | developer | 5XL SVG 양면 변환 (CLI 수동 실행, 로컬 C:\temp\svg_5XL_work) | ✅ pass=1 fail=0, 단일 body→4-body 구조 변환, viewBox 기준 일치, 사용자 G드라이브 업로드 대기 |
+| 2026-04-22 | planner-architect | SVG 표준화 Phase 1-4~1-7 상세 설계 (6~10시간 4 Phase 분할, 신규 3파일/수정 3파일) | ✅ PLAN-SVG-STANDARDIZATION.md ~650줄 + architecture 1건 + decisions 4건 + index 갱신 |
+| 2026-04-22 | developer | SVG 표준화 Phase 1-4 Rust 커맨드 2개 추가 (`svg_preview_normalize`/`svg_normalize_batch`, run_python 재사용 얇은 래퍼) | ✅ cargo check 29.42초 PASS 에러0 경고0, lib.rs +55/-1, invoke_handler 2줄 등록 |
+| 2026-04-22 | developer | SVG 표준화 Phase 1-5 React UI 통합 (Service 202줄 + Modal 560줄 신규 / App.css +353줄 + PatternManage +145줄) | ✅ tsc --noEmit EXITCODE=0 PASS, 6-Phase 머신 + ESC/백드롭 차단 + Drive 프리셋만 활성화, Python JSON 2단계 중첩 구조 타입 반영 |
+| 2026-04-22 | developer | SVG 표준화 Phase 1-5 보완 수정 — 글로벌 기준 파일 자동화 (드롭다운 제거) | ✅ tsc --noEmit EXITCODE=0 PASS, `resolveBaseFile()` 추가 + Modal props 2개 교체(`svgPathBySize`/`drivePatternRoot`) + PatternManage `getPieceSvgPathBySize`로 교체. 양면 상의 → 글로벌 U넥 스탠다드 XL 고정, 그 외 → XL/2XL/L/M/S fallback |
+| 2026-04-22 | developer | 자동 업데이트 Phase D 배포 가이드 문서 3종 작성 (RELEASE-GUIDE.md 392줄 + CHANGELOG.md 119줄 + INSTALL-GUIDE-STAFF.md 257줄) | ✅ 코드 0줄, 문서 only. v1.0.0 첫 릴리스 기록 + U넥 스탠다드 전용 제한 명시 + 직원용 SmartScreen 경고 통과 안내 포함, 스크린샷은 플레이스홀더 |
+
+---
+
+## ⏸ 보류 (다음 작업)
+- Phase 1-4~1-7 **설계 완료**, developer 구현 착수 대기 (사용자 승인 시)
+- 기존 수정 요청 3건 재검증 (v2에서 재발 여부)
+
+### 💡 Phase 1-6 tester용 회귀 테스트 명령 (참고 보관)
+```bash
+cd "C:\0. Programing\grader\python-engine"
+venv\Scripts\activate && pip install -r requirements.txt
+mkdir C:\temp\svg_test
+copy "G:\...\양면유니폼_U넥_스탠다드_L.svg" C:\temp\svg_test\
+copy "G:\...\양면유니폼_U넥_스탠다드_2XL.svg" C:\temp\svg_test\
+python main.py normalize_batch "C:/temp/svg_test" "C:/temp/svg_test/양면유니폼_U넥_스탠다드_2XL.svg"
+```
+정상: success=True, pass_count = total - skipped, fail_count=0  
+⚠️ G:\ 직접 실행 금지 (Drive 동기화 트리거)
+
+### 기획설계 참조
+| 계획서 | 상태 |
+|--------|------|
+| PLAN-GRADING-REBUILD.md | 구현됨 (grading-v2.jsx 607줄) |
+| PLAN-PIECE-AWARE-LAYOUT.md | Phase 1+2 구현 |
+| PLAN-GRADING-RECOVERY.md | Beta 권장안 반영 |
+| PLAN-GRADING-REDESIGN.md | D1 권장안 구현 |
+| PLAN-WORKFLOW-REDESIGN.md | Phase 1~4 완료 |
+| PLAN-GDRIVE-SYNC.md | 옵션 4 구현 |

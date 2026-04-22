@@ -2,6 +2,102 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-04-22] SVG 표준화 기준 파일: 양면 상의는 글로벌 `양면유니폼_U넥_스탠다드_XL.svg` 고정 사용 (드롭다운 제거)
+- **분류**: decision
+- **발견자**: 사용자 확정 → developer (Phase 1-5 보완 수정)
+- **내용**: SVG 표준화 모달의 기준 파일 결정 방식을 **사용자 수동 선택 → 자동 고정**으로 전환. **채택**: 양면 유니폼 상의(driveFolder 경로에 "양면 유니폼상의" 포함)는 모든 프리셋이 동일한 글로벌 기준 파일 `{drivePatternRoot}/0. 농구유니폼 확정 정리본/2. 양면 유니폼상의 패턴/U넥/U넥 양면유니폼 스탠다드/양면유니폼_U넥_스탠다드_XL.svg` 사용. 그 외(단면 등)는 자체 폴더 내 `XL → 2XL → L → M → S` 순서 fallback. **거부 (이전 채택안)**: 모달 내 기준 사이즈 드롭다운 — 프리셋마다 다른 기준이 지정돼 검증/매칭 로직이 깨질 수 있고, 사용자가 실수로 2XL 등을 선택하면 전체 폴더가 다른 기준으로 변환됨. **구현**: `svgStandardizeService.ts`에 `GLOBAL_DOUBLE_SIDED_BASE_FILE_RELATIVE` 상수 + `isDoubleSidedTopPattern()` + `resolveBaseFile()` 추가. Modal props에서 `registeredSizes`/`pieceBaseName` 제거, `svgPathBySize`/`drivePatternRoot` 추가. 드롭다운 JSX → "자동 결정된 기준 파일 안내 카드"로 교체. **안전장치**: (1) 판별 키워드 `"양면 유니폼상의"`(공백 1개, Drive 실제 폴더명과 정확히 일치), (2) Drive 루트의 trailing slash 자동 정리, (3) `resolveBaseFile` 반환 null이면 [미리보기] 버튼 disabled + 에러 카드 표시, (4) 글로벌 파일 미존재 시 Python CLI가 `"기준 SVG 파일을 찾을 수 없습니다"` 반환 → Modal error phase.
+- **참조횟수**: 0
+
+### [2026-04-22] SVG 표준화 UI 버튼 배치: 카드 ⋮ 더보기 메뉴 채택
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: SVG 일괄 표준화 기능의 PatternManage 진입점 위치 결정. **채택 (A-modified)**: 프리셋 카드 우상단의 즐겨찾기 별(☆/★) 왼쪽에 `⋮` 더보기 메뉴 버튼 추가, 클릭 시 드롭다운으로 `[📐 SVG 표준화]` 항목 노출. **거부 (A)**: 카드 내부에 상시 아이콘 버튼 — 즐겨찾기 별과 공간 충돌 + 카드 UI 복잡화. **거부 (B)**: 별도 상세 페이지(사이드바 신규 메뉴) — 현재 카드 클릭은 "선택 모드" 액션에 할당됨 + 페이지 이동 비용. **거부 (C)**: 페이지 상단 툴바 + 다수 선택 일괄 처리 — 사용자 요청은 "한 번에 1개 패턴 그룹"이므로 오버엔지니어링. **근거**: (1) Gmail/GitHub 등에서 ⋮ 메뉴는 친숙한 패턴, (2) 향후 "Drive 폴더 열기", "프리셋 복사" 등 다른 메뉴 항목으로 자연스럽게 확장 가능, (3) Drive 프리셋에서만 활성화(`!preset.driveFolder` 시 disabled + title 툴팁)하여 Local 프리셋 오남용 방지.
+- **참조횟수**: 0
+
+### [2026-04-22] SVG 표준화 Rust 커맨드 전략: 기존 run_python 재사용하는 전용 래퍼 2개 신규 추가
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: SVG 표준화 Python CLI를 Tauri 프론트에서 호출하는 방식 결정. **채택 (A)**: `svg_preview_normalize(folder, baseFile)`, `svg_normalize_batch(folder, baseFile, noBackup)` Rust 커맨드 2개 신규 추가, 내부는 기존 `run_python` 로직 재사용(get_python_engine_dir + subprocess). **거부 (B)**: 프론트가 `invoke("run_python", { command: "preview_normalize", args: [...] })`로 직접 호출 — 동적 문자열 사용으로 타입 체크 약화, 바이브 코더가 args 순서 실수 시 런타임 실패. **거부 (C)**: Python sidecar로 전환(Cargo에 python embed) — 배포 복잡도 2배, 현재 `setup-python.bat`으로 venv 설치 흐름 재작성 필요, 이미 `run_python` 안정 동작 중. **거부 (D)**: Python stdin/stdout 대신 임시 파일 IPC — svg_normalizer는 이미 `print_json` 한 줄 반환 규약 준수, 불필요. **핵심**: 네이밍으로 의도가 명시되어 TypeScript `invoke<"svg_preview_normalize">(...)` 호출 시 인자 순서/타입이 컴파일 타임에 검증됨. Python 측은 **무변경** (svg_normalizer.py 950줄 보존).
+- **참조횟수**: 0
+
+### [2026-04-22] SVG 표준화 Python 실행 방식: 기존 venv 유지 (sidecar 전환 거부)
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: SVG 표준화 CLI를 Tauri에 통합할 때 Python 실행 환경 결정. **채택**: 현재 `python-engine/venv` + `run_python` subprocess 방식 그대로. **거부**: Tauri 2.x sidecar(rustpython/pyo3/python-embedded) 전환. **이유**: (1) 현재 구조는 이미 8개월간 안정 동작(pdf_handler, pdf_grader, svg_parser, order_parser, svg_normalizer 5개 모듈 모두 같은 venv에서 작동), (2) sidecar 전환 시 `setup-python.bat` → `npm run sync:resources` 연결이 끊기고 requirements.txt 관리가 이중화됨, (3) Tauri 번들에 Python 런타임을 포함하면 MSI 크기가 50MB+ 증가, (4) PyMuPDF/svgpathtools 같은 네이티브 확장 의존성이 sidecar에서는 크로스 컴파일 문제 유발 가능. **현재 한계 인정**: sidecar가 아니므로 사용자 PC에 Python 3.11 + venv 설치가 선결. 하지만 이미 `setup-python.bat`으로 자동화됨. Phase 1-3 자동 업데이트 번들링 때 `sync-bundle-resources.mjs`가 `svg_normalizer.py` 자동 포함하도록 해결됨.
+- **참조횟수**: 0
+
+### [2026-04-22] SVG 표준화 범위: Phase 1 U넥 양면유니폼 스탠다드 전용 유지
+- **분류**: decision
+- **발견자**: planner-architect (사용자 확정)
+- **내용**: SVG 일괄 표준화 기능의 Phase 1 범위 확정. **채택**: `NORMALIZER_VERSION = "1.0-uneck-double-sided"` 그대로 유지, 단일 패턴(`U넥 양면유니폼 스탠다드`)만 지원. **거부 (A)**: V넥/라운드넥/하의 등 다른 양식도 동시 지원 — 각각 bbox 분류/좌표 상수가 달라 하드코딩 상수 세트 4~5개 필요, 검증 부담 ×5. **거부 (B)**: JSON 프리셋으로 외부화하여 범용화 — 외부화에는 "패턴 분류 로직이 양식별로 일관된지" 선행 검증 필요, 현재는 U넥 1개만 실사용 검증됨. **거부 (C)**: 사이드바 신규 메뉴로 승격하여 모든 Drive 폴더에 일괄 정상화 — 단면 유니폼에 실수로 돌리면 "패턴 path 2개 추출 실패"로 FAIL은 나지만 사용자 혼란 유발. **안전장치**: (1) UI 모달 상단 상시 안내 "현재 U넥 양면유니폼 스탠다드 전용", (2) 단면 유니폼에 실행 시 Python이 FAIL 반환(파일 무수정), (3) 카드 ⋮ 메뉴는 `preset.driveFolder` 존재 프리셋에만 활성화. **확장 경로**: 새 양식 추가 요청 발생 시 Phase 3에서 JSON 프리셋 스키마 설계 — 예: `patterns/U넥_양면.json`의 `ARTBOARD_WIDTH`/`PATTERN_X_OFFSET`/`CUT_LINE_Y` 등을 외부화.
+- **참조횟수**: 0
+
+### [2026-04-22] Drive 스캔 시 사이즈 배열 병합 정책: "기존 치수 보존 + 신규 사이즈 자동 추가"
+- **분류**: decision
+- **발견자**: developer (PM 지시로 근본 수정 중 확정)
+- **내용**: `driveSync.mergeDriveScanResult`에서 기존 프리셋의 `sizes` 배열을 Drive 스캔 결과와 병합할 때의 정책. **채택 (A)**: 기존 사이즈는 `width/height` 치수 데이터 그대로 보존 + Drive에 **신규로 존재하는 사이즈만** 자동 추가(width/height=0 초기화) + `SIZE_LIST`(5XS→5XL) 순 정렬. **거부 (B)**: `sizes` 배열 전체 보존(기존 구현) — 신규 사이즈 SVG 추가를 차단하는 안티패턴. **거부 (C)**: Drive가 소유한 `svgPathBySize`에 맞춰 `sizes` 전체 재생성 — 사용자가 PatternManage에서 입력한 mm 치수가 모두 0으로 초기화됨(치명적 데이터 유실). **거부 (D)**: 신규 사이즈를 사용자에게 모달로 확인 — Drive 자동 동기화의 "조용한 갱신" 원칙 위배, 바이브 코더 UX 부담. **핵심 원칙**: 사용자 입력 데이터 보호는 **항목 단위**로 — "기존 항목의 값은 덮지 않되, 신규 항목은 자동 추가". "Drive에는 있지만 로컬에 없는 것 = 자동 추가", "로컬에만 있고 Drive에서 없어진 것 = 일단 유지"(Q2-B 결정, L675~682). **pieceId 연결**: 새 사이즈 엔트리의 `pieceId`는 기존 프리셋의 `sizes[0].pieces[0].pieceId`를 재사용 → 폴백은 `pieces[0].id`. Phase 1 단일 piece 가정 하에 안전. **width/height=0**: 사용자가 PatternManage에서 나중에 입력해야 하는 값임을 "0"으로 표시(경고 UI는 추후 Phase). 상세 커밋은 developer 작업 로그 참조.
+- **참조횟수**: 0
+
+### [2026-04-22] 자동 업데이트 시스템: Tauri Updater + GitHub Releases + Actions 채택
+- **분류**: decision
+- **발견자**: planner-architect (사용자 확정 2026-04-22)
+- **내용**: 직원 배포 시 매번 setup.exe 수동 배포하던 방식을 자동 업데이트로 전환. **플랫폼 Q1**: (A) Tauri 공식 Updater 플러그인 **채택** vs (B) 자체 구현 거부. 이유: 공식 플러그인이 서명 검증/atomic replace/rollback을 모두 제공, 자체 구현은 보안 리스크 과다. **배포 저장소 Q2**: (A) GitHub Releases **채택** vs (B) 사내 서버 거부. 이유: (1) 저장소 Public으로 운영 가능(사내 인증서버 불필요), (2) tauri-action@v0가 latest.json 자동 생성, (3) 무료/무제한 대역폭. **빌드 자동화 Q3**: (A) GitHub Actions **채택** vs (B) 로컬 빌드 거부. 이유: 개발자 PC 독립, Windows 클린 러너에서 재현성 보장. **릴리스 공개 방식 Q4**: (A) Draft 후 수동 Publish **채택** vs (B) 자동 공개 거부. 이유: 실수 태그 푸시 시 직원 전파 방지(안전장치). **플랫폼 범위 Q5**: Windows만 우선(macOS/Linux 나중에 matrix로 확장 가능). **코드 사인**: 비용 이슈로 없음(SmartScreen 경고 감수, 설치 가이드로 대응). 구현 기간 총 15~18시간, 5 Phase로 분할(기반/CI/UI/배포자동화/테스트롤아웃). 상세: PLAN-AUTO-UPDATE.md 참조.
+- **참조횟수**: 0
+
+### [2026-04-22] 서명 키 보관: G드라이브 공유 폴더 + .gitignore 차단
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: Tauri Updater private 키 보관 위치 선정. **채택**: `G:/공유 드라이브/디자인/grader-keys/grader.key` (G드라이브 공유 폴더). **거부**: (A) Git 커밋 — private 키 노출=멀웨어 배포 가능, (B) 로컬 PC만 — 개발자 PC 고장 시 복구 불가, (C) 1Password/Vault — 바이브 코더에게 오버킬. G드라이브 선택 이유: 기존 Drive 연동 인프라 활용, 접근 권한 통제 가능, 여러 기기 동기화 자동, 팀 내 공유 용이. 안전장치: `.gitignore`에 `keys/` 추가 + `keys/README.md`에 "실제 키는 G드라이브" 메모만 남김 + GitHub Secrets에는 키 내용을 Actions용으로만 복사 저장.
+- **참조횟수**: 0
+
+### [2026-04-22] 버전 관리 전략: Semantic Versioning + 태그 기반 릴리스
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: 버전 관리 규약 확정. **포맷**: `{major}.{minor}.{patch}` (Semantic Versioning). **현재 0.1.0 → 자동 업데이트 최초 릴리스는 0.2.0**(0→1 정식 승격은 피드백 반영 후). **태그 규약**: `v{version}` 접두사(예: `v0.2.0`), 릴리스 트리거는 태그 push만(브랜치 push 아님 — 실수 방지). **major 증가 조건**: breaking change(데이터 마이그레이션 필요 등)에 한정. **3파일 동기화**: `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`의 version 필드를 `scripts/bump-version.mjs`로 일괄 갱신(한 곳 까먹으면 업데이트 체크 오작동하므로 스크립트 필수).
+- **참조횟수**: 0
+
+### [2026-04-22] Python 엔진 리소스 번들링: 자동 스캔 스크립트 채택
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: `tauri.conf.json`의 `bundle.resources`에 Python/JSX 파일을 개별 나열해야 하는 Tauri v2 제약 대응. **채택**: (A) prebuild hook에서 `scripts/sync-bundle-resources.mjs`로 `python-engine/*.py` + `illustrator-scripts/*.jsx` 자동 스캔하여 conf 갱신. **거부**: (B) 수동 나열(현행) — 새 파일 추가 시 까먹어 런타임 에러, (C) 글롭 패턴 `["../python-engine/*"]` — tauri v2는 객체 매핑 필요 + `__pycache__`/`venv`/`test*.py` 제외 불가. 현재 누락 확인: `order_parser.py`, `svg_normalizer.py` 두 개 resources 미등록 상태 → 스크립트 도입으로 즉시 해결. 제외 규칙: `test*.py`, `__pycache__`, `venv`, `grading-*-backup.jsx` 하드코딩. `npm run prebuild` hook에 등록하여 `npm run build` 전 자동 실행.
+- **참조횟수**: 0
+
+### [2026-04-22] 업데이트 UI 배치: Settings 페이지 통합 + 자동 팝업
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: 업데이트 UI 노출 위치 결정. **채택**: (A) App.tsx mount 시 자동 팝업(UpdateModal) + Settings 페이지 하단에 "버전 정보" 섹션(UpdateSection) **둘 다**. **거부**: (B) 별도 라우트 `/update` — 사이드바 복잡화, (C) Header에 상시 알림 배지 — 업데이트 없을 때 시각적 노이즈. **자동 팝업 조건**: 앱 시작 시 1회 체크(네트워크 오류는 console.warn만 + 무시), 결과 있으면 UpdateModal 표시, "나중에" 클릭으로 세션 내 dismiss 가능. **설정 페이지 섹션**: 현재 버전/최신 체크 시각/상태/[지금 확인] 버튼 표시, 팝업 닫은 후에도 재접근 가능. 선택형 원칙 유지(모든 버튼은 "업데이트" 또는 "나중에").
+- **참조횟수**: 0
+
+### [2026-04-22] 릴리스 공개 방식: Draft 생성 후 수동 Publish
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: GitHub Actions 워크플로우에서 `releaseDraft: true` 설정. **채택 이유**: (1) 실수로 태그 푸시해도 직원에게 즉시 전파되지 않음(안전장치), (2) release notes를 GitHub UI에서 최종 검토/편집 가능, (3) 빌드 실패 시 draft로만 남아 정리 용이. **운영 절차**: Actions 빌드 완료 → Release 페이지에 draft 생성 → 사용자가 release notes 확인/수정 → "Publish" 버튼 클릭 → 이때부터 직원 앱에 자동 업데이트 전파. **롤백 방법**: 문제 릴리스는 Unpublish(또는 Delete)하면 latest.json이 이전 버전을 가리킴, 이미 받은 직원 PC는 그대로 유지(Tauri updater는 다운그레이드 안 함).
+- **참조횟수**: 0
+
+### [2026-04-21] AI→SVG 자동 변환 기능: JSX 스크립트 방식 + 별도 페이지 채택
+- **분류**: decision
+- **발견자**: pm (사용자 확정 2026-04-21)
+- **내용**: 오늘 외부 작업에서 검증된 AI→SVG 변환 파이프라인을 grader에 내장 기능으로 추가 결정. **구현 방식 Q1**: (A) 새 JSX 스크립트 작성(`illustrator-scripts/ai_to_pdf.jsx`) + Python PyMuPDF 조합 **채택** vs (B) pywin32 COM 직접 호출 거부. 이유: (1) 기존 프로젝트가 이미 `run_illustrator_script` Tauri 커맨드와 `grading.jsx` JSX 방식을 사용해 일관성 유지, (2) pywin32는 추가 의존성이며 Windows 전용, (3) JSX는 Illustrator에 내장된 ExtendScript 엔진이라 별도 설치 불필요. **UI 위치 Q2**: (A) 사이드바에 "AI 변환" 신규 페이지 **채택** vs (B) PatternManage 안에 버튼 추가 거부. 이유: 배치 작업(수십~수백 파일)에 적합한 별도 워크스페이스가 필요. **구현 순서**: SVG 표준화 Phase 1 완료 후 planner-architect에게 상세 설계 위임.
+- **참조횟수**: 0
+
+### [2026-04-21] AI 파일 처리 분기: 헤더 바이트 검사 기반 2경로 파이프라인
+- **분류**: decision
+- **발견자**: pm
+- **내용**: AI→SVG 변환 시 단일 도구(PyMuPDF만 or Illustrator만) 선택 대신 **헤더 바이트로 분기하는 하이브리드** 채택. 이유: (1) PDF 호환 AI 89%는 PyMuPDF 단독으로 1~2초/파일로 빠르게 처리, (2) PostScript AI 11%는 Illustrator JSX로 PDF 재저장 후 PyMuPDF로 2단계 처리. 도구 단일화 거부 근거: 전체를 Illustrator로 돌리면 63개 변환에 7~10분 소요(각 30~40초), 전체를 PyMuPDF로 돌리면 11%는 실패. **분기 판정**: `open(path, 'rb').read(10)` 첫 10바이트가 `%PDF`로 시작하면 PyMuPDF 경로, `%!PS`이면 Illustrator 경로. 외부 검증 결과 63/63(100%) 성공, 총 소요 1분 32초(PyMuPDF 79초 + Illustrator 12초).
+- **참조횟수**: 0
+
+### [2026-04-21] SVG 일괄 표준화: 기존 svg_parser.py 확장 대신 신규 svg_normalizer.py 분리
+- **분류**: decision
+- **발견자**: planner-architect → developer
+- **내용**: U넥 양면유니폼 12개 사이즈 SVG를 기준 파일 구조로 일괄 변환하는 기능 추가 시, 기존 `svg_parser.py`(1088줄, 그레이딩 핵심)에 함수를 추가하는 옵션 A 대신 **신규 모듈 `svg_normalizer.py` 분리(950줄)** 선택. 이유: (1) svg_parser.py는 그레이딩 회귀 위험이 큼, (2) 관심사 분리(parser=읽기, normalizer=변환), (3) 기존 grader 모듈 컨벤션(`pdf_handler`, `pdf_grader`, `pattern_scaler` 따로) 과 일관, (4) cubic bezier 정확 처리를 위해 svgpathtools 의존성 추가가 필요한데 기존 모듈은 의존성 변동 최소화. Phase 1 범위는 **U넥 양면유니폼 전용**으로 한정(상수 하드코딩, `NORMALIZER_VERSION = "1.0-uneck-double-sided"`). 향후 V넥/하의 등 양식 추가 시 Phase 3에서 JSON 프리셋으로 외부화 검토.
+- **참조횟수**: 0
+
+### [2026-04-21] SVG path bbox 측정: 자체 파싱 대신 svgpathtools 채택
+- **분류**: decision
+- **발견자**: developer
+- **내용**: 기존 `svg_parser._parse_path_bbox`는 path 명령(M/L/C/S/Q/Z) 단순 파싱으로 cubic bezier 제어점까지 bbox에 포함시키는 한계가 있어, 곡선이 많은 패턴에서 실제 시각 영역보다 큰 bbox를 반환. 신규 `svg_normalizer.py`는 **svgpathtools 1.7.2** 채택해 cubic/quadratic bezier 곡선의 실제 통과 영역을 정확히 측정. 의존성 비용은 svgpathtools(~3MB) + scipy/numpy(이미 거의 표준). 기존 svg_parser의 측정 로직은 그대로 두어 그레이딩 회귀 위험 0. 멱등성 검증 결과 같은 입력 100번 변환해도 비트 단위 동일 결과 보장.
+- **참조횟수**: 0
+
 ### [2026-04-08] AI 파일 처리 방식: 직접 파싱 대신 Illustrator 스크립팅 선택
 - **분류**: decision
 - **발견자**: planner-architect

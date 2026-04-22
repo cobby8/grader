@@ -43,6 +43,9 @@ import { scanDriveRoot, mergeDriveScanResult } from "../services/driveSync";
 // 세션 저장소 — 2단계 "패턴 선택" 진입 가드 + selectedPresetId 저장용
 import { loadWorkSession, updateWorkSession } from "../stores/sessionStore";
 import type { WorkSession } from "../types/session";
+// Phase 1-5: SVG 표준화 모달 — 카드 ⋮ 메뉴에서 열림
+// 왜 여기서 import: PatternManage가 이 모달을 조건부 렌더하므로 소유자가 맞다.
+import SvgStandardizeModal from "../components/SvgStandardizeModal";
 
 /** 편집 모드 상태 타입 */
 type EditMode = "list" | "create" | "edit";
@@ -246,6 +249,15 @@ function PatternManage() {
   const lastAutoScanRef = useRef<number>(0);
   // 현재 동기화 진행 중 플래그 — 중복 실행 방지
   const autoScanInFlightRef = useRef<boolean>(false);
+
+  // === Phase 1-5: SVG 표준화 모달 상태 ===
+  // 왜 두 개로 나눴나:
+  //   - openMenuPresetId: 카드 ⋮ 메뉴 드롭다운이 열려있는 카드 ID (한 번에 하나만)
+  //   - standardizeTarget: 모달이 렌더될 대상 프리셋 (null이면 모달 닫힘)
+  // 둘을 분리해야 "메뉴 클릭 → 메뉴 닫힘 + 모달 열림" 전환이 깔끔하다.
+  const [openMenuPresetId, setOpenMenuPresetId] = useState<string | null>(null);
+  const [standardizeTarget, setStandardizeTarget] =
+    useState<PatternPreset | null>(null);
 
   // === Settings에서 Drive 동기화 활성 여부 + 루트 경로 로드 ===
   // 왜 별도 useEffect인가: Settings는 presets와 독립이라 병렬 로드 가능.
@@ -518,6 +530,56 @@ function PatternManage() {
     runAutoSync();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoadSuccess, driveSyncEnabled, drivePatternRoot]);
+
+  // === Phase 1-5: 카드 ⋮ 메뉴 바깥 클릭 시 닫기 ===
+  // 왜 document-level listener 인가: 드롭다운 바깥 어디를 눌러도 닫혀야
+  // 자연스럽다 (GitHub/Gmail 방식). 메뉴가 열려 있을 때만 등록해서 불필요한
+  // 리스너 실행을 피한다.
+  useEffect(() => {
+    if (openMenuPresetId === null) return;
+    const onDocClick = () => {
+      // 메뉴 내부 버튼 클릭은 e.stopPropagation()으로 여기 도달 못함.
+      // 여기까지 왔다 = 메뉴 바깥 클릭.
+      setOpenMenuPresetId(null);
+    };
+    // capture 단계에 붙이면 카드 클릭(선택)보다 먼저 실행되어 메뉴가 먼저 닫힘
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, [openMenuPresetId]);
+
+  // === Phase 1-5: driveFolder(상대경로) + drivePatternRoot(절대경로) 합성 ===
+  // 왜 필요: preset.driveFolder는 "농구유니폼/1. 단면 유니폼..." 같은 상대 경로.
+  // Python에 넘길 때는 루트까지 합친 절대 경로여야 한다.
+  // driveSync.ts의 joinPath는 private이라 여기에 작은 버전을 둔다.
+  const buildAbsoluteDriveFolder = useCallback(
+    (root: string | undefined, relative: string): string => {
+      if (!root) return relative;  // 방어적 기본값
+      const sep = root.includes("\\") ? "\\" : "/";
+      const trimmedRoot =
+        root.endsWith("\\") || root.endsWith("/") ? root.slice(0, -1) : root;
+      const trimmedRel = relative.startsWith("\\") || relative.startsWith("/")
+        ? relative.slice(1)
+        : relative;
+      return `${trimmedRoot}${sep}${trimmedRel}`;
+    },
+    []
+  );
+
+  // === (보완 수정 [2026-04-22]) 프리셋 첫 조각의 svgPathBySize 맵 추출 ===
+  //
+  // 왜 필요: SvgStandardizeModal이 양면 상의가 아닐 때(단면 등)
+  // XL → 2XL → L → M → S 순서로 fallback 기준 파일을 선택할 수 있도록
+  // 패턴의 사이즈별 SVG 절대 경로 맵을 넘겨줘야 한다.
+  //
+  // 왜 첫 조각만: Phase 1은 1 pattern = 1 piece 가정. 상/하의 세트 등
+  // 복합 프리셋 확장은 Phase 3에서 다시 설계.
+  const getPieceSvgPathBySize = useCallback(
+    (preset: PatternPreset): Record<string, string> => {
+      const firstPiece = preset.pieces?.[0];
+      return firstPiece?.svgPathBySize ?? {};  // 비어있으면 빈 객체
+    },
+    []
+  );
 
   // === 카테고리별 프리셋 수 계산 (트리 표시용) ===
   const presetCountByCategory = new Map<string, number>();
@@ -1192,6 +1254,53 @@ function PatternManage() {
                         </button>
                       );
                     })()}
+                    {/* ⋮ 더보기 메뉴 (Phase 1-5) — 즐겨찾기 별 왼쪽.
+                        stopPropagation으로 카드 선택 이벤트 차단.
+                        바깥 클릭 시 document 리스너가 자동으로 닫는다. */}
+                    <button
+                      type="button"
+                      className="preset-card__menu-toggle"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenMenuPresetId((cur) =>
+                          cur === preset.id ? null : preset.id
+                        );
+                      }}
+                      aria-label="더 많은 옵션"
+                      aria-haspopup="menu"
+                      aria-expanded={openMenuPresetId === preset.id}
+                      title="더 많은 옵션"
+                    >
+                      ⋮
+                    </button>
+                    {openMenuPresetId === preset.id && (
+                      <div
+                        className="preset-card__menu"
+                        role="menu"
+                        // 메뉴 내부 클릭은 document 리스너(바깥 감지)로 전파되지 않게 차단
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          className="preset-card__menu-item"
+                          role="menuitem"
+                          // Drive 연동 프리셋(driveFolder 있음)만 활성화.
+                          // Local 프리셋은 G드라이브 경로가 없어 표준화 불가.
+                          disabled={!preset.driveFolder || !drivePatternRoot}
+                          title={
+                            !preset.driveFolder || !drivePatternRoot
+                              ? "Drive 연동 프리셋만 표준화할 수 있습니다"
+                              : undefined
+                          }
+                          onClick={() => {
+                            setStandardizeTarget(preset);
+                            setOpenMenuPresetId(null);
+                          }}
+                        >
+                          📐 SVG 표준화
+                        </button>
+                      </div>
+                    )}
                     {/* 간소화된 카드 — 패턴명 / 조각 수(실제 SVG 파싱) / 사이즈 범위
                         Drive vs Local 구분은 사용자 요청으로 표시하지 않음 (UI 통일) */}
                     <div className="preset-card__title-row">
@@ -1216,6 +1325,31 @@ function PatternManage() {
         </div>
 
         {/* Drive 가져오기 모달은 옵션 4 자동 동기화로 대체되어 제거됨 */}
+
+        {/* Phase 1-5: SVG 표준화 모달 — 카드 ⋮ 메뉴에서 선택 시 렌더.
+            standardizeTarget이 null이면 렌더 안 함 (언마운트 = 상태 초기화).
+            (보완 수정 [2026-04-22]) 기준 사이즈 드롭다운 제거 → 모달 내부에서
+            resolveBaseFile()로 자동 결정. 필요한 입력은 driveFolder / svgPathBySize /
+            drivePatternRoot 3가지. */}
+        {standardizeTarget && standardizeTarget.driveFolder && drivePatternRoot && (
+          <SvgStandardizeModal
+            presetName={standardizeTarget.name}
+            driveFolder={buildAbsoluteDriveFolder(
+              drivePatternRoot,
+              standardizeTarget.driveFolder
+            )}
+            svgPathBySize={getPieceSvgPathBySize(standardizeTarget)}
+            drivePatternRoot={drivePatternRoot}
+            onClose={() => setStandardizeTarget(null)}
+            onComplete={() => {
+              // 실행 완료 시 Drive 재스캔 트리거.
+              // 쿨다운(60초) 무시하기 위해 lastAutoScanRef를 0으로 리셋.
+              // 근거: 사용자가 명시적으로 실행한 작업이므로 즉시 UI 반영이 기대됨.
+              lastAutoScanRef.current = 0;
+              runAutoSync();
+            }}
+          />
+        )}
 
         {/* "다음: 파일 생성" 고정 푸터 버튼 — 선택 모드에서만 표시.
             WorkSetup과 동일한 .size-footer 클래스를 재사용해 디자인 일관성 유지. */}

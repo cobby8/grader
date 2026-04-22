@@ -2045,3 +2045,498 @@ html, body, #root {
   color: #6b7280;
 }
 
+/* ============================================================
+ * UpdateModal (자동 업데이트 팝업) — Phase C
+ * - App.tsx에서 조건부 렌더
+ * - 프로젝트 BEM + --color-* 변수 사용
+ * ============================================================ */
+
+/* 화면 전체 덮는 반투명 백드롭 */
+.update-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000; /* 사이드바/헤더보다 위에 */
+  padding: 24px;
+}
+
+/* 모달 본체 (카드) */
+.update-modal__card {
+  background-color: var(--color-bg-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  width: 100%;
+  max-width: 520px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.update-modal__header {
+  padding: 20px 24px 8px;
+  border-bottom: 1px solid var(--color-bg-content);
+}
+
+.update-modal__title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-text-dark);
+  margin-bottom: 4px;
+}
+
+.update-modal__version {
+  font-family: "Consolas", "Monaco", monospace;
+  background-color: var(--color-accent-soft);
+  color: var(--color-accent);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.95em;
+}
+
+.update-modal__date {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* 릴리스 노트 본문 — 스크롤 가능 */
+.update-modal__body {
+  padding: 12px 24px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 60px;
+}
+
+.update-modal__notes {
+  font-family: "Consolas", "Monaco", monospace;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+  background-color: var(--color-bg-content);
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* 푸터 (버튼 영역) */
+.update-modal__footer {
+  padding: 12px 24px 20px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+  border-top: 1px solid var(--color-bg-content);
+  flex-wrap: wrap;
+}
+
+/* 다운로드 진행률 바 */
+.update-modal__progress {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.update-modal__progress-bar {
+  width: 100%;
+  height: 10px;
+  background-color: var(--color-bg-content);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.update-modal__progress-fill {
+  height: 100%;
+  background-color: var(--color-accent);
+  transition: width var(--transition-fast);
+}
+
+.update-modal__progress-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+}
+
+.update-modal__progress-size {
+  color: var(--color-text-muted);
+  font-family: "Consolas", "Monaco", monospace;
+}
+
+/* 설치 직전 안내 */
+.update-modal__finishing {
+  width: 100%;
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-status-ok);
+  padding: 8px 0;
+}
+
+/* 에러 박스 */
+.update-modal__error {
+  width: 100%;
+  padding: 10px 12px;
+  background-color: rgba(239, 68, 68, 0.1);
+  color: var(--color-status-error);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  margin-bottom: 4px;
+  word-break: break-word;
+}
+
+/* ============================================================================
+   SVG 표준화 모달 (Phase 1-5)
+   - 용도: PatternManage 카드 ⋮ 메뉴에서 열리는 "SVG 일괄 표준화" UI
+   - 디자인: UpdateModal을 참고하여 동일한 백드롭/카드 패턴 사용 (일관성)
+   - BEM: .svg-standardize-modal__*
+   ============================================================================ */
+
+/* 백드롭 */
+.svg-standardize-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+
+/* 모달 카드 */
+.svg-standardize-modal__card {
+  background-color: var(--color-bg-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  width: 100%;
+  max-width: 680px;  /* UpdateModal(520)보다 조금 넓게 — 파일 목록이 길어지므로 */
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 헤더 */
+.svg-standardize-modal__header {
+  padding: 20px 24px 8px;
+  border-bottom: 1px solid var(--color-bg-content);
+}
+.svg-standardize-modal__title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-text-dark);
+  margin-bottom: 4px;
+}
+.svg-standardize-modal__subtitle {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* 상단 경고 배너 */
+.svg-standardize-modal__warning {
+  margin: 12px 24px 0;
+  padding: 10px 12px;
+  background-color: rgba(245, 158, 11, 0.12);  /* --color-status-warning 연한 버전 */
+  border-left: 3px solid var(--color-status-warning);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-dark);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+/* 본문 — 스크롤 가능 */
+.svg-standardize-modal__body {
+  padding: 12px 24px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 120px;
+}
+
+/* 섹션 블록 (idle 폼/결과 컨테이너 공용) */
+.svg-standardize-modal__section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.svg-standardize-modal__section-title {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-text-dark);
+  margin-top: 4px;
+}
+
+/* 입력 필드 (라벨 + 컨트롤 세로 배치) */
+.svg-standardize-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.svg-standardize-modal__label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+.svg-standardize-modal__path {
+  font-family: "Consolas", "Monaco", monospace;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  background-color: var(--color-bg-content);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  word-break: break-all;
+}
+.svg-standardize-modal__select {
+  padding: 6px 8px;
+  font-size: var(--font-size-base);
+  border: 1px solid var(--color-border-dashed);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-dark);
+  width: 120px;
+}
+.svg-standardize-modal__hint {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+.svg-standardize-modal__hint--caution {
+  color: var(--color-status-warning);
+}
+.svg-standardize-modal__checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* 로딩 (previewing / executing) */
+.svg-standardize-modal__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px 0;
+}
+.svg-standardize-modal__spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--color-bg-content);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: svg-standardize-spin 0.8s linear infinite;
+}
+@keyframes svg-standardize-spin {
+  to { transform: rotate(360deg); }
+}
+.svg-standardize-modal__loading-text {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* 파일 목록 (preview-done / done 공용) */
+.svg-standardize-modal__file-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-dashed);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-content);
+}
+.svg-standardize-modal__file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+  border-bottom: 1px solid var(--color-bg-surface);
+}
+.svg-standardize-modal__file-item:last-child {
+  border-bottom: none;
+}
+.svg-standardize-modal__file-item--fail {
+  background-color: rgba(239, 68, 68, 0.06);
+}
+.svg-standardize-modal__file-item--skip {
+  color: var(--color-text-muted);
+}
+.svg-standardize-modal__file-icon {
+  flex: 0 0 auto;
+  font-weight: 700;
+  color: var(--color-status-ok);
+  width: 14px;
+  text-align: center;
+}
+.svg-standardize-modal__file-item--fail .svg-standardize-modal__file-icon {
+  color: var(--color-status-error);
+}
+.svg-standardize-modal__file-item--skip .svg-standardize-modal__file-icon {
+  color: var(--color-text-muted);
+}
+.svg-standardize-modal__file-name {
+  flex: 1 1 auto;
+  font-family: "Consolas", "Monaco", monospace;
+  word-break: break-all;
+}
+.svg-standardize-modal__file-meta {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.svg-standardize-modal__file-error {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--color-status-error);
+}
+
+/* 요약 카드 3개 병렬 (done 상태) */
+.svg-standardize-modal__summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.svg-standardize-modal__summary-card {
+  background-color: var(--color-bg-content);
+  border-radius: var(--radius-sm);
+  padding: 12px 8px;
+  text-align: center;
+  border: 1px solid var(--color-border-dashed);
+}
+.svg-standardize-modal__summary-card--pass {
+  background-color: rgba(34, 197, 94, 0.08);
+  border-color: var(--color-status-ok);
+}
+.svg-standardize-modal__summary-card--fail {
+  background-color: rgba(239, 68, 68, 0.08);
+  border-color: var(--color-status-error);
+}
+.svg-standardize-modal__summary-card--skip {
+  background-color: var(--color-bg-content);
+}
+.svg-standardize-modal__summary-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-text-dark);
+}
+.svg-standardize-modal__summary-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+.svg-standardize-modal__version-note {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin-top: 8px;
+  text-align: right;
+}
+
+/* 에러 박스 */
+.svg-standardize-modal__error-box {
+  padding: 12px 14px;
+  background-color: rgba(239, 68, 68, 0.08);
+  border-left: 3px solid var(--color-status-error);
+  border-radius: var(--radius-sm);
+}
+.svg-standardize-modal__error-title {
+  font-weight: 600;
+  color: var(--color-status-error);
+  margin-bottom: 4px;
+}
+.svg-standardize-modal__error-message {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+  word-break: break-word;
+  margin-bottom: 8px;
+}
+.svg-standardize-modal__error-hint {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+.svg-standardize-modal__error-hint code {
+  font-family: "Consolas", "Monaco", monospace;
+  background-color: var(--color-bg-content);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+/* 푸터 */
+.svg-standardize-modal__footer {
+  padding: 12px 24px 20px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+  border-top: 1px solid var(--color-bg-content);
+  flex-wrap: wrap;
+}
+
+/* ============================================================================
+   프리셋 카드 ⋮ 더보기 메뉴 (Phase 1-5c)
+   - 위치: 카드 우상단 (즐겨찾기 별 왼쪽)
+   ============================================================================ */
+.preset-card__menu-toggle {
+  position: absolute;
+  top: 8px;
+  right: 42px;  /* 즐겨찾기 별이 right: 8px 이므로 충분히 왼쪽에 배치 */
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 1.25rem;
+  line-height: 1;
+  color: var(--color-text-muted);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  z-index: 2;
+  transition: background-color var(--transition-fast);
+}
+.preset-card__menu-toggle:hover {
+  background-color: var(--color-bg-content);
+  color: var(--color-text-dark);
+}
+
+/* 드롭다운 메뉴 */
+.preset-card__menu {
+  position: absolute;
+  top: 36px;
+  right: 42px;
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border-dashed);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  z-index: 10;
+  min-width: 180px;
+  overflow: hidden;
+}
+
+.preset-card__menu-item {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+.preset-card__menu-item:hover:not(:disabled) {
+  background-color: var(--color-bg-content);
+}
+.preset-card__menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+

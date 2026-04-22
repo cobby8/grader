@@ -2,6 +2,18 @@
 <!-- 담당: developer, reviewer | 최대 30항목 -->
 <!-- 이 프로젝트만의 코드 스타일, 네이밍 규칙, 패턴을 기록 -->
 
+### [2026-04-22] Tauri 플러그인 래퍼 서비스 패턴 (조용한 실패 원칙)
+- **분류**: convention
+- **발견자**: developer
+- **내용**: Tauri 플러그인 API(updater, fs, dialog 등) 호출은 `src/services/*.ts`의 얇은 래퍼 서비스에 캡슐화한다. 네트워크/외부 의존 플러그인(updater)은 **throw하지 않고 discriminated union으로 반환**(`{ kind: 'available' | 'up-to-date' | 'error' }` 형태). 이유: 앱 시작 시 호출되는 훅이 throw하면 React error boundary가 터져 앱이 기동 안 된다. `console.warn('[updater] ...')`만 남기고 상위에서 조용히 처리. 반면 사용자가 명시적으로 트리거한 동작(`downloadAndInstall`)은 예외 전파 허용 — UI에서 재시도 버튼으로 복구. 기존 `driveSync.ts`, `svgResolver.ts`와 동일한 함수 export 스타일(클래스 X).
+- **참조횟수**: 0
+
+### [2026-04-22] React 전역 상태 공유: 모듈 상태 + 구독자 Set 패턴
+- **분류**: convention
+- **발견자**: developer
+- **내용**: 기존 프로젝트에 Zustand/Redux/Context 없음. 여러 컴포넌트가 공유해야 하는 상태(예: 업데이트 체크 결과)는 **모듈 레벨 상태 + `listeners: Set<(s)=>void>`** 패턴으로 구현. 훅 내부에서 `useState(state)` + `useEffect`로 구독/해제, `setState(next)`는 모든 listener에 알림. 싱글톤이라 `hasAutoCheckedOnce` 같은 플래그로 React StrictMode 이중 실행도 쉽게 차단. 장점: (1) 의존성 0(라이브러리 추가 불필요) (2) 기존 `svgCacheStore.ts` 스타일과 일관 (3) 타입 안전. 단점: 앱 재시작 시 초기화(의도적 — 업데이트 상태는 세션 단위로 충분). 훅 인자에 `autoCheck: boolean` 같은 트리거 플래그를 두어 **한 군데만** 자동 실행, 나머지는 구독만 하는 구조 권장.
+- **참조횟수**: 0
+
 ### [2026-04-09] CSS 변수 네이밍 규칙
 - **분류**: convention
 - **발견자**: developer
@@ -94,3 +106,33 @@
   - 바이너리 → base64 변환 시 8KB 청크 단위 루프로 String.fromCharCode 스택 초과 방지
   - 로컬 이미지를 <img>에 표시할 때는 asset:// 대신 `data:image/png;base64,...` data URL 사용이 권한 설정 없이 안전
 - **참조횟수**: 0
+
+### [2026-04-21] Illustrator ExtendScript 좌표계 규칙 (grading.jsx 필수)
+- **분류**: convention
+- **발견자**: developer
+- **내용**:
+  - Illustrator `geometricBounds` = `[top, left, bottom, right]`. ExtendScript 좌표계는 **Y값이 클수록 위쪽** (일반 그래픽 좌표계와 반대)
+  - "위/아래" 4분면 판정 시 **반드시** `isTop = (cy > midY)` 로 통일. `<` 쓰면 표/이 스왑 버그 재발
+  - grading.jsx에서 이 규칙을 쓰는 위치: `findBodyForLayer`(L556), 색상 4분면 매칭(L1218 `dTop`, L1222 `sTop`) — **3곳 전부 동일 방향**이어야 함
+  - 참고: 정렬 함수(예: `colors.sort`에서 `b.cy - a.cy`)도 "cy 큰 게 위쪽 우선"으로 일관되게 작성
+  - 관련 errors.md: [2026-04-21] "양면 유니폼 Y축 부등호 방향 혼용" 항목
+- **참조횟수**: 0
+
+### [2026-04-21] 요소 배치는 "relVec 개별 translate" 패턴으로 통일 (grading.jsx 필수)
+**[복구됨 2026-04-21, 폴백 함수 재사용 방식]** — 초기 구현(그룹별 4회 group/ungroup 반복)은 ExtendScript `executeMenuCommand("ungroup")` 호출 시 PageItem 참조 파괴 가능성(가설 D)으로 롤백. 재구현에서는 **폴백 모드의 `placeElementGroupPerPiece` 함수를 그대로 재사용**하는 구조로 안정화. 아래 패턴 본문은 유효.
+
+- **분류**: convention
+- **발견자**: developer (이름 기반 모드 버그 3 "외측 위 쏠림" 수정 중 확립)
+- **내용**:
+  - 모든 요소 배치 모드(이름 기반 / 폴백 유클리드 / band)는 **요소별 상대벡터(relVec) + 스케일 곱** 패턴을 사용해야 한다. 그룹 전체를 한 번에 translate(그룹 bbox → body bbox) 하면 요소 간 상대 위치가 파괴되어 body 가장자리에 쏠림(버그 3 "외측 위 쏠림"). 이유: 디자인AI의 요소 분포 영역 bbox와 SVG body 영역 bbox 형태가 다르기 때문.
+  - **표준 패턴 3단계 (이름 기반 모드 ≡ 폴백 모드 동일 구조)**:
+    1. Phase 1 (디자인AI 열려있을 때): `findBodyForLayer(piece, side, designPieces.bodies)`로 요소가 속한 body 찾기 + 각 요소별 `relVec = {dx: elCx - bodyCx, dy: elBottom - bodyBottom}` 수집. **단일 평탄 배열 `allDups`와 `allElemMeta`에** 동반 저장 (그룹별 서브배열 금지).
+    2. Phase 2 (타겟 문서): **전체를 단일 그룹으로 묶어** `resize(pct, pct, ..., Transformation.CENTER)`로 스케일만 적용 → `ungroup` **1회만** 실행. group/ungroup을 그룹별로 반복하면 PageItem 참조가 파괴됨(가설 D).
+    3. Phase 2 (개별 translate): `placeElementGroupPerPiece(allDups, allElemMeta, svgPieces, svgFallback, adjustedScale, bandPositions)` 호출. 내부에서 각 요소를 `targetCx = baseCenter.cx + relVec.dx * scale`, `targetBottom = svgBodies[pieceIdx].bbox[3] + relVec.dy * scale`로 개별 translate.
+  - **스케일 인자**: `placeElementGroupPerPiece`의 scale 인자로 **`adjustedScale`** (ELEMENT_SCALE_EXPONENT 적용 후 값) 전달. 2026-04-21 튜닝: exponent=0.78 → **1.0** (선형스케일 그대로). `linearScale` 원본은 band 처리에만 사용.
+  - Y축 기준은 **하단(bbox[3])**. 중심(cy) 기준은 band 모드 fallback이나 최종 안전망에만 사용.
+  - **group/ungroup 횟수 규칙**: 배치 로직 전체에서 최대 1회. for 루프 내부에 group/ungroup을 넣지 말 것.
+  - **`elemMeta` 스키마**: `{pieceType: "body"|"band", pieceIdx: number, relVec: {dx, dy}}`. 이름 기반 모드에서는 `pieceType="body"` 고정(이름 기반 레이어는 body 전용).
+  - grading.jsx에서 이 패턴을 쓰는 위치(3곳): 이름 기반 모드(L1259~1407, Phase 1+2 분리 구조), 폴백 모드 `placeElementGroupPerPiece`(L606~707), band 배치 `placeBandsPerPiece`(L713~).
+  - 관련 errors.md: [2026-04-21] "이름 기반 요소 배치 모드에 relVec 누락" 항목 / "executeMenuCommand ungroup 반복 시 PageItem 참조 파괴" 가설
+- **참조횟수**: 1

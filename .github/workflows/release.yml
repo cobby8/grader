@@ -1,0 +1,130 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Release (Windows) — 자동 빌드/서명/릴리스 워크플로우
+# ─────────────────────────────────────────────────────────────────────────
+# [왜 이 파일이 있나]
+#   개발자가 `git tag v1.1.0 && git push --tags`를 누르면 이 워크플로우가
+#   클라우드 Windows 머신에서 자동으로 앱을 빌드·서명하고 GitHub Releases에
+#   Draft 형태로 업로드한다. 사람이 빌드 PC를 켤 필요가 없고, 수동 업로드 실수도 없다.
+#
+# [전체 흐름]
+#   1) 태그 v*.*.* 푸시 감지
+#   2) Windows runner 깨움 → 소스 checkout
+#   3) Node.js / Rust 설치 및 캐시
+#   4) npm ci → 프론트 의존성 설치
+#   5) prebuild(sync-bundle-resources) → 번들 리소스 자동 스캔
+#   6) tauri-action → cargo build + vite build + tauri build + 서명 + Releases 업로드
+#   7) latest.json 자동 생성 (Tauri Updater가 참조할 매니페스트)
+#   8) Draft 릴리스 생성 → 사람이 GitHub에서 release notes 확인 후 수동 Publish
+#
+# [안전장치]
+#   - 트리거: 태그 푸시만 (브랜치 푸시는 무시 → 실수 배포 방지)
+#   - releaseDraft: true → 자동 공개 안 되고 Draft로만 생성
+#   - pre-release 태그(v1.0.0-beta 등)는 prerelease 플래그 자동 true
+#
+# [필요한 Secrets (사용자가 GitHub 저장소에 등록)]
+#   - TAURI_SIGNING_PRIVATE_KEY          : Tauri 서명용 private 키 (G드라이브 grader.key 내용)
+#   - TAURI_SIGNING_PRIVATE_KEY_PASSWORD : 위 키의 패스워드
+#   (GITHUB_TOKEN은 GitHub Actions가 자동 주입하므로 등록 불필요)
+# ─────────────────────────────────────────────────────────────────────────
+
+name: Release (Windows)
+
+# 태그 푸시 시에만 실행
+# - v1.0.0, v1.2.3 등 정식 버전
+# - v1.0.0-beta, v1.0.0-rc.1 등 pre-release도 포함 (-글자 이후 와일드카드)
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+# 워크플로우가 Releases를 생성·수정하려면 contents 쓰기 권한 필요
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Windows 전용 빌드 — macOS/Linux는 현재 범위 외
+    runs-on: windows-latest
+
+    steps:
+      # 1) 소스 받아오기
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2) Node.js 20 설치 + npm 캐시
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 3) Rust stable 설치 (tauri-action이 cargo를 호출하므로 필수)
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      # 4) Rust 컴파일 캐시 — 빌드 시간 대폭 단축 (2회차 이후)
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # 5) 프론트 의존성 설치 (package-lock.json 기반 결정적 설치)
+      - name: Install npm dependencies
+        run: npm ci
+
+      # 6) 번들 리소스 동기화 (python-engine/*.py, illustrator-scripts/*.jsx 자동 스캔)
+      #    - Phase A-5에서 만든 스크립트
+      #    - tauri build가 호출하는 npm run build → prebuild hook이 자동 실행하지만,
+      #      명시적으로 여기서도 한 번 실행하여 CI 로그에서 쉽게 확인 가능하도록 함
+      - name: Sync bundle resources
+        run: npm run sync:resources
+
+      # 7) Tauri 빌드 + 서명 + GitHub Release 업로드 (한 번에)
+      #    tauri-apps/tauri-action@v0 — Tauri 팀 공식 액션 (Tauri 2.x 호환)
+      #    자동 수행:
+      #      - npm run build → vite 프론트 번들
+      #      - cargo build → Rust 바이너리
+      #      - tauri build → MSI + NSIS 설치 파일 생성
+      #      - createUpdaterArtifacts: true 설정에 따라 .msi.zip / .nsis.zip + .sig 생성
+      #      - includeUpdaterJson: true → latest.json 매니페스트 생성
+      #      - 모든 산출물을 GitHub Release에 업로드
+      - name: Build, sign and publish Release (Draft)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # GitHub API 호출용 (자동 제공, 별도 등록 불필요)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 서명 키 쌍 (사용자가 Settings → Secrets에 등록)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          # 릴리스 태그명 = 트리거된 태그 그대로 (예: v1.1.0)
+          tagName: ${{ github.ref_name }}
+          # __VERSION__ 은 tauri.conf.json의 version으로 자동 치환됨
+          releaseName: 'Grader v__VERSION__'
+          releaseBody: |
+            ## Grader v__VERSION__
+
+            자동 생성된 릴리스입니다. 아래 체크 후 Publish 해 주세요.
+
+            ### 변경사항
+            (여기에 CHANGELOG 내용을 붙여넣거나 직접 작성)
+
+            ### 설치 방법
+            - 신규 설치: `Grader_*_x64_en-US.msi` 또는 `Grader_*_x64-setup.exe` 다운로드 후 실행
+            - 기존 사용자: 앱이 자동으로 새 버전을 감지하고 업데이트 안내 팝업을 띄웁니다
+
+            ### 포함 아티팩트
+            - `Grader_*_x64_en-US.msi` / `.msi.zip` / `.msi.zip.sig` (MSI 설치 파일 + 서명)
+            - `Grader_*_x64-setup.exe` / `.nsis.zip` / `.nsis.zip.sig` (NSIS 설치 파일 + 서명)
+            - `latest.json` (Tauri Updater 매니페스트)
+          # Draft로 생성 → 사람이 GitHub 페이지에서 확인 후 수동 Publish
+          # 실수로 태그 푸시해도 직원 PC로 자동 전파되지 않는 안전장치
+          releaseDraft: true
+          # 태그에 '-'가 포함되면(예: v1.0.0-beta) pre-release로 표시
+          # GitHub Releases에서 "Pre-release" 뱃지가 붙고, latest.json 대상에서 제외됨
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          # latest.json 매니페스트 자동 생성·업로드 (Tauri Updater 핵심)
+          includeUpdaterJson: true
+          # Windows 타겟 명시 (혹시 runner가 다른 타겟을 시도하지 않도록)
+          args: --target x86_64-pc-windows-msvc

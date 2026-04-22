@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Grader",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.grader.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -26,6 +26,7 @@
   "bundle": {
     "active": true,
     "targets": ["msi", "nsis"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -40,6 +41,7 @@
       "../python-engine/pdf_grader.py": "python-engine/pdf_grader.py",
       "../python-engine/order_parser.py": "python-engine/order_parser.py",
       "../python-engine/svg_parser.py": "python-engine/svg_parser.py",
+      "../python-engine/svg_normalizer.py": "python-engine/svg_normalizer.py",
       "../python-engine/requirements.txt": "python-engine/requirements.txt",
       "../illustrator-scripts/grading.jsx": "illustrator-scripts/grading.jsx",
       "../illustrator-scripts/check_area.jsx": "illustrator-scripts/check_area.jsx",
@@ -48,6 +50,14 @@
       "../illustrator-scripts/README.md": "illustrator-scripts/README.md",
       "../setup-python.bat": "setup-python.bat",
       "../INSTALL-GUIDE.md": "INSTALL-GUIDE.md"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/cobby8/grader/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEExRjFGRDJBMzEwRTRERjEKUldUeFRRNHhLdjN4b1NPV1dtNHNreEllemdkeWtXcTZ1MVpvUjN6WXVjTHNIeVZVM01qakkxK2YK"
     }
   }
 }
