@@ -1,6 +1,6 @@
 [package]
 name = "grader"
-version = "0.1.0"
+version = "1.0.0"
 description = "승화전사 유니폼 패턴 자동 생성 프로그램"
 authors = ["you"]
 edition = "2021"
@@ -24,4 +24,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-dialog = "2.7.0"
 tauri-plugin-fs = "2.5.0"
+# 자동 업데이트: GitHub Releases에서 새 버전 체크/다운로드/검증
+tauri-plugin-updater = "2"
+# 재시작/종료 권한: 업데이트 설치 후 앱 재시작에 필요
+tauri-plugin-process = "2"
 

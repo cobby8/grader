@@ -74,6 +74,8 @@
         { "path": "H:/**" },
         { "path": "C:/Users/**" }
       ]
-    }
+    },
+    "updater:default",
+    "process:allow-restart"
   ]
 }

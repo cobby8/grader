@@ -203,7 +203,15 @@
       "Bash(git -C \"C:/0. Programing/grader\" checkout HEAD -- illustrator-scripts/grading.jsx)",
       "Bash(git -C \"C:/0. Programing/grader\" diff --stat illustrator-scripts/grading.jsx)",
       "Bash(git -C \"C:/0. Programing/grader\" diff illustrator-scripts/grading.jsx)",
-      "Bash(git -C \"C:/0. Programing/grader\" status)"
+      "Bash(git -C \"C:/0. Programing/grader\" status)",
+      "Bash(git commit -m ' *)",
+      "WebFetch(domain:v2.tauri.app)",
+      "WebFetch(domain:github.com)",
+      "Bash(npx tauri *)",
+      "Bash(taskkill //F //FI \"WINDOWTITLE eq tauri*\")",
+      "Bash(git check-ignore *)",
+      "Bash(git config *)",
+      "Bash(git remote *)"
     ]
   }
 }

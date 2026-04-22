@@ -2,6 +2,42 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-04-22] 자동 업데이트 시스템: Tauri Updater + GitHub Releases + Actions 채택
+- **분류**: decision
+- **발견자**: planner-architect (사용자 확정 2026-04-22)
+- **내용**: 직원 배포 시 매번 setup.exe 수동 배포하던 방식을 자동 업데이트로 전환. **플랫폼 Q1**: (A) Tauri 공식 Updater 플러그인 **채택** vs (B) 자체 구현 거부. 이유: 공식 플러그인이 서명 검증/atomic replace/rollback을 모두 제공, 자체 구현은 보안 리스크 과다. **배포 저장소 Q2**: (A) GitHub Releases **채택** vs (B) 사내 서버 거부. 이유: (1) 저장소 Public으로 운영 가능(사내 인증서버 불필요), (2) tauri-action@v0가 latest.json 자동 생성, (3) 무료/무제한 대역폭. **빌드 자동화 Q3**: (A) GitHub Actions **채택** vs (B) 로컬 빌드 거부. 이유: 개발자 PC 독립, Windows 클린 러너에서 재현성 보장. **릴리스 공개 방식 Q4**: (A) Draft 후 수동 Publish **채택** vs (B) 자동 공개 거부. 이유: 실수 태그 푸시 시 직원 전파 방지(안전장치). **플랫폼 범위 Q5**: Windows만 우선(macOS/Linux 나중에 matrix로 확장 가능). **코드 사인**: 비용 이슈로 없음(SmartScreen 경고 감수, 설치 가이드로 대응). 구현 기간 총 15~18시간, 5 Phase로 분할(기반/CI/UI/배포자동화/테스트롤아웃). 상세: PLAN-AUTO-UPDATE.md 참조.
+- **참조횟수**: 0
+
+### [2026-04-22] 서명 키 보관: G드라이브 공유 폴더 + .gitignore 차단
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: Tauri Updater private 키 보관 위치 선정. **채택**: `G:/공유 드라이브/디자인/grader-keys/grader.key` (G드라이브 공유 폴더). **거부**: (A) Git 커밋 — private 키 노출=멀웨어 배포 가능, (B) 로컬 PC만 — 개발자 PC 고장 시 복구 불가, (C) 1Password/Vault — 바이브 코더에게 오버킬. G드라이브 선택 이유: 기존 Drive 연동 인프라 활용, 접근 권한 통제 가능, 여러 기기 동기화 자동, 팀 내 공유 용이. 안전장치: `.gitignore`에 `keys/` 추가 + `keys/README.md`에 "실제 키는 G드라이브" 메모만 남김 + GitHub Secrets에는 키 내용을 Actions용으로만 복사 저장.
+- **참조횟수**: 0
+
+### [2026-04-22] 버전 관리 전략: Semantic Versioning + 태그 기반 릴리스
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: 버전 관리 규약 확정. **포맷**: `{major}.{minor}.{patch}` (Semantic Versioning). **현재 0.1.0 → 자동 업데이트 최초 릴리스는 0.2.0**(0→1 정식 승격은 피드백 반영 후). **태그 규약**: `v{version}` 접두사(예: `v0.2.0`), 릴리스 트리거는 태그 push만(브랜치 push 아님 — 실수 방지). **major 증가 조건**: breaking change(데이터 마이그레이션 필요 등)에 한정. **3파일 동기화**: `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`의 version 필드를 `scripts/bump-version.mjs`로 일괄 갱신(한 곳 까먹으면 업데이트 체크 오작동하므로 스크립트 필수).
+- **참조횟수**: 0
+
+### [2026-04-22] Python 엔진 리소스 번들링: 자동 스캔 스크립트 채택
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: `tauri.conf.json`의 `bundle.resources`에 Python/JSX 파일을 개별 나열해야 하는 Tauri v2 제약 대응. **채택**: (A) prebuild hook에서 `scripts/sync-bundle-resources.mjs`로 `python-engine/*.py` + `illustrator-scripts/*.jsx` 자동 스캔하여 conf 갱신. **거부**: (B) 수동 나열(현행) — 새 파일 추가 시 까먹어 런타임 에러, (C) 글롭 패턴 `["../python-engine/*"]` — tauri v2는 객체 매핑 필요 + `__pycache__`/`venv`/`test*.py` 제외 불가. 현재 누락 확인: `order_parser.py`, `svg_normalizer.py` 두 개 resources 미등록 상태 → 스크립트 도입으로 즉시 해결. 제외 규칙: `test*.py`, `__pycache__`, `venv`, `grading-*-backup.jsx` 하드코딩. `npm run prebuild` hook에 등록하여 `npm run build` 전 자동 실행.
+- **참조횟수**: 0
+
+### [2026-04-22] 업데이트 UI 배치: Settings 페이지 통합 + 자동 팝업
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: 업데이트 UI 노출 위치 결정. **채택**: (A) App.tsx mount 시 자동 팝업(UpdateModal) + Settings 페이지 하단에 "버전 정보" 섹션(UpdateSection) **둘 다**. **거부**: (B) 별도 라우트 `/update` — 사이드바 복잡화, (C) Header에 상시 알림 배지 — 업데이트 없을 때 시각적 노이즈. **자동 팝업 조건**: 앱 시작 시 1회 체크(네트워크 오류는 console.warn만 + 무시), 결과 있으면 UpdateModal 표시, "나중에" 클릭으로 세션 내 dismiss 가능. **설정 페이지 섹션**: 현재 버전/최신 체크 시각/상태/[지금 확인] 버튼 표시, 팝업 닫은 후에도 재접근 가능. 선택형 원칙 유지(모든 버튼은 "업데이트" 또는 "나중에").
+- **참조횟수**: 0
+
+### [2026-04-22] 릴리스 공개 방식: Draft 생성 후 수동 Publish
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: GitHub Actions 워크플로우에서 `releaseDraft: true` 설정. **채택 이유**: (1) 실수로 태그 푸시해도 직원에게 즉시 전파되지 않음(안전장치), (2) release notes를 GitHub UI에서 최종 검토/편집 가능, (3) 빌드 실패 시 draft로만 남아 정리 용이. **운영 절차**: Actions 빌드 완료 → Release 페이지에 draft 생성 → 사용자가 release notes 확인/수정 → "Publish" 버튼 클릭 → 이때부터 직원 앱에 자동 업데이트 전파. **롤백 방법**: 문제 릴리스는 Unpublish(또는 Delete)하면 latest.json이 이전 버전을 가리킴, 이미 받은 직원 PC는 그대로 유지(Tauri updater는 다운그레이드 안 함).
+- **참조횟수**: 0
+
 ### [2026-04-21] AI→SVG 자동 변환 기능: JSX 스크립트 방식 + 별도 페이지 채택
 - **분류**: decision
 - **발견자**: pm (사용자 확정 2026-04-21)

@@ -2,6 +2,18 @@
 <!-- 담당: planner-architect, developer | 최대 30항목 -->
 <!-- 프로젝트의 폴더 구조, 파일 역할, 핵심 패턴을 기록 -->
 
+### [2026-04-22] 자동 업데이트 시스템 아키텍처 (Tauri Updater + GitHub Releases)
+- **분류**: architecture
+- **발견자**: planner-architect
+- **내용**: Windows 전용 자동 업데이트 시스템을 Tauri Updater 플러그인 + GitHub Releases + GitHub Actions로 구성. 신규 파일: `.github/workflows/release.yml`(태그 `v*.*.*` 푸시 트리거, windows-latest runner, tauri-action@v0), `scripts/bump-version.mjs`(3파일 버전 동기화), `scripts/sync-bundle-resources.mjs`(prebuild hook에서 python-engine/*.py + illustrator-scripts/*.jsx 자동 스캔하여 tauri.conf.json bundle.resources 갱신), `src/services/updaterService.ts`, `src/hooks/useAutoUpdateCheck.ts`, `src/components/UpdateModal.tsx`, `src/components/UpdateSection.tsx`. 기존 파일 수정: `src-tauri/Cargo.toml`(tauri-plugin-updater/process 추가), `src-tauri/tauri.conf.json`(createUpdaterArtifacts:true + plugins.updater.pubkey/endpoints), `src-tauri/capabilities/default.json`(updater:default, process:allow-restart 권한 추가), `src-tauri/src/lib.rs`(두 플러그인 등록), `src/App.tsx`(useAutoUpdateCheck + UpdateModal 렌더), `src/pages/Settings.tsx`(UpdateSection 추가). 서명 키는 G드라이브 `grader-keys/`에 private 보관, public만 tauri.conf.json에 임베드. GitHub Secrets(TAURI_SIGNING_PRIVATE_KEY + PASSWORD)로 Actions에서 자동 서명. Release는 draft 생성 → 수동 Publish(안전장치). 체크 타이밍: App.tsx mount 1회(로그인 없음), 사용자 선택적 수락, Settings에서 수동 재체크 가능. 네트워크 오류는 조용히 무시하여 앱 동작 막지 않음.
+- **참조횟수**: 0
+
+### [2026-04-22] 자동 업데이트 Phase A 구현 완료 — 기반 설정
+- **분류**: architecture
+- **발견자**: developer
+- **내용**: Phase A(기반 설정) 10 Step 구현 완료. 변경 파일 8개: (1) `.gitignore`에 `keys/` 추가로 서명 키 폴더 전체 ignore (2) `keys/grader.key.pub` 생성(public), private는 G드라이브 `디자인/grader-keys/grader.key`로 이동, 로컬 삭제 (3) `keys/README.md` 키 보관 규칙 문서화 (4) `src-tauri/Cargo.toml`: `tauri-plugin-updater = "2"` + `tauri-plugin-process = "2"` 추가, 버전 `0.1.0`→`1.0.0` (5) `src-tauri/src/lib.rs`: `.plugin(tauri_plugin_updater::Builder::new().build())` + `.plugin(tauri_plugin_process::init())` 등록 (6) `src-tauri/tauri.conf.json`: 버전 `1.0.0`, `bundle.createUpdaterArtifacts: true`, `plugins.updater.endpoints`(GitHub Releases latest.json) + `pubkey`(한 줄 Base64), `bundle.resources`에 `svg_normalizer.py` 추가 (7) `src-tauri/capabilities/default.json`: `"updater:default"`, `"process:allow-restart"` 권한 추가 (8) `package.json`: `@tauri-apps/plugin-updater ^2`, `@tauri-apps/plugin-process ^2` 추가, 버전 `1.0.0`. 3파일 버전 1.0.0 완전 통일. `cargo check` 통과 (`tauri-plugin-updater v2.10.1`, `tauri-plugin-process v2.3.1` 컴파일 성공). gitignore 검증: `git check-ignore`로 `keys/grader.key*` 전부 차단 확인. 다음 단계(Phase B): GitHub Secrets 등록 + release.yml + bump-version.mjs.
+- **참조횟수**: 0
+
 ### [2026-04-21] svg_normalizer.py 모듈 (SVG 일괄 표준화)
 - **분류**: architecture
 - **발견자**: developer

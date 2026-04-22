@@ -11,9 +11,12 @@
 ---
 
 ## 현재 작업
-- **요청**: 양면 유니폼 그레이딩 버그 4종 수정
-- **상태**: ✅ **완료** (단면 회귀 테스트 통과, 커밋 대기)
-- **현재 담당**: pm (커밋 + 정리)
+- **요청**: grader 앱 자동 업데이트 시스템 도입 상세 설계
+- **상태**: ✅ **설계 완료** (PLAN-AUTO-UPDATE.md 생성, 5 Phase 분할)
+- **현재 담당**: planner-architect → (다음) 사용자 승인 → developer Phase A 착수
+
+### 📋 직전 작업 (커밋 대기)
+양면 유니폼 그레이딩 버그 4종 수정 완료 (L556 부등호, 스케일링 1.0, 외측 쏠림, 색상 반전)
 
 ### 🎉 완료된 수정 (커밋 전 요약)
 | 버그 | 해결 방법 | 라인 |
@@ -36,7 +39,7 @@
 | 단계 | 내용 | 상태 |
 |------|------|------|
 | 0~7 | 기본 기능(패턴/디자인/사이즈/CMYK/Illustrator/APCA) | ✅ 완료 |
-| 8 | 설치형 배포 준비 | ⏸ 보류 |
+| 8 | 설치형 배포 + 자동 업데이트 | 📋 **설계 완료** (PLAN-AUTO-UPDATE.md, 5 Phase) |
 | 9 | Drive 연동 (자동 동기화) | ✅ |
 | 10 | Phase 1 (WorkSetup + 세션) | ✅ |
 | 11 | Phase 2 (패턴 선택 모드) | ✅ |
@@ -55,6 +58,169 @@
 - **데이터**: `$APPDATA/com.grader.app/` (presets/categories/settings/favorites.json), Drive `G:\공유 드라이브\디자인\00. 2026 커스텀용 패턴 SVG` (60초 쿨다운), sessionStorage `grader.session`
 
 ---
+
+## 기획설계 (planner-architect)
+
+### 자동 업데이트 시스템 도입 [2026-04-22]
+
+#### 🎯 목표
+앱이 켜질 때마다 GitHub Releases를 확인해 새 버전이 있으면 사용자에게 물어보고 설치까지 자동 진행. Windows 전용, 사용자 선택형, 별도 설정 메뉴 제공.
+
+#### 🗺️ 아키텍처 개요
+```
+직원 PC grader ─check()─> GitHub Releases latest.json
+                              │
+                              ▼
+                    새 버전? → UpdateModal 팝업
+                              │
+             [업데이트] ──────┴────── [나중에]
+               │                         │
+     downloadAndInstall()             dismiss()
+               │                         │
+     서명 검증 → 설치 → relaunch    Settings에서 재호출 가능
+```
+
+#### 📦 Phase별 구현 단계
+| Phase | 내용 | 예상 시간 | 커밋 단위 |
+|-------|------|--------|---------|
+| **A. 기반 설정** | 서명키 생성 → Cargo/npm 의존성 → tauri.conf → lib.rs → capabilities → prebuild 스크립트 | 2~3시간 | 1커밋 |
+| **B. CI 워크플로우** | GitHub Secrets → release.yml → bump-version.mjs | 2~3시간 | 1커밋 |
+| **C. 업데이트 UI** | updaterService → useAutoUpdateCheck → UpdateModal → UpdateSection(Settings) | 3~4시간 | 1커밋 |
+| **D. 배포 자동화** | RELEASE-GUIDE.md → CHANGELOG.md | 1~2시간 | 1커밋 |
+| **E. 테스트+롤아웃** | 로컬 E2E → pilot 1명 → 전체 직원 | 3~5시간(+1주 관찰) | (비커밋) |
+
+**총 소요**: 15~18시간 (3~4일 분산 권장)
+
+#### 📍 만들 위치와 구조
+| 파일 경로 | 역할 | 신규/수정 |
+|----------|------|---------|
+| `.github/workflows/release.yml` | 태그 푸시 시 자동 빌드/서명/업로드 | 신규 |
+| `scripts/bump-version.mjs` | 3파일(package/cargo/tauri) 버전 동기화 | 신규 |
+| `scripts/sync-bundle-resources.mjs` | python-engine/*.py 자동 스캔 → conf 갱신 | 신규 |
+| `src/services/updaterService.ts` | check/downloadAndInstall 래퍼 | 신규 |
+| `src/hooks/useAutoUpdateCheck.ts` | App mount 시 1회 체크 훅 | 신규 |
+| `src/components/UpdateModal.tsx` | 업데이트 팝업 (진행률 표시) | 신규 |
+| `src/components/UpdateSection.tsx` | Settings 내 "버전 정보" 섹션 | 신규 |
+| `keys/README.md` | 키 보관 위치 메모 (실제 키는 G드라이브) | 신규 |
+| `RELEASE-GUIDE.md` | 릴리스 절차서 | 신규 |
+| `CHANGELOG.md` | 버전별 변경사항 | 신규 |
+| `PLAN-AUTO-UPDATE.md` | 전체 계획서 | 신규 ✅ |
+| `src-tauri/Cargo.toml` | tauri-plugin-updater/process 추가 | 수정 |
+| `src-tauri/tauri.conf.json` | createUpdaterArtifacts + plugins.updater + resources 2개 보충 | 수정 |
+| `src-tauri/capabilities/default.json` | updater:default, process:allow-restart 권한 | 수정 |
+| `src-tauri/src/lib.rs` | 두 플러그인 등록 | 수정 |
+| `src/App.tsx` | useAutoUpdateCheck + UpdateModal 렌더 | 수정 |
+| `src/pages/Settings.tsx` | UpdateSection 추가 | 수정 |
+| `package.json` | plugin-updater/process 의존성, prebuild/release 스크립트 | 수정 |
+| `.gitignore` | `keys/` 추가 | 수정 |
+
+#### 🔗 기존 코드 연결
+- **App.tsx mount = 앱 켜질 때** (로그인 흐름 없음) → `useAutoUpdateCheck()` 훅 1줄 추가
+- **Settings 페이지**에 섹션 추가 → 별도 라우트 불필요, 사이드바 복잡화 방지
+- **services/ 컨벤션 유지** → `updaterService.ts`는 기존 `patternService`, `designService`와 같은 계층
+- **누락된 번들 리소스** (`order_parser.py`, `svg_normalizer.py`) → 자동 스캔 스크립트로 즉시 해결
+
+#### 📋 실행 계획 (병렬 활용)
+| 순서 | 작업 | 담당 | 선행 조건 |
+|------|------|------|---------|
+| 1 | Phase A: 기반 설정 (의존성+conf+lib+caps+prebuild) | developer | 사용자 G드라이브 `grader-keys/` 확인 |
+| 2 | **tester + reviewer 병렬** (cargo check + 앱 기동) | tester + reviewer | 1 |
+| 3 | Phase A 커밋 | pm | 2 통과 |
+| 4 | Phase B: GitHub Secrets 등록 (사용자) + release.yml + bump-version | 사용자 + developer | 3 |
+| 5 | Phase B 커밋 | pm | 4 |
+| 6 | Phase C: updaterService → hook → Modal → Settings | developer | 3 (A 플러그인 등록 완료) |
+| 7 | **tester + reviewer 병렬** (UX 수동 테스트) | tester + reviewer | 6 |
+| 8 | Phase C 커밋 | pm | 7 통과 |
+| 9 | Phase D: 가이드 + CHANGELOG | developer/pm | 5, 8 |
+| 10 | Phase E: 로컬 E2E → pilot → 전체 | tester → pm | 9 |
+
+#### 🧭 주요 결정 사항 (decisions.md 기록됨 6건)
+1. **플랫폼**: Tauri 공식 Updater + GitHub Releases + Actions (자체 구현/사내 서버 거부)
+2. **키 보관**: G드라이브 공유 폴더 (Git 커밋 절대 금지)
+3. **버전 관리**: SemVer + `v{x.y.z}` 태그, 3파일 동기화 스크립트
+4. **리소스 번들링**: prebuild 자동 스캔 스크립트 (수동 나열/글롭 거부)
+5. **UI 배치**: App.tsx 자동 팝업 + Settings 섹션 이중 진입점 (별도 라우트 거부)
+6. **릴리스 공개**: Draft 후 수동 Publish (실수 배포 방지)
+
+#### ⚠️ 리스크 & 대응
+| 리스크 | 대응 |
+|--------|------|
+| Windows SmartScreen 경고 (코드 사인 없음) | 설치 가이드 동봉 ("추가 정보→실행"), 업데이트 자체는 서명 검증 안전 |
+| 회사망 GitHub 차단 | pilot에서 확인, 차단 시 G드라이브 미러 검토 (Phase F) |
+| G드라이브 경로 하드코딩 | 별개 이슈 — 이번 범위에서 제외 |
+| Python 미설치 PC | 업데이트는 바이너리만 교체, venv 유지됨. requirements 변경 시 setup-python.bat 재실행 안내 |
+| Tauri 2.x API 변경 | 공식 문서 확인 완료 (2026-04-22) |
+| 업데이트 중 크래시 | atomic replace → 실패 시 원본 유지, 재체크 팝업 |
+
+#### ⚠️ developer 주의사항
+- **private 키 절대 커밋 금지** — `.gitignore` 먼저 추가 후 키 생성
+- `tauri.conf.json` pubkey는 **Base64 한 줄** (개행 포함 시 빌드 실패)
+- `createUpdaterArtifacts: true` 누락하면 `.zip`/`.sig` 미생성 (가장 흔한 실수)
+- capabilities에 `updater:default` + `process:allow-restart` **둘 다** 필요
+- GitHub Actions YAML 들여쓰기는 **스페이스 2칸 고정**
+- Cargo/npm 버전 `^2` 최신 동기화
+- 테스트 태그(0.1.9-test 등)는 pre-release 표시로 직원 노출 차단
+
+#### 📚 기록할 문서
+- ✅ `knowledge/architecture.md`: 자동 업데이트 아키텍처 1항목 추가됨
+- ✅ `knowledge/decisions.md`: 결정 6건 추가됨 (D1~D6)
+- ✅ `knowledge/index.md`: 항목수/날짜 갱신, 최근 지식 7건 추가
+- ✅ `PLAN-AUTO-UPDATE.md`: 11개 섹션 구성의 상세 계획서
+- ⏳ `RELEASE-GUIDE.md`: Phase D-1에서 developer 작성
+- ⏳ `CHANGELOG.md`: Phase D-2에서 pm 작성
+
+---
+
+## 구현 기록 (developer)
+
+### developer [2026-04-22] Phase A 기반 설정
+
+📝 구현한 기능: 자동 업데이트 시스템 Phase A(기반 설정) — 서명 키 생성/보관, Tauri 플러그인 등록, 버전 통일, 권한 설정
+
+#### 수정 이력
+| 회차 | 날짜 | 수정 내용 | 수정 파일 | 사유 |
+|------|------|----------|----------|------|
+| 1차 | 2026-04-22 | A-5 자동 스캔 스크립트 + prebuild 등록 + 계획서/decisions 오타 `grader-updater.key` → `grader.key` | scripts/sync-bundle-resources.mjs (신규), package.json, PLAN-AUTO-UPDATE.md, .claude/knowledge/decisions.md | PM 지시: Phase A Step 7(A-5) 누락분 + 계획서 오타 4건 보정 |
+
+
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| `.gitignore` | `keys/` 폴더 전체 ignore 추가 | 수정 |
+| `keys/grader.key.pub` | Tauri 서명 공개 키 (minisign 형식, 2줄 Base64) | 신규 |
+| `keys/README.md` | 키 보관 규칙 + G드라이브 경로 + CI Secrets 안내 | 신규 |
+| `G:/공유 드라이브/디자인/grader-keys/grader.key` | Tauri 서명 비밀 키 (G드라이브 원본 1부, 로컬 삭제) | 신규 (프로젝트 외부) |
+| `src-tauri/Cargo.toml` | `tauri-plugin-updater="2"` + `tauri-plugin-process="2"` 추가, 버전 0.1.0→1.0.0 | 수정 |
+| `src-tauri/src/lib.rs` | Builder 체인에 updater/process 플러그인 2개 등록 | 수정 |
+| `src-tauri/tauri.conf.json` | `version: 1.0.0`, `bundle.createUpdaterArtifacts: true`, `plugins.updater` 블록(endpoints+pubkey), resources에 `svg_normalizer.py` 보충 | 수정 |
+| `src-tauri/capabilities/default.json` | `"updater:default"` + `"process:allow-restart"` 권한 추가 | 수정 |
+| `package.json` | `@tauri-apps/plugin-updater ^2` + `@tauri-apps/plugin-process ^2` 추가, 버전 0.1.0→1.0.0 | 수정 |
+
+#### 실행한 10 Step 요약
+1. `.gitignore`에 `keys/` 추가 → 커밋 안전 상태 확보
+2. `npx tauri signer generate --ci -p 'stiz3000!' -w keys/grader.key` 실행 → 키 쌍 생성 성공 (비밀번호는 명령줄 외 어디에도 기록 안 됨)
+3. `git check-ignore -v keys/grader.key*` → 두 파일 모두 `.gitignore:36:keys/` 규칙으로 차단 확인
+4. private 키 `keys/grader.key`를 G드라이브 `디자인/grader-keys/`로 이동(cut), 로컬에는 public 키 + README만 잔존
+5. `keys/README.md` 작성 (키 보관 규칙, 재생성 절차, Secrets 안내)
+6. Cargo.toml + lib.rs + tauri.conf.json + capabilities + package.json 일괄 수정
+7. 3파일 버전 `1.0.0`으로 완전 동기화 (package.json / Cargo.toml / tauri.conf.json)
+8. `npm install` → 2개 패키지 (plugin-updater, plugin-process) 추가
+9. `cargo check` → **35.61초에 컴파일 성공**, `tauri-plugin-updater v2.10.1`, `tauri-plugin-process v2.3.1` 정상 컴파일, `grader v1.0.0` 최종 체크 통과
+10. 최종 `git status`로 keys/ 파일들이 Untracked에도 안 나타나는 것 재확인
+
+💡 tester 참고:
+- 테스트 방법:
+  1. `cd src-tauri && cargo check` → 에러 0개여야 정상
+  2. `cd .. && npm run tauri dev` → 앱 정상 기동(화면 렌더링까지)되면 플러그인 등록 OK
+  3. `git status` 출력에 `keys/grader.key`/`grader.key.pub` 이 **절대** 나타나지 않아야 함
+- 정상 동작: 앱이 켜지고 기존 기능(SVG/PDF/그레이딩)이 모두 그대로 동작. 현재 UI는 아직 없음(Phase C에서 추가).
+- 주의할 입력: Phase A는 UI 변경 0건. 기능 회귀만 없으면 통과.
+
+⚠️ reviewer 참고:
+- `src-tauri/tauri.conf.json`의 `plugins.updater.endpoints` URL이 `https://github.com/subinkim/grader/...` 로 설정됨 → 실제 GitHub 리포지토리 오너/이름과 일치하는지 확인 필요. 불일치 시 Phase B 전에 수정.
+- `pubkey`는 실제 생성된 public 키 파일 내용(개행 포함 Base64 2줄)을 **한 줄 문자열**로 붙여넣음 (파일 내부 개행 `\n`은 JSON 문자열에서 허용됨, Base64 자체는 손상 없음).
+- `bundle.resources`에 `svg_normalizer.py` 추가한 것이 Phase 1-3에서 누락된 파일 보강 의도와 맞는지 확인.
+- private 키가 G드라이브에만 있어 CI에서는 Secrets 등록 전까지 서명 빌드 불가 → Phase B 사용자 작업 필수.
 
 ## 테스트 결과 (tester)
 (다음 작업에서 사용)
@@ -86,6 +252,9 @@
 | 2026-04-21 | debugger | 3차 분석: group/ungroup 4회 반복이 참조 파괴 원인 | 완료 |
 | 2026-04-21 | developer | 재수정: 폴백 함수 재사용 + exponent 1.0 (버그 2+3 해결) | ✅ 사용자 검증 통과 |
 | 2026-04-22 | pm | DEBUG_LOG 복구 + scratchpad 정리 + 커밋 | 진행 중 |
+| 2026-04-22 | planner-architect | 자동 업데이트 시스템 상세 설계 (5 Phase, 15~18h) | PLAN-AUTO-UPDATE.md + knowledge 3종 갱신 완료 |
+| 2026-04-22 | developer | Phase A 기반 설정 10 Step (키생성→G드라이브 이동→Cargo/npm/conf/caps/lib 수정→v1.0.0 통일) | ✅ cargo check 35.6초 통과, keys/ gitignore 검증 OK |
+| 2026-04-22 | developer | Phase A-5 (sync-bundle-resources.mjs 146줄 + prebuild 등록) + 계획서 오타 4건 수정 | ✅ 멱등성 PASS (변경 없음 15개 리소스), `grader-updater.key` 잔존 0건 |
 
 ---
 

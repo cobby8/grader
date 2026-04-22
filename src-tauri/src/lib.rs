@@ -404,6 +404,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())  // 파일 선택 다이얼로그
         .plugin(tauri_plugin_fs::init())      // 파일 읽기/쓰기
+        // 자동 업데이트: 앱 시작 시/Settings에서 GitHub Releases 체크 후 설치
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // 업데이트 설치 후 앱 재시작 권한 제공
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             greet,
             run_python,
