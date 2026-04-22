@@ -2,6 +2,18 @@
 <!-- 담당: planner-architect, developer | 최대 30항목 -->
 <!-- 프로젝트의 폴더 구조, 파일 역할, 핵심 패턴을 기록 -->
 
+### [2026-04-22] SVG 표준화 Phase 1-4 구현 완료 — Rust 커맨드 2개 (Python CLI 래퍼)
+- **분류**: architecture
+- **발견자**: developer
+- **내용**: `src-tauri/src/lib.rs`에 `svg_preview_normalize(app, folder, base_file) -> Result<String, String>` + `svg_normalize_batch(app, folder, base_file, no_backup) -> Result<String, String>` 2개 커맨드 신규 추가(+55/-1). 내부 구현은 기존 `run_python`(L122~177, 무변경)을 그대로 호출하는 **얇은 래퍼** — `svg_preview_normalize`는 `run_python(app, "preview_normalize", vec![folder, base_file])`, `svg_normalize_batch`는 `no_backup=true`일 때만 args에 `"--no-backup"` 추가 후 호출. `invoke_handler!` 튜플 끝에 2개 등록. **sync fn 유지** — `run_python`이 `std::process::Command::output()` 기반 동기이므로 async로 바꾸면 불필요한 `.await` 체인 발생, Tauri가 sync `#[tauri::command]`를 자동 스레드풀 실행해 UI 블로킹 없음. **반환 타입은 `Result<String, String>`** (PLAN 6-3 준수) — 프론트에서 `JSON.parse(raw)` 후 `PreviewResult`/`BatchResult` 타입 캐스팅. 3층 구조 완성: Python(`svg_normalizer.py` 950줄 + main.py CLI) ← Rust(run_python + 신규 래퍼 2개) ← React(Phase 1-5에서 서비스+모달 작성 예정). `cargo check` 29.42초 PASS, 에러/경고 0. Python 엔진/main.py는 무변경. 프론트 호출 규약: `invoke<string>("svg_preview_normalize", { folder, baseFile })` / `invoke<string>("svg_normalize_batch", { folder, baseFile, noBackup })` — Rust snake_case 인자를 Tauri가 camelCase로 자동 변환.
+- **참조횟수**: 0
+
+### [2026-04-22] SVG 표준화 앱 UI 통합 아키텍처 — Rust 커맨드 + Modal + PatternManage 연동 (Phase 1-4~1-7)
+- **분류**: architecture
+- **발견자**: planner-architect
+- **내용**: Phase 1-1~1-3에서 완성된 Python `svg_normalizer.py`(950줄)를 앱 UI로 노출하는 통합 설계. **신규 3파일**: (1) `src/services/svgStandardizeService.ts`(~120줄) — Tauri invoke 얇은 래퍼 + `PreviewResult`/`BatchResult` 타입. discriminated union 대신 Python 관례 `{ success, data|error }` 그대로 유지(일관성 우선). `invoke()`에서 받은 JSON 문자열 `JSON.parse` → 컴포넌트에 전달. 에러는 throw 전파(updaterService의 "조용한 실패"와 구분 — 여기는 사용자 명시 액션). (2) `src/components/SvgStandardizeModal.tsx`(~320줄) — **6상태 Phase 머신** `idle/previewing/preview-done/executing/done/error`. UpdateModal 구조 차용(백드롭/카드/헤더/섹션/푸터 BEM). Props: `presetName, pieceBaseName, driveFolder(절대), registeredSizes, onClose, onComplete`. 내부 상태: `phase, baseSize(XL→2XL→큰순 자동 추천), noBackup, preview, result, errorMsg`. executing 시 ESC/백드롭 차단. done 시 `onComplete()` → PatternManage가 쿨다운 리셋 후 `runAutoSync()` 트리거. (3) `src/App.css` append ~120줄 — `.svg-standardize-modal__*` + `.preset-card__menu-*` BEM 클래스. 모두 `var(--color-*)` 변수 사용, Tailwind 금지. **수정 3파일**: (4) `src-tauri/src/lib.rs` — `svg_preview_normalize(folder, base_file)` + `svg_normalize_batch(folder, base_file, no_backup)` Rust 커맨드 2개 신규, 내부는 기존 `run_python` 로직 재사용. `invoke_handler` 튜플에 두 커맨드 등록. (5) `src/pages/PatternManage.tsx` — 즐겨찾기 별 좌측에 `⋮` 버튼 + 드롭다운 메뉴(Drive 프리셋만 활성). `standardizeTarget: PatternPreset | null` state, 모달 조건부 렌더, `onComplete`에서 `lastAutoScanRef.current = 0` 강제 후 `runAutoSync()` 호출하여 60초 쿨다운 우회 + 새 사이즈 즉시 UI 반영. (6) `src/App.css` BEM append. **데이터 흐름**: 카드 ⋮ → Modal idle → [미리보기] → `svg_preview_normalize` → preview-done(파일 N개 + 경고 요약) → [실행] → `svg_normalize_batch` → done(pass/fail/skipped 숫자) → Drive 재스캔 자동 트리거. **핵심 재사용**: Python 측 `svg_normalizer.py`/`main.py` **무변경**, Rust `run_python` 로직 **재사용**, `driveSync.ts` **무변경**. **Phase 1 범위 가드**: U넥 양면유니폼 스탠다드 전용(`NORMALIZER_VERSION = "1.0-uneck-double-sided"`), 단면 유니폼 실행 시 Python FAIL + 원본 파일 무수정. 상세: `PLAN-SVG-STANDARDIZATION.md` 11개 섹션 참조.
+- **참조횟수**: 0
+
 ### [2026-04-22] 자동 업데이트 Phase C 구현 완료 — 업데이트 UI (service + hook + Modal + Section)
 - **분류**: architecture
 - **발견자**: developer

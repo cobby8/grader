@@ -211,7 +211,12 @@
       "Bash(taskkill //F //FI \"WINDOWTITLE eq tauri*\")",
       "Bash(git check-ignore *)",
       "Bash(git config *)",
-      "Bash(git remote *)"
+      "Bash(git remote *)",
+      "Bash(mkdir -p \"/c/temp/svg_5XL_work\")",
+      "Read(//c/temp/**)",
+      "Bash(cp \"/g/공유 드라이브/디자인/00. 2026 커스텀용 패턴 SVG/0. 농구유니폼 확정 정리본/2. 양면 유니폼상의 패턴/U넥/U넥 양면유니폼 스탠다드/양면유니폼_U넥_스탠다드_5XL.svg\" \"/c/temp/svg_5XL_work/\")",
+      "Bash(cp \"/g/공유 드라이브/디자인/00. 2026 커스텀용 패턴 SVG/0. 농구유니폼 확정 정리본/2. 양면 유니폼상의 패턴/U넥/U넥 양면유니폼 스탠다드/양면유니폼_U넥_스탠다드_XL.svg\" \"/c/temp/svg_5XL_work/\")",
+      "Read(//c/0. Programing/grader/**)"
     ]
   }
 }

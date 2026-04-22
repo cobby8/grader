@@ -2,6 +2,30 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-04-22] SVG 표준화 UI 버튼 배치: 카드 ⋮ 더보기 메뉴 채택
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: SVG 일괄 표준화 기능의 PatternManage 진입점 위치 결정. **채택 (A-modified)**: 프리셋 카드 우상단의 즐겨찾기 별(☆/★) 왼쪽에 `⋮` 더보기 메뉴 버튼 추가, 클릭 시 드롭다운으로 `[📐 SVG 표준화]` 항목 노출. **거부 (A)**: 카드 내부에 상시 아이콘 버튼 — 즐겨찾기 별과 공간 충돌 + 카드 UI 복잡화. **거부 (B)**: 별도 상세 페이지(사이드바 신규 메뉴) — 현재 카드 클릭은 "선택 모드" 액션에 할당됨 + 페이지 이동 비용. **거부 (C)**: 페이지 상단 툴바 + 다수 선택 일괄 처리 — 사용자 요청은 "한 번에 1개 패턴 그룹"이므로 오버엔지니어링. **근거**: (1) Gmail/GitHub 등에서 ⋮ 메뉴는 친숙한 패턴, (2) 향후 "Drive 폴더 열기", "프리셋 복사" 등 다른 메뉴 항목으로 자연스럽게 확장 가능, (3) Drive 프리셋에서만 활성화(`!preset.driveFolder` 시 disabled + title 툴팁)하여 Local 프리셋 오남용 방지.
+- **참조횟수**: 0
+
+### [2026-04-22] SVG 표준화 Rust 커맨드 전략: 기존 run_python 재사용하는 전용 래퍼 2개 신규 추가
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: SVG 표준화 Python CLI를 Tauri 프론트에서 호출하는 방식 결정. **채택 (A)**: `svg_preview_normalize(folder, baseFile)`, `svg_normalize_batch(folder, baseFile, noBackup)` Rust 커맨드 2개 신규 추가, 내부는 기존 `run_python` 로직 재사용(get_python_engine_dir + subprocess). **거부 (B)**: 프론트가 `invoke("run_python", { command: "preview_normalize", args: [...] })`로 직접 호출 — 동적 문자열 사용으로 타입 체크 약화, 바이브 코더가 args 순서 실수 시 런타임 실패. **거부 (C)**: Python sidecar로 전환(Cargo에 python embed) — 배포 복잡도 2배, 현재 `setup-python.bat`으로 venv 설치 흐름 재작성 필요, 이미 `run_python` 안정 동작 중. **거부 (D)**: Python stdin/stdout 대신 임시 파일 IPC — svg_normalizer는 이미 `print_json` 한 줄 반환 규약 준수, 불필요. **핵심**: 네이밍으로 의도가 명시되어 TypeScript `invoke<"svg_preview_normalize">(...)` 호출 시 인자 순서/타입이 컴파일 타임에 검증됨. Python 측은 **무변경** (svg_normalizer.py 950줄 보존).
+- **참조횟수**: 0
+
+### [2026-04-22] SVG 표준화 Python 실행 방식: 기존 venv 유지 (sidecar 전환 거부)
+- **분류**: decision
+- **발견자**: planner-architect
+- **내용**: SVG 표준화 CLI를 Tauri에 통합할 때 Python 실행 환경 결정. **채택**: 현재 `python-engine/venv` + `run_python` subprocess 방식 그대로. **거부**: Tauri 2.x sidecar(rustpython/pyo3/python-embedded) 전환. **이유**: (1) 현재 구조는 이미 8개월간 안정 동작(pdf_handler, pdf_grader, svg_parser, order_parser, svg_normalizer 5개 모듈 모두 같은 venv에서 작동), (2) sidecar 전환 시 `setup-python.bat` → `npm run sync:resources` 연결이 끊기고 requirements.txt 관리가 이중화됨, (3) Tauri 번들에 Python 런타임을 포함하면 MSI 크기가 50MB+ 증가, (4) PyMuPDF/svgpathtools 같은 네이티브 확장 의존성이 sidecar에서는 크로스 컴파일 문제 유발 가능. **현재 한계 인정**: sidecar가 아니므로 사용자 PC에 Python 3.11 + venv 설치가 선결. 하지만 이미 `setup-python.bat`으로 자동화됨. Phase 1-3 자동 업데이트 번들링 때 `sync-bundle-resources.mjs`가 `svg_normalizer.py` 자동 포함하도록 해결됨.
+- **참조횟수**: 0
+
+### [2026-04-22] SVG 표준화 범위: Phase 1 U넥 양면유니폼 스탠다드 전용 유지
+- **분류**: decision
+- **발견자**: planner-architect (사용자 확정)
+- **내용**: SVG 일괄 표준화 기능의 Phase 1 범위 확정. **채택**: `NORMALIZER_VERSION = "1.0-uneck-double-sided"` 그대로 유지, 단일 패턴(`U넥 양면유니폼 스탠다드`)만 지원. **거부 (A)**: V넥/라운드넥/하의 등 다른 양식도 동시 지원 — 각각 bbox 분류/좌표 상수가 달라 하드코딩 상수 세트 4~5개 필요, 검증 부담 ×5. **거부 (B)**: JSON 프리셋으로 외부화하여 범용화 — 외부화에는 "패턴 분류 로직이 양식별로 일관된지" 선행 검증 필요, 현재는 U넥 1개만 실사용 검증됨. **거부 (C)**: 사이드바 신규 메뉴로 승격하여 모든 Drive 폴더에 일괄 정상화 — 단면 유니폼에 실수로 돌리면 "패턴 path 2개 추출 실패"로 FAIL은 나지만 사용자 혼란 유발. **안전장치**: (1) UI 모달 상단 상시 안내 "현재 U넥 양면유니폼 스탠다드 전용", (2) 단면 유니폼에 실행 시 Python이 FAIL 반환(파일 무수정), (3) 카드 ⋮ 메뉴는 `preset.driveFolder` 존재 프리셋에만 활성화. **확장 경로**: 새 양식 추가 요청 발생 시 Phase 3에서 JSON 프리셋 스키마 설계 — 예: `patterns/U넥_양면.json`의 `ARTBOARD_WIDTH`/`PATTERN_X_OFFSET`/`CUT_LINE_Y` 등을 외부화.
+- **참조횟수**: 0
+
 ### [2026-04-22] Drive 스캔 시 사이즈 배열 병합 정책: "기존 치수 보존 + 신규 사이즈 자동 추가"
 - **분류**: decision
 - **발견자**: developer (PM 지시로 근본 수정 중 확정)
