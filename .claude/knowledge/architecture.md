@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect, developer | 최대 30항목 -->
 <!-- 프로젝트의 폴더 구조, 파일 역할, 핵심 패턴을 기록 -->
 
+### [2026-04-24] SVG 표준화 Phase 1-5 구현 완료 + v1.0.0 릴리스 포함
+- **분류**: architecture
+- **발견자**: pm
+- **내용**: SVG 일괄 표준화 Phase 1(1-1~1-5) 전체 구현 완료 상태로 v1.0.0에 포함되어 배포됨. 실제 구현 결과(계획 대비): `svgStandardizeService.ts` **202줄**(계획 ~120줄), `SvgStandardizeModal.tsx` **560줄**(계획 ~320줄, 기준 파일 자동화 보완으로 증가), `App.css` **+353줄**(계획 ~120줄, BEM 스타일 풍부화), `PatternManage.tsx` **+145줄**. Rust: `lib.rs` +55/-1 (svg_preview_normalize/svg_normalize_batch 2개 invoke_handler 등록). Phase 1-5 보완으로 기준 파일 드롭다운 제거 + `resolveBaseFile()` 자동화 도입: 양면 상의는 글로벌 `양면유니폼_U넥_스탠다드_XL.svg` 고정, 그 외는 XL→2XL→L→M→S fallback. Phase 1-6(통합 테스트) 및 1-7(문서 정리)는 v1.0.0 배포 후 실 사용 테스트로 대체하기로 결정 — 사용자 피드백 발생 시 v1.0.1에서 반영. `NORMALIZER_VERSION = "1.0-uneck-double-sided"`로 범위 가드 유지, V넥/슬림/하의 지원은 Phase 3(추후 JSON 프리셋 외부화)로 연기. Python `svg_normalizer.py` 950줄/main.py CLI 무변경, driveSync.ts 무변경 원칙 준수.
+- **참조횟수**: 0
+
 ### [2026-04-22] SVG 표준화 Phase 1-4 구현 완료 — Rust 커맨드 2개 (Python CLI 래퍼)
 - **분류**: architecture
 - **발견자**: developer

@@ -2,6 +2,13 @@
 <!-- 담당: 전체 에이전트 | 최대 30항목 -->
 <!-- 삽질 경험, 다음에 피해야 할 것, 효과적이었던 접근법을 기록 -->
 
+### [2026-04-23] v1.0.0 첫 릴리스 교훈 — 서명 키 재생성 + Release draft → published 분리 + Actions Secret 디버깅
+- **분류**: lesson
+- **발견자**: pm (자동 업데이트 Phase E 실제 배포)
+- **내용**: Tauri Updater 첫 배포에서 3건 삽질. (1) **서명 키 비밀번호 문제**: 최초 비밀번호 없이 키 생성했는데 tauri-action이 빈 password도 요구하는 형태로 secret 매칭 실패 → 재생성(`stiz3000!`) 후 pubkey/private 모두 갱신 필요. (2) **Actions Secret 길이 불일치 디버깅**: 빌드 실패 시 "키가 올바른가?"를 알 수 없어 release.yml에 `${#TAURI_SIGNING_PRIVATE_KEY}` 길이만 출력하는 진단 step 추가 — 값 노출 없이 등록 여부만 확인하는 안전한 방법. (3) **Release draft ≠ published**: `releaseDraft: true` 설정으로 빌드 성공해도 자동으로 공개 안 됨. draft 상태에선 `latest.json` 공개 URL이 404라 자동 업데이트 동작 안 함 → 반드시 `gh release edit <tag> --draft=false` 수동 실행 필요. 교훈: **첫 릴리스 체크리스트에 "키 재생성 사이클(키 생성→Secret 등록→빌드 테스트)" 반복 가능한지 항상 확인**, **Actions Secret은 `${#VAR}` 길이 출력으로 디버그**, **Release publish는 별도 단계로 명시적 처리**. 향후 버전부터는 이 3단계가 루틴화되므로 시간 소요 급감.
+- **참조횟수**: 0
+- **관련 커밋**: 27a46eb(1차 키 재생성) → 07492dc(2차 키 재생성+비밀번호) → 4e51365(Secret 길이 진단 추가) → 2a6ac97(직원 공지)
+
 ### [2026-04-21] SVG 변환 파이프라인 검증의 핵심: Idempotent 테스트 + 시각 확인 단계
 - **분류**: lesson
 - **발견자**: pm + developer (svg_normalizer 개발 + 원본 U넥 작업 회고)
