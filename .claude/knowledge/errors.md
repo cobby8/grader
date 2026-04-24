@@ -2,6 +2,12 @@
 <!-- 담당: debugger, tester | 최대 30항목 -->
 <!-- 이 프로젝트에서 반복되는 에러 패턴, 함정, 주의사항을 기록 -->
 
+### [2026-04-24] grading v2 리팩토링에서 누락된 v1 안전장치 3종 (clamp / exponent / piece=null 폴백)
+- **분류**: error
+- **발견자**: debugger (수정 요청 3건 재검증 정적 분석)
+- **내용**: grading.jsx가 v1(2128줄)→v2(1585줄) 재구축되며 **큰 사이즈 요소 과대/튀어나감 방지 안전망**이 여러 개 사라졌다. (1) v1 L1836 `USE_D1_MODE` 블록의 **D1 Step 3 "아트보드 95% 초과 시 scale down(clamp)" 로직** 완전 제거 — `MARGIN_RATIO=0.95`/`clampScale` 기호가 v2에 0건. (2) `ELEMENT_SCALE_EXPONENT = 0.78 → 1.0` 변경(L1172) — 2XS 축소 부족 완화 목적이었으나 **3XL/4XL 방향 상한 부재와 결합해 요소 확대 방지 장치가 전무**. 주석 L1171에 "SVG 자체가 XL의 86% 크기인 근본 문제"를 인지하면서도 대응 없이 방치. (3) 이름 기반 모드의 `findBodyForLayer` L537 `if (!piece || bodies.length === 0) return -1;` — 레이어가 `"요소"`(piece=null, side=null)인 경우 즉시 -1 반환 → L1279 "건너뜀". `hasNamedLayers` 판정(L1163)은 `piece !== null` 레이어가 1개라도 있으면 true이므로 **`"요소"`와 `"요소_표_앞"`이 혼재된 AI 파일에서는 piece=null 레이어 요소가 전부 누락될 수 있음**. **교훈**: 재구축 시 v1의 안전망(clamp/가드/폴백)은 별도 목록으로 뽑아놓고 v2에서 재현/대체됐는지 하나씩 확인해야 한다. "근본 문제는 다른 쪽에서 해결"이라는 주석은 실제로 다른 쪽이 해결될 때까지 안전망을 **빼면 안 된다**. Y 좌표 누적 전가 버그(v1 3XL/4XL 아트보드 초과)는 v2의 "절대 body 기준 재계산"(L683~687)으로 구조적 해결됐으나, clamp 부재로 scale 측면 재발 가능. **재현 조건**: 타겟 3XL/4XL + ELEMENT_SCALE_EXPONENT=1.0 + SVG body가 XL 대비 86% 크기. **해결 후보**: (A) exponent 0.9~0.95 재도입, (B) D1 clamp 로직 이식, (C) `adjustedScale = Math.min(linearScale, 1.0)` 상한, (D) findBodyForLayer에 piece=null 폴백 분기 (유클리드 매칭 위임).
+- **참조횟수**: 0
+
 ### [2026-04-22] G드라이브 신규 사이즈 SVG가 UI에 반영 안 되는 버그 (driveSync.mergeDriveScanResult) — 해결됨
 - **분류**: error
 - **발견자**: debugger → developer (근본 수정 완료)

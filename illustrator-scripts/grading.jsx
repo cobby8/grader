@@ -1167,9 +1167,12 @@ function main() {
 
         // 공통: 면적 비율 스케일 계산 (두 모드 모두 사용)
         var linearScale = 1.0;
-        // 2026-04-21: 0.78 → 1.0. 2XS에서 축소 부족 이슈 완화용. 선형 스케일 그대로 적용 (완화 제거).
+        // 0.78(v1) → 1.0(v2 2026-04-21) → 0.95(2026-04-24)
+        // - v1 0.78: 작은 사이즈(2XS)에서 축소 부족 (과약화)
+        // - v2 1.0: 완화 제거했으나 큰 사이즈(3XL/4XL)에서 요소 과대 → 몸판 경계 초과
+        // - 0.95: 중간값. 3XL 확대율 1.2 → 1.09로 감소, 2XS 축소율은 여전히 유지
         // 단, SVG 자체가 XL의 86% 크기인 근본 문제는 SVG 생성 쪽에서 해결 필요.
-        var ELEMENT_SCALE_EXPONENT = 1.0;
+        var ELEMENT_SCALE_EXPONENT = 0.95;
         var adjustedScale = 1.0;
         if (baseArea > 0 && targetArea > 0) {
             var areaRatio = targetArea / baseArea;
