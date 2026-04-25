@@ -3,14 +3,16 @@
 ## 파일별 요약
 | 파일 | 항목 수 | 최종 업데이트 |
 |------|--------|------------|
-| architecture.md | 17 | 2026-04-25 (AI→SVG Phase 1 구현 완료 항목 추가) |
+| architecture.md | 18 | 2026-04-25 (AI→SVG Phase 2 구현 완료 항목 추가) |
 | errors.md | 11 | 2026-04-24 (grading v2 리팩토링 안전장치 3종 누락 패턴 추가) |
 | conventions.md | 13 | 2026-04-22 (Tauri 래퍼 서비스 패턴 + 모듈 상태 공유 패턴 2건 추가) |
-| decisions.md | 37 | 2026-04-25 (AI→SVG Phase 1 설계 결정 6건 추가) |
+| decisions.md | 38 | 2026-04-25 (AI→SVG Phase 2 흐름 결정 추가, 프론트 분기 vs Python 캡슐화) |
 | lessons.md | 7 | 2026-04-23 (v1.0.0 첫 릴리스 교훈 — 서명 키 + Secret + draft 추가) |
 
 ## 최근 추가된 지식 (최근 15건)
-1. [2026-04-25] architecture: AI→SVG Phase 1 **구현 완료** — 437/239/680줄 신규(ai_converter/Service/Modal), reviewer 🟢 우수(critical 0, 권장 3건 모두 처리: typing.Any 삭제/--unknown→--ps/invokeAndParse 헬퍼). PLAN 차이점 1건: ScanResult 평면 구조(data 경유 X). 커밋 A `63668d4` + B `629d805` + C 예정
+1. [2026-04-25] architecture: AI→SVG **Phase 2 구현 완료** — ai_to_pdf.jsx 181줄 신규(ACROBAT5/IIFE) + aiConvertService +172줄(findIllustratorExe/convertPostScriptToTmp/cleanupTmpFiles) + AiConvertModal +95줄(체크박스+감지+executeConvert 분기). ai_converter.py/lib.rs 무변경. PLAN 12와 다른 흐름(프론트 분기) 채택으로 ~2h 단축
+2. [2026-04-25] decision: AI→SVG Phase 2 **흐름 = 프론트 분기 호출** — PLAN 12의 Python 캡슐화 거부. ai_converter.py 무변경, JSX는 단일 파일 변환 책임, Rust find_illustrator_exe 재사용
+3. [2026-04-25] architecture: AI→SVG Phase 1 **구현 완료** — 437/239/680줄 신규(ai_converter/Service/Modal), reviewer 🟢 우수(critical 0, 권장 3건 모두 처리: typing.Any 삭제/--unknown→--ps/invokeAndParse 헬퍼). PLAN 차이점 1건: ScanResult 평면 구조(data 경유 X). 커밋 A `63668d4` + B `629d805` + C 예정
 2. [2026-04-25] architecture: AI→SVG 자동 변환 Phase 1 통합 아키텍처 — Python ai_converter(~300줄, 헤더 10B 검사+PyMuPDF text_as_path)/Rust 커맨드 2개(run_python 재사용)/aiConvertService(~130줄)/AiConvertModal(~450줄, 6상태 Phase 머신)/driveSync.ts 확장(unconvertedAiFiles 수집)/PatternManage 배너. SVG 표준화 3층 구조 완전 미러. PLAN-AI-TO-SVG.md 1017줄
 2. [2026-04-25] decision: AI→SVG Phase 1 분기 로직 = 헤더 첫 10바이트 바이너리 검사(%PDF- vs %!PS-Adobe vs unknown) — 외부 63개 실증 100%, 확장자+try/except 거부
 3. [2026-04-25] decision: AI→SVG 실행 방식 = 반자동(배너+사용자 클릭) — 완전 자동 거부(Phase 3에서 옵트인), 투명성 우선

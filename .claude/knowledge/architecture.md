@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect, developer | 최대 30항목 -->
 <!-- 프로젝트의 폴더 구조, 파일 역할, 핵심 패턴을 기록 -->
 
+### [2026-04-25] AI→SVG Phase 2 구현 완료 — PostScript AI 지원 (Illustrator COM) ~2h 단축
+- **분류**: architecture
+- **발견자**: pm
+- **내용**: Phase 1 종결 직후 Phase 2 착수. **PLAN 12와 다른 흐름 채택**(developer 발견): Python ai_converter.py에 `_convert_postscript()` 함수를 추가하는 대신, **프론트가 분기 호출**하는 구조로 변경. 이유: Python에서 Illustrator.exe 경로 찾는 로직이 Rust `find_illustrator_exe`와 중복되고, 모듈성 측면에서 JSX는 단일 파일 변환만 책임지는 게 깔끔. **신규 1파일** (Phase 2-A): `illustrator-scripts/ai_to_pdf.jsx` 181줄 — JSON 입출력(`ai_to_pdf_input.json`/`ai_to_pdf_result.json`) + `app.open` → `PDFSaveOptions{ACROBAT5}` → `doc.saveAs` → `doc.close(DONOTSAVECHANGES)` finally 보장 + IIFE+try/catch+try/finally 3중 안전망. **수정 2파일** (Phase 2-C): `aiConvertService.ts` +172줄(`findIllustratorExe()`/`convertPostScriptToTmp(psFiles)`/`cleanupTmpFiles(tmpPaths)`/`PostScriptConvertResult` 타입), `AiConvertModal.tsx` +95줄(state 2개 추가/Illustrator 감지 useEffect/idle 체크박스/preview-done 카운트 + 뱃지 변경/handleExecute 분기 확장). **변경 0파일**: `python-engine/ai_converter.py` (Phase 2-B 생략), `src-tauri/src/lib.rs` (기존 `find_illustrator_exe`/`run_illustrator_script`/`write_file_absolute`/`remove_file_absolute` 모두 재사용). **흐름**: 사용자가 "PostScript도 변환" 체크박스 켬 → executeConvert에서 `convertPostScriptToTmp(psFiles)` 호출(파일별 ai_to_pdf.jsx 실행 → .tmp.ai 생성) → 성공한 .tmp.ai를 PDF 호환 AI와 합쳐 `convertAiBatch` 호출(기존 PyMuPDF 흐름 그대로) → finally에서 `cleanupTmpFiles` 호출(.tmp.ai 정리). **Illustrator 미설치 처리**: 모달 mount 시 `findIllustratorExe` 호출 → null이면 체크박스 disable + "Adobe Illustrator가 설치되지 않아 사용 불가" 안내. 자동 검증: tsc PASS, 신규 export 4건 grep PASS, ai_converter.py/jsx/lib.rs 무수정 grep PASS. 실 동작 테스트(Illustrator + PostScript AI 1~2개)는 사용자 담당. PLAN 12 차이 의의: Python 측 변경 0 → 회귀 위험 0, 디버깅 용이(.tmp.ai 직접 확인 가능), Rust find_illustrator_exe 재사용. **한계**: 결과 화면에 .tmp.ai 경로 노출(원본 PostScript 매핑 미구현), converting sub-status 미구현(PS 변환/일반 변환/정리 단계 미표시), PS 실패는 콘솔만 — v1.0.2에서 보강.
+- **참조횟수**: 0
+
 ### [2026-04-25] AI→SVG 자동 변환 Phase 1 구현 완료 — 8.5h 만에 1-A~1-H 완주
 - **분류**: architecture
 - **발견자**: pm

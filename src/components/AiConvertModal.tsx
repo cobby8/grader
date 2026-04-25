@@ -35,7 +35,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  cleanupTmpFiles,
   convertAiBatch,
+  convertPostScriptToTmp,
+  findIllustratorExe,
   previewAiConversion,
   type AiBatchResult,
   type AiBatchResultEntry,
@@ -110,6 +113,21 @@ function countConvertable(
   ).length;
 }
 
+/**
+ * PostScript 변환 예정 개수 (Phase 2-C).
+ *
+ * "PostScript도 변환" 옵션이 켜졌을 때만 의미 있음.
+ * Illustrator 변환 후 일반 변환에 합쳐지므로 overwrite 규칙도 동일하게 적용.
+ */
+function countPostScriptConvertable(
+  entries: AiPreviewEntry[],
+  overwrite: boolean
+): number {
+  return entries.filter(
+    (e) => e.kind === "postscript" && (overwrite || !e.existing_svg)
+  ).length;
+}
+
 // ============================================================================
 // 컴포넌트
 // ============================================================================
@@ -122,6 +140,30 @@ function AiConvertModal({ files, onClose, onComplete }: AiConvertModalProps) {
   // 옵션 "기존 SVG 덮어쓰기" — 기본 false (안전 우선)
   // 켜면 Python이 .bak 자동 백업 후 덮어쓰기 진행
   const [overwrite, setOverwrite] = useState<boolean>(false);
+
+  // === Phase 2-C: PostScript AI도 변환할지 여부 ===
+  // 켜면 Illustrator로 .tmp.ai를 만든 뒤 일반 변환에 합쳐 처리.
+  // Illustrator 미설치 환경에선 체크박스 자체가 disable 처리됨.
+  const [includePostscript, setIncludePostscript] = useState<boolean>(false);
+
+  // === Phase 2-C: Illustrator 설치 여부 (탐지 결과) ===
+  // null = 아직 확인 안 함(로딩), true/false = 확인 완료
+  // 탐지 중에도 모달이 보여야 하니 비동기 효과로 따로 채움.
+  const [illustratorAvailable, setIllustratorAvailable] = useState<
+    boolean | null
+  >(null);
+
+  // === 모달 mount 시 Illustrator 미설치 감지 (1회) ===
+  // useEffect 내부에서 비동기 호출 — mounted 가드로 unmount 후 setState 방지
+  useEffect(() => {
+    let mounted = true;
+    findIllustratorExe().then((path) => {
+      if (mounted) setIllustratorAvailable(path !== null);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // === 닫기 가능 여부 — 변환 중엔 모달 잠금 ===
   // converting 단계에서만 잠금 (previewing은 빠르게 끝나서 굳이 잠금 안 함)
@@ -174,13 +216,54 @@ function AiConvertModal({ files, onClose, onComplete }: AiConvertModalProps) {
   }, [files]);
 
   // === [실행] 버튼 핸들러 ===
-  // 실제 PyMuPDF 변환 — PDF 호환만 처리, PostScript/unknown/기존 SVG는 SKIP
+  // 실제 변환 흐름:
+  //   1) (옵션) PostScript AI들을 Illustrator로 .tmp.ai 변환
+  //   2) PDF 호환 + .tmp.ai 합본을 PyMuPDF 일괄 변환
+  //   3) finally에서 .tmp.ai 정리 (성공/실패 무관)
+  // preview 단계에서 받은 entries를 그대로 활용 — 분류 결과를 다시 안 물어봄.
   const handleExecute = useCallback(async () => {
+    // preview-done 상태에서만 호출되지만 타입 가드로 방어
+    if (phase.kind !== "preview-done" || !phase.data.data) return;
+
+    const entries = phase.data.data.entries;
+    // PDF 호환 파일들 — 그대로 PyMuPDF로 처리 가능
+    const pdfFiles = entries
+      .filter((e) => e.kind === "pdf_compatible")
+      .map((e) => e.file);
+    // PostScript 파일들 — 옵션 켜진 경우에만 .tmp.ai 변환 대상
+    const psFiles = entries
+      .filter((e) => e.kind === "postscript")
+      .map((e) => e.file);
+
     setPhase({ kind: "converting" });
+
+    // .tmp.ai 임시 파일 모음 — finally에서 정리 대상
+    let tmpFiles: string[] = [];
+    // 일반 변환에 넘길 합본 — PDF 호환 + 성공한 .tmp.ai
+    let allFiles: string[] = [...pdfFiles];
+
     try {
-      const result = await convertAiBatch(files, overwrite);
+      // 1) PostScript 변환 (옵션 켜진 경우만)
+      if (includePostscript && psFiles.length > 0) {
+        const psResults = await convertPostScriptToTmp(psFiles);
+        // 성공한 항목만 일반 변환에 합침. 실패는 콘솔에만 남기고 계속 진행
+        // (사용자에겐 일반 변환 결과 화면에 자연스럽게 카운트되지 않으므로
+        //  Phase 2-C는 단순 동작 우선 — 실패 표시 UX는 추후 개선)
+        const successfulTmp = psResults
+          .filter((r) => r.tmpPath)
+          .map((r) => r.tmpPath!);
+        const failed = psResults.filter((r) => r.error);
+        if (failed.length > 0) {
+          console.warn("[AiConvertModal] PostScript 변환 실패 일부:", failed);
+        }
+        tmpFiles = successfulTmp;
+        allFiles = [...allFiles, ...successfulTmp];
+      }
+
+      // 2) 일반 변환 — PDF 호환 + .tmp.ai 한 번에 처리
+      const result = await convertAiBatch(allFiles, overwrite);
+
       // Python이 fail이라도 부분 성공 결과를 보여줘야 함
-      // data가 있으면 done, 없으면 error로 분기
       if (!result.data) {
         setPhase({
           kind: "error",
@@ -193,8 +276,13 @@ function AiConvertModal({ files, onClose, onComplete }: AiConvertModalProps) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[AiConvertModal] batch 실패:", msg);
       setPhase({ kind: "error", message: msg });
+    } finally {
+      // 3) .tmp.ai 정리 — 성공/실패 무관, 실패해도 무시 (best effort)
+      if (tmpFiles.length > 0) {
+        await cleanupTmpFiles(tmpFiles);
+      }
     }
-  }, [files, overwrite]);
+  }, [phase, overwrite, includePostscript]);
 
   // === [← 뒤로] 버튼 — preview-done → idle ===
   const handleBack = useCallback(() => {
@@ -224,10 +312,19 @@ function AiConvertModal({ files, onClose, onComplete }: AiConvertModalProps) {
       : [];
   }, [phase]);
 
-  const convertableCount = useMemo(
+  // PDF 호환 변환 가능 개수 (항상 처리)
+  const pdfConvertableCount = useMemo(
     () => countConvertable(previewEntries, overwrite),
     [previewEntries, overwrite]
   );
+  // PostScript 변환 가능 개수 (옵션 켜진 경우에만 합산)
+  const psConvertableCount = useMemo(
+    () => countPostScriptConvertable(previewEntries, overwrite),
+    [previewEntries, overwrite]
+  );
+  // 실행 버튼 라벨에 사용할 총 변환 예정 개수
+  const convertableCount =
+    pdfConvertableCount + (includePostscript ? psConvertableCount : 0);
 
   // ==========================================================================
   // 렌더
@@ -256,9 +353,9 @@ function AiConvertModal({ files, onClose, onComplete }: AiConvertModalProps) {
         <div className="ai-convert-modal__warning">
           ⚠️ 이 작업은 G드라이브에 새로운 SVG 파일을 생성합니다.
           {" "}
-          <strong>Phase 1</strong>은 PDF 호환 AI만 처리하며,
+          기본은 <strong>PDF 호환 AI</strong>만 처리하며,
           {" "}
-          <strong>PostScript AI</strong>는 Phase 2에서 지원 예정입니다.
+          <strong>PostScript AI</strong>는 옵션을 켜면 Illustrator로 변환합니다.
         </div>
 
         {/* ===== 본문 — Phase별 분기 ===== */}
@@ -299,6 +396,42 @@ function AiConvertModal({ files, onClose, onComplete }: AiConvertModalProps) {
                 {!overwrite && (
                   <div className="ai-convert-modal__hint">
                     체크 안 하면 기존 SVG가 있는 파일은 변환 건너뜁니다 (안전).
+                  </div>
+                )}
+              </div>
+
+              {/* Phase 2-C 옵션: PostScript AI도 변환 (Illustrator 필요) */}
+              {/* Illustrator 미설치 시 disable + 안내 문구 추가 */}
+              <div className="ai-convert-modal__field">
+                <label className="ai-convert-modal__checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={includePostscript}
+                    onChange={(e) => setIncludePostscript(e.target.checked)}
+                    disabled={illustratorAvailable === false}
+                  />
+                  PostScript AI도 변환 (Illustrator 필요)
+                </label>
+                {/* 상태별 안내 문구 — 확인 중 / 미설치 / 설치됨 + 켜짐 */}
+                {illustratorAvailable === null && (
+                  <div className="ai-convert-modal__hint">
+                    Illustrator 설치 여부 확인 중...
+                  </div>
+                )}
+                {illustratorAvailable === false && (
+                  <div className="ai-convert-modal__hint ai-convert-modal__hint--caution">
+                    ⚠️ Adobe Illustrator가 설치되지 않아 사용할 수 없습니다.
+                  </div>
+                )}
+                {illustratorAvailable === true && includePostscript && (
+                  <div className="ai-convert-modal__hint ai-convert-modal__hint--caution">
+                    ⚠️ Illustrator로 임시 PDF 호환 파일(.tmp.ai)을 생성한 뒤 변환하고,
+                    완료 후 .tmp.ai는 자동 삭제됩니다. 처리 시간이 길 수 있습니다.
+                  </div>
+                )}
+                {illustratorAvailable === true && !includePostscript && (
+                  <div className="ai-convert-modal__hint">
+                    체크하지 않으면 PostScript AI는 모두 건너뜁니다.
                   </div>
                 )}
               </div>
@@ -407,6 +540,19 @@ function AiConvertModal({ files, onClose, onComplete }: AiConvertModalProps) {
                       <span className="ai-convert-modal__file-meta">
                         {kindLabel(entry.kind)}
                       </span>
+                      {/* PostScript 행 — includePostscript 켜짐/꺼짐에 따라 뱃지 분기 */}
+                      {entry.kind === "postscript" && (
+                        <span
+                          className={
+                            "ai-convert-modal__result-badge " +
+                            (includePostscript
+                              ? "ai-convert-modal__result-badge--overwrite"
+                              : "ai-convert-modal__result-badge--skip")
+                          }
+                        >
+                          {includePostscript ? "변환 예정 (Illustrator)" : "건너뜀"}
+                        </span>
+                      )}
                       {/* 충돌 뱃지 — 기존 SVG 있고 덮어쓰기 꺼져있을 때만 */}
                       {entry.existing_svg && (
                         <span

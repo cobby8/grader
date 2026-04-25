@@ -265,3 +265,182 @@ export async function convertAiBatch(
   }
   return parsed;
 }
+
+// ============================================================================
+// Phase 2-C: PostScript AI → .tmp.ai (Illustrator 경유) 헬퍼
+// ============================================================================
+//
+// 왜 추가하나:
+//   PyMuPDF는 PDF 호환 AI만 처리할 수 있다. PostScript 헤더(`%!PS-Adobe`)인
+//   AI 파일은 Illustrator로 한 번 "PDF 호환 모드(ACROBAT5)"로 재저장해야
+//   PyMuPDF가 읽을 수 있다. 이 작업을 ExtendScript(`ai_to_pdf.jsx`)가 담당하고,
+//   본 헬퍼들은 그 JSX를 파일별로 호출 → .tmp.ai 생성 → 작업 후 정리한다.
+//
+// 흐름 (AiConvertModal에서 사용):
+//   1) findIllustratorExe()           — 미설치면 체크박스 자체를 disable
+//   2) convertPostScriptToTmp(psList) — 성공한 항목들의 .tmp.ai 경로 수집
+//   3) convertAiBatch(pdf+tmp 합본)   — 일반 변환 한 번으로 처리
+//   4) cleanupTmpFiles(tmpList)       — finally에서 .tmp.ai 일괄 삭제
+//
+// 비유:
+//   PostScript AI = 외국어 책. PyMuPDF는 영어밖에 못 읽음.
+//   Illustrator = 번역사. 임시로 영어판(.tmp.ai)을 만들어주고, 다 읽고 나면 폐기.
+
+/**
+ * Adobe Illustrator 설치 여부 확인.
+ *
+ * Rust `find_illustrator_exe` 커맨드가 미설치 시 throw하기 때문에
+ * 여기서 try/catch로 감싸 throw를 흡수하고 null로 반환한다.
+ * UI는 null이면 "체크박스 disable + 안내" 처리로 안전하게 분기.
+ *
+ * @returns 설치된 경우 illustrator.exe 절대 경로, 미설치/탐지 실패 시 null
+ */
+export async function findIllustratorExe(): Promise<string | null> {
+  try {
+    const path = await invoke<string>("find_illustrator_exe");
+    return path || null;
+  } catch (e) {
+    console.warn("[ai-convert] Illustrator 미설치 감지:", e);
+    return null;
+  }
+}
+
+/**
+ * PostScript 변환 결과 — 항목별 성공/실패 표시.
+ *
+ * 한 파일 실패해도 나머지 진행이라 배열 전체는 항상 입력 길이와 동일.
+ * `tmpPath`가 있으면 성공, `error`가 있으면 실패 (둘 다 있는 경우는 없음).
+ */
+export interface PostScriptConvertResult {
+  /** 원본 PostScript AI 절대 경로. */
+  input: string;
+  /** 성공 시 생성된 .tmp.ai 절대 경로 (PDF 호환). */
+  tmpPath?: string;
+  /** 실패 시 원인 메시지 (Illustrator 미설치 / JSX 실행 실패 등). */
+  error?: string;
+}
+
+/**
+ * PostScript AI 파일들을 PDF 호환 모드로 일괄 재저장 (.tmp.ai 생성).
+ *
+ * 내부 동작 (파일 1개당 한 번씩 JSX 호출):
+ *   1) ai_to_pdf_input.json 작성 (input_path / output_path)
+ *   2) run_illustrator_script로 ai_to_pdf.jsx 실행 (timeout 120초)
+ *   3) ai_to_pdf_result.json 파싱 → 성공/실패 분기
+ *   4) 모든 파일 처리 후 input.json / result.json 정리 (best effort)
+ *
+ * 한 파일에서 throw가 나도 catch로 흡수해 다음 파일로 진행 → 부분 성공 가능.
+ * Illustrator 미설치 시점에서 모든 파일에 동일한 에러를 채워 즉시 반환.
+ *
+ * @param psFiles PostScript AI 절대 경로 배열
+ * @returns 입력 길이와 동일한 결과 배열 (각 항목은 tmpPath 또는 error 보유)
+ */
+export async function convertPostScriptToTmp(
+  psFiles: string[]
+): Promise<PostScriptConvertResult[]> {
+  console.log("[ai-convert] PostScript 변환 시작:", { count: psFiles.length });
+
+  // 1) Illustrator 위치 확인 — 없으면 모든 파일 실패 처리하고 즉시 반환
+  const aiExePath = await findIllustratorExe();
+  if (!aiExePath) {
+    return psFiles.map((input) => ({
+      input,
+      error: "Adobe Illustrator가 설치되지 않았거나 찾을 수 없습니다.",
+    }));
+  }
+
+  // 2) JSX 스크립트 + 입출력 JSON 경로 (모두 같은 폴더에 위치)
+  //    Rust 측 get_illustrator_scripts_path가 절대 경로를 돌려준다.
+  const scriptsDir = await invoke<string>("get_illustrator_scripts_path");
+  const jsxPath = `${scriptsDir}\\ai_to_pdf.jsx`;
+  const inputJsonPath = `${scriptsDir}\\ai_to_pdf_input.json`;
+  const resultJsonPath = `${scriptsDir}\\ai_to_pdf_result.json`;
+
+  const results: PostScriptConvertResult[] = [];
+
+  // 3) 파일별 순차 처리 (Illustrator는 동시 실행 불가 — 강제 순차)
+  for (const psFile of psFiles) {
+    // .ai → .tmp.ai 치환 (대소문자 무관, 마지막 확장자만)
+    // 예: "G:/.../XL.ai" → "G:/.../XL.tmp.ai"
+    const tmpPath = psFile.replace(/\.ai$/i, ".tmp.ai");
+
+    try {
+      // 3-1) ai_to_pdf_input.json 작성
+      //      ExtendScript는 슬래시 경로를 선호 → 백슬래시를 슬래시로 통일
+      await invoke("write_file_absolute", {
+        path: inputJsonPath,
+        content: JSON.stringify({
+          input_path: psFile.replace(/\\/g, "/"),
+          output_path: tmpPath.replace(/\\/g, "/"),
+        }),
+      });
+
+      // 3-2) JSX 실행 + result.json 폴링 (Rust가 timeout까지 대기)
+      //      PostScript 변환은 큰 파일일 수 있어 120초로 여유
+      const resultRaw = await invoke<string>("run_illustrator_script", {
+        illustratorExe: aiExePath,
+        scriptPath: jsxPath,
+        resultJsonPath: resultJsonPath,
+        timeoutSecs: 120,
+      });
+
+      // 3-3) result.json 파싱 → success 분기
+      const result = JSON.parse(resultRaw) as {
+        success: boolean;
+        output_path?: string;
+        error?: string;
+      };
+
+      if (result.success && result.output_path) {
+        results.push({ input: psFile, tmpPath: result.output_path });
+      } else {
+        results.push({
+          input: psFile,
+          error: result.error || "JSX 실행 실패 (원인 불명)",
+        });
+      }
+    } catch (e) {
+      // invoke 자체 실패 / timeout / JSON.parse 실패 → 항목별 에러 기록 후 계속
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[ai-convert] PostScript 변환 실패: ${psFile}`, e);
+      results.push({ input: psFile, error: msg });
+    }
+  }
+
+  // 4) 임시 input/result.json 정리 — 다음 실행에서 잔재로 인한 오해 방지
+  //    실패해도 무시 (cleanup이라 silent)
+  try {
+    await invoke("remove_file_absolute", { path: inputJsonPath });
+  } catch {}
+  try {
+    await invoke("remove_file_absolute", { path: resultJsonPath });
+  } catch {}
+
+  console.log("[ai-convert] PostScript 변환 완료:", {
+    total: psFiles.length,
+    success: results.filter((r) => r.tmpPath).length,
+    failed: results.filter((r) => r.error).length,
+  });
+
+  return results;
+}
+
+/**
+ * .tmp.ai 임시 파일들을 일괄 삭제 (best effort).
+ *
+ * 변환 성공/실패와 무관하게 finally에서 호출되어 임시 파일이 G드라이브에
+ * 남지 않도록 한다. 한 파일 삭제 실패해도 나머지 계속 진행 — 결과는 무시.
+ *
+ * @param tmpPaths 삭제할 .tmp.ai 절대 경로 배열
+ */
+export async function cleanupTmpFiles(tmpPaths: string[]): Promise<void> {
+  console.log("[ai-convert] .tmp.ai 정리:", { count: tmpPaths.length });
+  for (const tmpPath of tmpPaths) {
+    try {
+      await invoke("remove_file_absolute", { path: tmpPath });
+    } catch (e) {
+      // cleanup 실패는 사용자 작업에 영향이 없으니 warn만
+      console.warn(`[ai-convert] .tmp.ai 삭제 실패 (무시): ${tmpPath}`, e);
+    }
+  }
+}

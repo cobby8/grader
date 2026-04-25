@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-04-25] AI→SVG Phase 2 흐름: 프론트 분기 호출 (PLAN 12의 Python 캡슐화 거부)
+- **분류**: decision
+- **발견자**: developer (Phase 2-A 작업 중 발견) + pm 결정
+- **내용**: PostScript AI 처리 흐름. **채택**: 프론트가 `convertPostScriptToTmp(psFiles)` 호출 → ai_to_pdf.jsx로 .tmp.ai 일괄 생성 → 성공한 .tmp.ai를 PDF 호환 AI와 합쳐 `convertAiBatch` 호출(기존 흐름) → finally에서 `cleanupTmpFiles`. ai_converter.py 무변경. **거부 (PLAN 12 원안)**: ai_converter.py에 `_convert_postscript()` 함수 추가하여 Python 측에서 subprocess로 Illustrator.exe 실행. **근거**: (1) Python에서 Illustrator.exe 경로 찾는 로직이 Rust `find_illustrator_exe`와 중복(DRY 위반), (2) 프론트가 이미 OrderGenerate에서 `find_illustrator_exe`/`run_illustrator_script` 호출하므로 동일 패턴 재사용이 자연스러움, (3) JSX는 단일 파일 변환만 책임지는 것이 모듈성 관점에서 깔끔(SRP), (4) ai_converter.py 무변경 → 회귀 위험 0, (5) 디버깅 용이 — 사용자가 .tmp.ai를 직접 확인 가능. **PLAN 12와 차이 의의**: 설계 단계의 "Python 캡슐화" 가정을 구현 단계에서 발견된 더 나은 설계로 대체. 결과적으로 작업 시간도 PLAN 12 견적 대비 단축(3.5~4.5h → 약 2h).
+- **참조횟수**: 0
+
 ### [2026-04-25] AI→SVG Phase 1 분기 로직: 헤더 첫 10바이트 바이너리 검사 (%PDF- vs %!PS-Adobe)
 - **분류**: decision
 - **발견자**: planner-architect (사용자 확정 + lessons.md 2026-04-21 실증)
