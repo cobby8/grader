@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect, developer | 최대 30항목 -->
 <!-- 프로젝트의 폴더 구조, 파일 역할, 핵심 패턴을 기록 -->
 
+### [2026-04-25] AI→SVG 자동 변환 Phase 1 구현 완료 — 8.5h 만에 1-A~1-H 완주
+- **분류**: architecture
+- **발견자**: pm
+- **내용**: PLAN-AI-TO-SVG.md(1017줄) 설계 → Phase 1-A~1-H 순차 구현 완료. 실제 산출물은 모두 PLAN 견적 대비 풍부: `ai_converter.py` **437줄**(견적 300), `aiConvertService.ts` **239줄**(130), `AiConvertModal.tsx` **680줄**(450), `App.css` **+427줄**(150), `lib.rs` **+47/-1**, `main.py` **+107**, `driveSync.ts` **+56/-3**, `PatternManage.tsx` **+60**. 커밋 A(엔진) `63668d4` + 커밋 B(UI) `629d805` + 커밋 C(docs) 예정. **PLAN 차이점 1건 발견**: ScanResult는 기존 코드가 평면 구조라 `unconvertedAiFiles`를 `data` 중첩 아닌 최상위 필드로 추가(기존 호환성 우선). PatternManage는 `scanResult.unconvertedAiFiles ?? []`로 접근. **reviewer 평가 🟢 우수** (critical 0, 권장 3건 모두 처리: typing.Any 미사용 import 삭제 / "기존 SVG" 카드 modifier `--unknown`→`--ps` / `invokeAndParse<T>` 헬퍼 추출로 svg-standardize와 100% 패턴 일치). 자동 검증: py_compile/cargo check 18.72s/tsc --noEmit/하드코딩 색상 0건/Tailwind 0건/외부 아이콘 라이브러리 0건. **재사용 원칙**: SVG 표준화 Phase 1 3층 구조 완전 미러 — 신규 발명 0. 실제 G드라이브 AI 변환 테스트는 사용자 담당(v1.0.1 배포 후 자연 검증). Phase 2(Illustrator COM 11% 커버) / Phase 3(자동 백그라운드 옵트인)는 차후.
+- **참조횟수**: 0
+
 ### [2026-04-25] AI→SVG 자동 변환 Phase 1 통합 아키텍처 (PyMuPDF 반자동)
 - **분류**: architecture
 - **발견자**: planner-architect

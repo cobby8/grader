@@ -140,6 +140,45 @@ export interface AiBatchResult {
 }
 
 // ============================================================================
+// 공통 헬퍼: invoke + JSON.parse 묶음
+// ============================================================================
+
+/**
+ * Rust invoke + JSON.parse를 묶은 헬퍼.
+ *
+ * 왜 헬퍼로 묶나: 두 함수(previewAiConversion / convertAiBatch)가 완전히
+ * 동일한 보일러플레이트("invoke → 문자열 받음 → JSON.parse → 타입 캐스팅")를
+ * 가지기 때문. svgStandardizeService.ts의 `invokeAndParse<T>` 패턴을 그대로 미러.
+ *
+ * Rust `Result<String, String>`에서 받은 stdout JSON 문자열을 파싱.
+ * stdout에 경고/로그가 섞이면 JSON.parse가 실패 → 원본 응답 첫 500자를 로그
+ * (디버깅 보강 — 기존 `console.error("...", e)`만으로는 원인 추적이 어려웠음).
+ *
+ * @throws JSON 파싱 실패 / Rust invoke 실패 시 원본 메시지를 담은 Error
+ */
+async function invokeAndParse<T>(
+  command: string,
+  params: Record<string, unknown>
+): Promise<T> {
+  // 1) Rust 커맨드 호출 — 반환은 Python stdout JSON 문자열 그대로
+  const raw = await invoke<string>(command, params);
+  // 2) JSON 파싱 — stdout에 경고/로그가 섞이면 여기서 실패
+  try {
+    return JSON.parse(raw) as T;
+  } catch (parseErr) {
+    const msg =
+      parseErr instanceof Error ? parseErr.message : String(parseErr);
+    console.error(
+      `[ai-convert] JSON parse 실패 (${command}):`,
+      msg,
+      "\n원본 응답:",
+      raw.slice(0, 500) // 긴 응답은 500자만 미리 보여줌 (디버깅용)
+    );
+    throw new Error(`Python 응답 JSON 파싱 실패: ${msg}`);
+  }
+}
+
+// ============================================================================
 // invoke 래퍼 함수
 // ============================================================================
 
@@ -157,8 +196,8 @@ export interface AiBatchResult {
  * @returns Python `{ success, data, error }` 형식 그대로
  *
  * 에러 처리:
- *   - invoke 자체 실패(Rust panic 등) → throw (사용자 명시 액션이라 조용한 실패 금지)
- *   - JSON.parse 실패 → throw (Python stdout 오염 시)
+ *   - invoke 자체 실패(Rust panic 등) → invokeAndParse가 그대로 throw
+ *   - JSON.parse 실패 → invokeAndParse가 raw 첫 500자 로그 후 throw
  *   - Python 측 로직 에러 → `{ success: false, error: "..." }` 정상 반환 (throw 안 함)
  */
 export async function previewAiConversion(
@@ -169,21 +208,16 @@ export async function previewAiConversion(
   const filesStr = files.join(";");
   console.log("[ai-convert] previewAiConversion 호출:", { count: files.length });
 
-  try {
-    // invoke<string> — Rust 커맨드는 Python stdout JSON 문자열을 그대로 반환
-    const raw = await invoke<string>("ai_convert_preview", { files: filesStr });
-    // Python이 단일 라인 JSON을 보장하므로 JSON.parse 한 번으로 끝
-    const parsed = JSON.parse(raw) as AiPreviewResult;
-    console.log(
-      "[ai-convert] preview 응답:",
-      parsed.success ? "success" : `error: ${parsed.error}`
-    );
-    return parsed;
-  } catch (e) {
-    // invoke 실패 또는 JSON.parse 실패 — 둘 다 사용자에게 에러로 드러내야 함
-    console.error("[ai-convert] preview 실패:", e);
-    throw e;
-  }
+  // invoke + JSON.parse는 헬퍼에 위임 — 외부 try/catch 제거
+  // (헬퍼가 throw하면 호출자가 자연스럽게 받음, 함수 시그니처는 그대로 Promise<AiPreviewResult>)
+  const parsed = await invokeAndParse<AiPreviewResult>("ai_convert_preview", {
+    files: filesStr,
+  });
+  console.log(
+    "[ai-convert] preview 응답:",
+    parsed.success ? "success" : `error: ${parsed.error}`
+  );
+  return parsed;
 }
 
 /**
@@ -197,7 +231,7 @@ export async function previewAiConversion(
  *                  false면 기존 SVG 있는 파일은 SKIP.
  * @returns Python `{ success, data, error }` 형식 그대로
  *
- * 에러 처리: previewAiConversion과 동일 (사용자 명시 액션 → 조용한 실패 금지).
+ * 에러 처리: previewAiConversion과 동일 (헬퍼가 throw 일임).
  */
 export async function convertAiBatch(
   files: string[],
@@ -210,30 +244,24 @@ export async function convertAiBatch(
     overwrite,
   });
 
-  try {
-    // 인자명 `files` / `overwrite`는 Rust 커맨드 시그니처와 정확히 매칭
-    // (Tauri 2.x: Rust snake_case ↔ TS camelCase 자동 변환, 여기는 둘 다 짧아서 동일)
-    const raw = await invoke<string>("ai_convert_batch", {
-      files: filesStr,
-      overwrite,
-    });
-    const parsed = JSON.parse(raw) as AiBatchResult;
-    if (parsed.success && parsed.data) {
-      // 성공 시 카운트 요약을 한 줄로 출력 (디버깅 시 한 눈에 파악)
-      console.log(
-        "[ai-convert] batch 결과:",
-        `total=${parsed.data.total} converted=${parsed.data.converted} ` +
-          `skipped_ps=${parsed.data.skipped_postscript} ` +
-          `skipped_existing=${parsed.data.skipped_existing} ` +
-          `skipped_unknown=${parsed.data.skipped_unknown ?? 0} ` +
-          `failed=${parsed.data.failed}`
-      );
-    } else {
-      console.warn("[ai-convert] batch 에러:", parsed.error);
-    }
-    return parsed;
-  } catch (e) {
-    console.error("[ai-convert] batch 실패:", e);
-    throw e;
+  // 인자명 `files` / `overwrite`는 Rust 커맨드 시그니처와 정확히 매칭
+  // (Tauri 2.x: Rust snake_case ↔ TS camelCase 자동 변환, 여기는 둘 다 짧아서 동일)
+  const parsed = await invokeAndParse<AiBatchResult>("ai_convert_batch", {
+    files: filesStr,
+    overwrite,
+  });
+  if (parsed.success && parsed.data) {
+    // 성공 시 카운트 요약을 한 줄로 출력 (디버깅 시 한 눈에 파악)
+    console.log(
+      "[ai-convert] batch 결과:",
+      `total=${parsed.data.total} converted=${parsed.data.converted} ` +
+        `skipped_ps=${parsed.data.skipped_postscript} ` +
+        `skipped_existing=${parsed.data.skipped_existing} ` +
+        `skipped_unknown=${parsed.data.skipped_unknown ?? 0} ` +
+        `failed=${parsed.data.failed}`
+    );
+  } else {
+    console.warn("[ai-convert] batch 에러:", parsed.error);
   }
+  return parsed;
 }

@@ -446,7 +446,7 @@ function AiConvertModal({ files, onClose, onComplete }: AiConvertModalProps) {
                     PostScript
                   </div>
                 </div>
-                <div className="ai-convert-modal__summary-card ai-convert-modal__summary-card--unknown">
+                <div className="ai-convert-modal__summary-card ai-convert-modal__summary-card--ps">
                   <div className="ai-convert-modal__summary-card-value">
                     {phase.data.data.skipped_existing}
                   </div>
