@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect | 최대 30항목 -->
 <!-- "왜 A 대신 B를 선택했는지" 기술 결정의 배경과 이유를 기록 -->
 
+### [2026-04-26] AI→SVG Phase 3 (자동 백그라운드 변환, 옵트인) 9개 핵심 결정
+- **분류**: decision
+- **발견자**: planner-architect (PLAN-AI-TO-SVG.md 13장 상세 설계 시 확정)
+- **내용**: Phase 3 옵트인 자동 변환의 9개 설계 질문에 대한 일괄 결정. **Q1 토글 위치**: Settings 페이지에 "AI 자동 변환" 섹션 신설(Drive 동기화 섹션 옆) — 거부: Drive 섹션 안 체크박스 1줄(책임 혼재) / PatternManage 내부(발견성 저하). **Q2 트리거 시점**: Drive 스캔 직후 unconvertedAi>0일 때만 1회 — 거부: 앱 시작 시(스캔 결과 없음) / 주기적(60초 쿨다운과 중복) / 조합(복잡도 증가). **Q3 UI 표시**: PatternManage 배너 재활용 (모드 A 수동/B 자동중/C 완료/D 자동OFF) — 거부: 토스트(놓치면 재진입 불가) / Header 글로벌(다른 페이지 침범) / 무알림(통제감 상실). **Q4 중지/취소**: 배너 [중지] 버튼 + AbortController로 파일 경계 안전 종료 — 거부: 즉시 kill(atomic write 깨짐) / 중지 불가(100개 처리 시 멈출 방법 없음). **Q5 실패 처리**: 3연속 실패 시 자동 OFF + Settings 토글 OFF 동기화 + 모드 D 배너 — 거부: 무한 재시도(망가진 파일 1개로 영원히 루프) / 1회 실패 OFF(과보수). **Q6 Illustrator 미설치**: PDF 호환만 자동 변환, PS는 다음 사이클 사용자 수동(Phase 1 배너 모드 A) — 거부: 자동 모달 띄움(옵트인 조용함 위배) / 전체 차단(89% 손해). **Q7 동시성**: 모듈 레벨 단일 뮤텍스 + 수동 모달 열려있으면 호출자(PatternManage)가 차단 — 거부: 무제어(같은 파일 2번 쓰기) / Rust 레벨 락(오버킬). **Q8 코드 재사용**: 신규 훅 useAutoAiConvert.ts 1개만 추가, aiConvertService/AiConvertModal/ai_converter.py 모두 무수정 — 거부: service에 background 모드 추가(UI 의존성이 service에 누수) / 별도 background service(코드 중복). **Q9 기본값**: OFF + 첫 ON 시 1회 동의 모달(G드라이브 직접 쓰기 안내) — 거부: 동의 없음(자동 쓰기는 한 번 명시 동의 필요) / 매번 확인(옵트인 의미 상실). **공통 근거**: useAutoUpdateCheck 모듈 상태+구독자 패턴 100% 미러, Phase 1+2 변환 엔진 무수정으로 회귀 위험 0, 정책 레이어 1개만 추가하는 최소 침습 설계. AiConvertModal은 Phase 3에서도 옵트인 OFF/PS 수동 처리/자동 OFF 후 재개 3가지 시나리오에서 여전히 필요.
+- **참조횟수**: 0
+
 ### [2026-04-25] AI→SVG Phase 2 흐름: 프론트 분기 호출 (PLAN 12의 Python 캡슐화 거부)
 - **분류**: decision
 - **발견자**: developer (Phase 2-A 작업 중 발견) + pm 결정

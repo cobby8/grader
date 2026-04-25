@@ -75,9 +75,9 @@ Drive 스캔 완료 → "미변환 AI N개 발견" 배너 표시
 
 | Phase | 범위 | 커버리지 | 이번 설계 상세 | 예상 시간 |
 |-------|------|--------|------------|---------|
-| **1** | PyMuPDF + 반자동 UI + 동일 폴더 저장 | **PDF 호환 AI 약 89%** | ✅ 이 계획서 전체 | **6~10시간** |
-| 2 | Illustrator COM 추가 (PostScript AI 재저장 후 변환) | PostScript AI 약 11% (나머지) | 🔲 본 문서 개요만 | 3~4시간 |
-| 3 | 자동 백그라운드 변환 (Drive 스캔 시 즉시 실행) | 사용자 클릭 제거 | 🔲 본 문서 개요만 | 2~3시간 |
+| **1** | PyMuPDF + 반자동 UI + 동일 폴더 저장 | **PDF 호환 AI 약 89%** | ✅ 구현 완료 (2026-04-25) | **6~10시간** |
+| **2** | Illustrator COM 추가 (PostScript AI 재저장 후 변환) | PostScript AI 약 11% (나머지) | ✅ 구현 완료 (2026-04-25, ~2h) | 3~4시간 |
+| **3** | 자동 백그라운드 변환 (Drive 스캔 시 옵트인 자동 실행) | 사용자 클릭 제거 (옵트인) | ✅ **본 계획서 13장 상세 설계 완료** | 2.5~3.5시간 |
 
 ---
 
@@ -935,28 +935,272 @@ G드라이브 직접 실행 금지. 반드시 로컬 복사본.
 
 ---
 
-## 12. Phase 2/3 개요 (이번 설계 범위 아님 — 참고용)
+## 12. Phase 2 개요 (구현 완료 — 참고)
 
-### Phase 2: PostScript AI 지원 (3~4시간 예상)
+### Phase 2: PostScript AI 지원 (실제 ~2시간 소요)
 
-- **신규 파일**: `illustrator-scripts/ai_to_pdf.jsx` — AI 파일을 PDF 호환 모드로 재저장
-- **Python 확장**: `ai_converter.py`에 `_convert_postscript(ai_path, ...)` 함수 추가
-  - 기존 Tauri `run_illustrator_script` 커맨드로 JSX 실행
-  - JSX 완료 후 임시 PDF 호환 AI를 PyMuPDF로 변환
-- **UX**: Modal에서 "PostScript도 변환" 체크박스 추가 (기본 꺼짐, Illustrator 설치 안내 팝업)
-- **리스크**: Illustrator CC 2020+ 설치 필수 — 미설치 환경 감지 후 친절한 안내
+> **상태**: ✅ 2026-04-25 구현 완료 (`f67d55d`). 아래는 결과 요약.
 
-### Phase 3: 자동 백그라운드 변환 (2~3시간 예상)
+- **신규 파일**: `illustrator-scripts/ai_to_pdf.jsx` (181줄) — AI를 PDF 호환 .tmp.ai로 재저장
+- **흐름 변경 (PLAN 11과 다름)**: `ai_converter.py`에 `_convert_postscript()` 추가하지 않음 → **프론트가 분기 호출**
+  1. `convertPostScriptToTmp(psFiles)` 호출 → 파일별 `ai_to_pdf.jsx` 실행 → `.tmp.ai` 일괄 생성
+  2. 성공한 `.tmp.ai`를 PDF 호환 AI 묶음에 합쳐 `convertAiBatch` 호출 (Phase 1 흐름 그대로)
+  3. `finally`에서 `cleanupTmpFiles` 호출하여 `.tmp.ai` 정리
+- **UX**: AiConvertModal에 "PostScript도 변환" 체크박스 (Illustrator 미설치 시 disable + 안내)
+- **재사용**: Rust `find_illustrator_exe`/`run_illustrator_script` 그대로 사용. `ai_converter.py`/`lib.rs` 무수정
+- **결정 근거**: `decisions.md` [2026-04-25] "AI→SVG Phase 2 흐름: 프론트 분기 호출"
+- **남은 한계 (v1.0.2 검토)**: `.tmp.ai` 경로 결과 화면 노출(원본 매핑 미구현), converting sub-status 미표시, PS 실패 콘솔만
 
-- **로직**: `runAutoSync`에서 `unconvertedAiFiles.length > 0` 시 자동으로 `convertAiBatch` 호출
-- **UX**: 사용자 확인 없이 조용히 변환, 완료 시 토스트 알림 "AI N개 자동 변환 완료"
-- **옵션**: Settings에서 "자동 변환 기능 끄기" 토글
-- **리스크**: 사용자의 통제감 감소 — 기본값은 **꺼짐** 유지, 옵트인 방식
+---
 
-### Phase 2/3 공통 주의
+## 13. Phase 3 상세 설계 — 자동 백그라운드 변환 (옵트인)
 
-- Phase 1 구조(`ai_converter.py` + 3층)를 그대로 확장하여 발명 최소화
-- Phase 2 추가 시 Phase 1의 "skip_postscript" 파일 목록을 재입력으로 활용
+> **목표**: Phase 1+2가 만든 변환 파이프라인을 **사용자 클릭 없이** 호출. 단, **옵트인**(기본 꺼짐).
+> **예상 시간**: 2.5~3.5시간 (위험도 🟡 중간 — 동시성 제어 + 자동 OFF 가드 추가 필요)
+
+### 13-0. 한 줄 요약 + 비유
+
+> "Drive 스캔이 끝나면, 옵션이 켜져 있을 때만 **조용히 뒤에서** AI를 SVG로 바꿔놓는다. 사용자는 작업 중이라는 사실조차 몰라도 되지만, 알고 싶으면 PatternManage 배너의 작은 진행률 바로 볼 수 있다."
+
+- **비유**: 호텔 룸서비스 자동 청소 옵트인. 체크인 시 "자동 청소 받겠음"에 체크하면 외출한 사이 청소가 끝나 있다. 끄면 직접 부르는 식(=Phase 1+2 그대로).
+
+### 13-1. 사용자 확정 결정 9건 (재논의 금지)
+
+decisions.md에 이미 옵트인 + 헤더 검사 + G드라이브 동일 폴더 저장이 결정됨. 이번 Phase 3에서 **추가 결정**한 9건:
+
+| # | 질문 | 결정 | 거부된 대안 | 근거 |
+|---|------|------|-----------|------|
+| **Q1** | 옵트인 토글 위치 | **Settings 페이지에 "AI 자동 변환" 섹션 신설** (Drive 동기화 섹션 바로 아래) | (A) Drive 섹션 안 체크박스 1줄 추가 — Drive와 AI 변환은 다른 책임. (B) PatternManage 페이지 내부 — 설정 항목이 워크플로우 안에 박히면 발견성 저하 | UpdateSection 패턴 미러. "환경 설정" = Settings 통일 |
+| **Q2** | 트리거 시점 | **Drive 스캔 완료 직후, `unconvertedAiFiles.length > 0`일 때 1회 시도** (b 채택) | (a) 앱 시작 시 — Drive 스캔 결과가 없는 시점이라 의미 없음. (c) 주기적 — 60초 쿨다운과 중복, 의미 없음. (d) 조합 — 복잡도만 증가 | Phase 1 배너 트리거 지점과 동일 — 자연스러운 확장 |
+| **Q3** | UI 표시 | **PatternManage 배너 재활용 + 모드 전환** (배너 라벨/버튼 변경) | (A) 별도 토스트 — 놓치면 재진입 경로 없음. (B) Header 글로벌 진행률 — 다른 페이지 침범. (C) 무알림 — 사용자가 통제감 잃음 | 배너는 이미 "AI 변환 알림 영역" 도메인 — 자동 모드일 때만 라벨/버튼만 바뀌는 게 가장 적은 수정 |
+| **Q4** | 일시 중지/취소 | **배너에 [중지] 버튼 노출 + 진행 중 파일 경계에서 안전 종료** | (A) 즉시 kill — atomic write 깨짐 위험. (B) 중지 불가 — 100개 파일 시작했는데 멈출 방법 없음 | "현재 파일 끝나면 그만"이 가장 안전 + 직관적 |
+| **Q5** | 실패 처리 | **3연속 실패 시 자동 OFF + 알림 배너 + Settings 토글 OFF로 동기화** | (A) 무한 재시도 — 망가진 파일 1개로 영원히 루프. (B) 1실패 OFF — 지나치게 보수적 | 자체 중단 안전장치. 사용자가 다시 켜야 재가동 |
+| **Q6** | Illustrator 미설치 | **PDF 호환 AI만 자동 변환, PostScript AI는 자동 모드에서 SKIP + Drive 스캔 결과에서 제외** | (A) 자동 모달 띄우기 — 옵트인 전제(조용함) 위배. (B) 전체 변환 차단 — PDF 89%까지 막히는 손해 | Phase 1+2 분기 흐름 그대로. PS 처리는 Phase 1 배너 경로로 사용자가 직접 |
+| **Q7** | 동시성 제어 | **모듈 레벨 단일 뮤텍스 (`isAutoConverting` 플래그)** + 수동 모달이 열려있으면 자동 트리거 차단 | (A) 무제어 — 같은 파일 2번 쓰기, atomic 깨짐. (B) Rust 레벨 락 — 오버킬 | useAutoUpdateCheck 모듈 상태 패턴 재사용. 단일 인스턴스 앱이라 충분 |
+| **Q8** | 코드 재사용 vs 분리 | **신규 훅 `useAutoAiConvert.ts`만 추가** (서비스/모달은 Phase 1+2 그대로 사용) | (A) `aiConvertService`에 `runBackgroundBatch` 추가 — UI 의존성이 service에 새는 안티패턴. (B) `backgroundAiConvertService` 분리 — 코드 중복 | service는 순수 함수, 훅이 정책(쿨다운/뮤텍스/배너 모드)을 담당. Modal은 Phase 1+2 수동 경로 전용 유지 |
+| **Q9** | 기본값 + 첫 켤 때 동의 | **기본 OFF + 첫 ON 시 1회 동의 모달** (간단한 확인) | (A) 동의 모달 없음 — G드라이브 자동 쓰기는 한 번은 명시적 동의 필요. (B) 매번 확인 — 옵트인 의미 상실 | "한 번만 확실히, 이후엔 조용히" — Tauri Updater "나중에" UX와 동일 철학 |
+
+### 13-2. 시스템 흐름도 (Phase 3 전용)
+
+```
+┌─────────────────────────────┐
+│ Settings: AI 자동 변환 토글 │
+│   - 기본 OFF                │
+│   - 첫 ON 시 동의 모달       │
+└──────────┬──────────────────┘
+           │ settings.aiAutoConvertEnabled
+           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ PatternManage.runAutoSync() 끝부분                                   │
+│   1) scanResult.unconvertedAiFiles 확보                              │
+│   2) settings.aiAutoConvertEnabled === true ?                       │
+│   3) AND aiConvertTargets === null (수동 모달 안 열림) ?           │
+│   4) AND useAutoAiConvert의 isAutoConverting === false ?           │
+│   5) AND 자동 OFF 가드 통과 (3연속 실패 아님)?                     │
+│   → 모두 통과: scheduleAutoConvert(unconvertedAiFiles)              │
+└──────────┬──────────────────────────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ useAutoAiConvert (신규 훅)                                           │
+│   상태머신: idle → preparing → converting → done | error | aborted   │
+│                                                                      │
+│   converting 단계:                                                   │
+│     1) findIllustratorExe() → null이면 PS 파일 사전 제외            │
+│     2) PS 파일 있으면 convertPostScriptToTmp() (Illustrator 있을 때)│
+│     3) convertAiBatch(allFiles, overwrite=false)                    │
+│     4) cleanupTmpFiles                                               │
+│     5) lastAutoScanRef.current = 0; runAutoSync()  (재스캔)         │
+│                                                                      │
+│   실패 카운터: failCount++ → 3 도달 시 setAutoEnabled(false) + 알림  │
+└──────────┬──────────────────────────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────┐    ┌─────────────────────────────┐
+│ PatternManage 배너 (모드 2) │    │ Settings 섹션 — 마지막 결과 │
+│   "🔄 AI 자동 변환 중      │    │   "마지막 변환: 5/5 성공     │
+│    (3/12) [중지]"           │    │    2026-04-26 14:22"        │
+│                             │    │   [수동 변환] / [토글 ON]    │
+│  - 진행 중: 회전 아이콘     │    └─────────────────────────────┘
+│  - 완료: "✅ 5개 변환 완료"
+│  - 실패: "⚠️ 자동 변환이 │
+│    실패하여 꺼졌습니다"     │
+└─────────────────────────────┘
+```
+
+### 13-3. 신규/수정 파일 목록
+
+#### 신규 (3개)
+
+| 경로 | 역할 | 예상 줄수 |
+|------|------|---------|
+| `src/hooks/useAutoAiConvert.ts` | 모듈 상태 + 구독자 패턴(useAutoUpdateCheck.ts 미러). 자동 변환 정책: 뮤텍스/실패 카운터/Abort 신호/배너 모드 게시 | ~180 |
+| `src/components/AutoConvertConsentModal.tsx` | 첫 ON 시 1회 동의 모달 (G드라이브 직접 쓰기 + 백그라운드 동작 안내). UpdateModal 구조 미러 | ~120 |
+| `PLAN-AI-TO-SVG.md` 13장 | 본 설계 문서 | (이 파일) |
+
+#### 수정 (4개)
+
+| 경로 | 변경 내용 | 예상 변경량 |
+|------|----------|----------|
+| `src/types/pattern.ts` | `AppSettings`에 `aiAutoConvertEnabled?: boolean` + `aiAutoConvertConsent?: boolean` 2개 필드 추가 | +4줄 |
+| `src/stores/settingsStore.ts` | `setAiAutoConvertEnabled(b)` + `setAiAutoConvertConsent(b)` 두 setter 추가 (기존 `setDriveSyncEnabled` 패턴 그대로) + DEFAULT_SETTINGS 갱신 | +30줄 |
+| `src/pages/Settings.tsx` | "AI 자동 변환" 섹션 추가 (UpdateSection 옆). 토글, 마지막 결과 표시, [수동 변환 페이지로] 버튼 | +90줄 |
+| `src/pages/PatternManage.tsx` | (1) `runAutoSync` 끝부분에 `scheduleAutoConvert` 호출 추가, (2) 배너 컴포넌트에 자동 모드 분기 + 진행률/중지 버튼, (3) `useAutoAiConvert` 구독 | +60줄 |
+
+#### 변경 없음 (Phase 1+2 자산 재사용)
+
+- `python-engine/ai_converter.py` (437줄)
+- `python-engine/main.py` CLI 라우터
+- `src-tauri/src/lib.rs` (`ai_convert_*` 커맨드 그대로)
+- `src/services/aiConvertService.ts` (240줄, 모든 함수 그대로 호출)
+- `src/services/driveSync.ts` (`scanDriveRoot` 결과 그대로)
+- `src/components/AiConvertModal.tsx` (수동 경로 전용, Phase 3에서도 등장)
+- `illustrator-scripts/ai_to_pdf.jsx`
+
+> **재사용 원칙**: Phase 3는 "정책 레이어 1개 추가"일 뿐, 변환 엔진/UI 모달은 단 한 줄도 안 바뀐다.
+
+### 13-4. `useAutoAiConvert` 훅 — 핵심 설계
+
+#### 모듈 상태 (싱글톤)
+
+```typescript
+// 비유: 식당 주방 화이트보드 1장 — 누가 작업 중인지/실패 몇 번인지 한 곳에 적어둠
+type AutoConvertMode = "idle" | "preparing" | "converting" | "done" | "error" | "aborted";
+
+interface AutoConvertState {
+  mode: AutoConvertMode;
+  current: number;       // 진행 중 인덱스 (1-based, 사용자 표시용)
+  total: number;
+  lastResult: { ok: number; skip: number; fail: number; finishedAt: string } | null;
+  failCountConsecutive: number;  // 3 도달 시 자동 OFF
+  lastError: string | null;
+}
+```
+
+#### 외부 API (3개만 노출)
+
+```typescript
+export function useAutoAiConvert(): AutoConvertState;  // 구독 전용
+export function scheduleAutoConvert(files: string[]): void;  // PatternManage가 호출
+export function abortAutoConvert(): void;  // 배너 [중지] 버튼이 호출
+```
+
+#### 정책 (동시성/실패/중지)
+
+1. **뮤텍스**: `if (state.mode === "converting" || state.mode === "preparing") return;` — 중복 호출 무시
+2. **수동 모달과의 충돌 방지**: `scheduleAutoConvert`가 호출되기 전에 `aiConvertTargets !== null`이면 PatternManage가 호출 자체를 차단 (게이트 책임은 호출자에)
+3. **AbortSignal**: `let aborter = new AbortController();` 모듈 변수. 파일 1개 변환 끝날 때마다 `if (aborter.signal.aborted) break;`
+4. **실패 카운터**: `convertAiBatch` 결과 `fail >= 1`이면 `failCountConsecutive++`. `=== 3`이면 `setAiAutoConvertEnabled(false)` + `mode='error'` + 사용자 알림 배너
+5. **성공 시 카운터 리셋**: `fail === 0`이면 `failCountConsecutive = 0`
+6. **재스캔 트리거**: `mode='done'` 직전에 PatternManage가 등록한 콜백(`onComplete`) 호출 → `lastAutoScanRef.current = 0; runAutoSync()` (배너가 비워지거나 다음 미변환 사이클 진입)
+
+#### Illustrator 미설치 분기 (Q6)
+
+```typescript
+// scheduleAutoConvert 내부 preparing 단계
+const illustratorPath = await findIllustratorExe();
+const psFiles = files.filter(f => /* 헤더 검사는 service가 알아서 함 — 분류는 previewAiConversion으로 */);
+// 정확히는: previewAiConversion(files)로 먼저 PDF/PS/unknown 분류
+const preview = await previewAiConversion(files);
+const pdfTargets = preview.entries.filter(e => e.kind === "pdf_compatible").map(e => e.absPath);
+const psTargets = preview.entries.filter(e => e.kind === "postscript").map(e => e.absPath);
+
+if (illustratorPath && psTargets.length > 0) {
+  // PS 변환 후 합치기
+} else {
+  // PDF만 처리 — PS는 다음 사이클에 사용자가 수동 모달에서 처리하게 둠
+}
+```
+
+### 13-5. PatternManage 배너 — 모드 분기
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ 모드 A (Phase 1+2 — 기존):                                       │
+│ "📋 변환되지 않은 AI 파일 5개가 있습니다.    [자동 변환 →]"      │
+│  → 클릭 시 AiConvertModal 열림                                   │
+│                                                                  │
+│ 모드 B (Phase 3 자동 진행 중 — 신규):                            │
+│ "🔄 AI 자동 변환 중 (3/12)        [중지]"                        │
+│  → progress bar 12 중 3                                          │
+│                                                                  │
+│ 모드 C (Phase 3 완료 직후 — 신규, 5초간 표시 후 자동 사라짐):    │
+│ "✅ AI 5개 자동 변환 완료"                                       │
+│                                                                  │
+│ 모드 D (Phase 3 자동 OFF 발동 — 신규):                           │
+│ "⚠️ 자동 변환이 3회 실패하여 꺼졌습니다.   [Settings 열기]"     │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+- **모드 결정 로직**: `useAutoAiConvert().mode` + `unconvertedAi.length` 조합
+  - mode='converting' → B
+  - mode='done' → C (5초 타이머)
+  - mode='error' → D
+  - 그 외 + unconvertedAi > 0 → A (Phase 1 그대로)
+
+### 13-6. 단계별 작업 목록 (Phase 1과 일관된 형식)
+
+| 단계 | 작업 | 담당 | 선행 조건 | 예상 |
+|------|------|------|----------|------|
+| **3-A** | `AppSettings` 타입 + `settingsStore` setter 2개 추가 | developer | 없음 | 15분 |
+| **3-B** | `useAutoAiConvert.ts` 신규 훅 작성 (모듈 상태/뮤텍스/실패 카운터/Abort) | developer | 3-A | 60분 |
+| **3-C** | `AutoConvertConsentModal.tsx` 신규 (첫 ON 시 1회) | developer | 3-A | 30분 |
+| **3-D** | `Settings.tsx`에 "AI 자동 변환" 섹션 추가 (토글/동의 모달 트리거/마지막 결과/Settings에서 [수동 변환 시작] 링크) | developer | 3-A, 3-B, 3-C | 40분 |
+| **3-E** | `PatternManage.tsx` 통합 (배너 모드 분기 + `runAutoSync` 끝부분 `scheduleAutoConvert` 호출 + 수동 모달과 뮤텍스) | developer | 3-B | 40분 |
+| **3-F** | `App.css` BEM 추가 (`.pattern-manage__ai-banner--auto`/`--done`/`--error` + 진행률 바 + Settings 섹션) | developer | 3-E | 20분 |
+| **3-G** | tsc + 수동 시나리오 검증 (옵트인 OFF 동작 / 첫 ON 동의 / PS 미설치 / 3연속 실패 / [중지]) | tester | 3-A~3-F | 30분 |
+| **3-H** | knowledge 갱신 (architecture + decisions Q1~Q9 9건) + 커밋 | pm | 3-G | 15분 |
+
+**합계**: 약 **3시간 30분** (위험도 🟡 중간 — 동시성 제어 + 자동 OFF 가드)
+
+> **병렬 가능성**: 3-B와 3-C는 독립이므로 동시 작업 가능. 3-F는 3-E 직후 곧장.
+
+### 13-7. 테스트 시나리오 (3-G용)
+
+| 시나리오 | 사전 조건 | 기대 동작 |
+|---------|---------|---------|
+| **T1** 옵트인 OFF (기본) | settings.aiAutoConvertEnabled = false | Phase 1+2 동작과 100% 동일. 배너 클릭으로만 변환 |
+| **T2** 첫 ON | 토글 OFF→ON 전환 | AutoConvertConsentModal 1회 표시 → "동의 후 활성화" → settings.aiAutoConvertConsent = true → 다음 Drive 스캔 시 자동 시작 |
+| **T3** 정상 자동 변환 | ON + unconvertedAi 5개 | 배너 모드 B → 5개 변환 완료 → 모드 C 5초 → 사라짐 → Drive 재스캔 |
+| **T4** Illustrator 미설치 + PS 섞임 | ON + 5 PDF + 2 PS | PDF 5개만 자동 변환. PS 2개는 다음 사이클에 사용자가 수동(Phase 1 배너 모드 A)으로 처리 |
+| **T5** [중지] 버튼 | 변환 중 클릭 | 현재 파일 끝나는 즉시 mode='aborted' → 배너 사라짐 |
+| **T6** 3연속 실패 자동 OFF | 일부러 깨진 AI 3개 | 매 사이클마다 fail 발생 → 3회째 mode='error' + Settings 토글 OFF + 모드 D 배너 |
+| **T7** 수동 모달 충돌 방지 | AiConvertModal 열린 상태에서 Drive 재스캔 | scheduleAutoConvert 차단 (모달 닫을 때까지 대기) |
+| **T8** 동시 진행 충돌 방지 | 변환 중에 다시 runAutoSync 발동 (60초 후) | 뮤텍스로 무시 |
+
+### 13-8. 리스크 & 대응
+
+| 리스크 | 대응 |
+|-------|------|
+| 사용자가 옵트인 끈 적 없음에도 자동 변환이 의도치 않게 발동 | 기본 OFF + Settings에 토글 상시 노출 + 첫 ON 시 동의 모달 1회 + 자동 OFF 발동 시 배너 안내 |
+| Drive 60초 쿨다운과 자동 변환 동시 충돌 | `runAutoSync`가 이미 쿨다운 가드 보유 → 그 끝부분에서만 자동 변환 트리거하므로 자연 직렬화 |
+| atomic write 도중 [중지] | AbortController는 **다음 파일 시작 전**에만 체크. 실행 중 파일은 끝까지 완주 |
+| 사용자가 PatternManage 떠나면 진행 중단? | 모듈 상태이므로 페이지 이동해도 변환 계속됨. mode='done' 시 다음 PatternManage 진입 시 모드 C 배너 표시 (5초 후 사라짐) |
+| Illustrator 설치 상태가 실행 중에 바뀜 | 매 사이클 `findIllustratorExe()` 재호출 (캐시 안 함) |
+| 첫 ON 시 사용자가 동의 모달 강제 종료 | aiAutoConvertConsent=false 유지 + 토글도 false로 되돌림 |
+
+### 13-9. knowledge 갱신 계획 (3-H)
+
+`decisions.md`에 추가 9건 (Q1~Q9 매핑):
+1. Phase 3 옵트인 토글 위치 = Settings AI 자동 변환 섹션 신설
+2. Phase 3 트리거 = Drive 스캔 직후 1회 (앱 시작/주기적 거부)
+3. Phase 3 UI = PatternManage 배너 재활용 (4모드)
+4. Phase 3 중지 = 파일 경계 안전 종료 (즉시 kill 거부)
+5. Phase 3 실패 처리 = 3연속 실패 시 자동 OFF
+6. Phase 3 Illustrator 미설치 = PDF만 자동, PS는 다음 사이클 수동
+7. Phase 3 동시성 = 모듈 레벨 단일 뮤텍스 + 수동 모달과 게이트
+8. Phase 3 코드 분리 = 신규 훅만 추가, service/Modal 무수정
+9. Phase 3 기본값 = OFF + 첫 ON 시 동의 모달
+
+`architecture.md`에 추가 1건:
+- "AI→SVG Phase 3 옵트인 자동 백그라운드 변환 — 신규 훅 1개 + Consent 모달 1개 + Settings 섹션 + PatternManage 배너 모드 분기 + Phase 1+2 엔진 100% 재사용"
+
+### 13-10. 커밋 전략 (Phase 1+2 패턴 미러)
+
+| 커밋 | 범위 | 시점 |
+|------|------|------|
+| **E**: `feat(ai-convert): Phase 3 자동 백그라운드 변환 (옵트인) — 훅+Consent+Settings+배너 모드` | 3-A~3-F + 3-G 통과 후 | 단일 커밋 (훅+UI 상호 의존) |
+| **F**: `docs(ai-convert): Phase 3 종결 — knowledge 갱신` | 3-H | 분리 커밋 (기능과 문서 분리) |
 
 ---
 

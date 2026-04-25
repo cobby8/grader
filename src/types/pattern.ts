@@ -84,6 +84,15 @@ export interface AppSettings {
   drivePatternRoot?: string;
   /** Drive 동기화 기능 전체 활성/비활성 스위치 (false면 Drive 관련 UI 숨김) */
   driveSyncEnabled: boolean;
+
+  // === AI→SVG Phase 3 신규 필드 (optional, 기존 데이터 호환) ===
+  // 왜 별도 두 필드인가: "켜짐 여부"와 "최초 동의 여부"는 의미가 다르다.
+  // - aiAutoConvertEnabled: 사용자가 끌 때마다 false로 토글 (자동 OFF 발동 시도 마찬가지)
+  // - aiAutoConvertConsent: 한 번 동의하면 true로 영구 유지 (다시 켤 때 모달 안 뜸)
+  /** AI→SVG 자동 백그라운드 변환 활성/비활성 (Phase 3, 기본 false) */
+  aiAutoConvertEnabled?: boolean;
+  /** AI 자동 변환 첫 ON 시 사용자 동의 완료 여부 (Phase 3, 기본 false). 한 번 true가 되면 유지. */
+  aiAutoConvertConsent?: boolean;
 }
 
 /**

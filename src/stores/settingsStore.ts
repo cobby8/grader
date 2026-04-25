@@ -41,6 +41,11 @@ const SETTINGS_BACKUP_FILE = "settings.backup.json";
  */
 const DEFAULT_SETTINGS: AppSettings = {
   driveSyncEnabled: false,
+  // === AI→SVG Phase 3 ===
+  // 신규 사용자가 모르는 사이에 G드라이브에 SVG 파일이 자동 생성되면 안 되므로
+  // 두 필드 모두 기본 false. 사용자가 Settings에서 명시적으로 켜야만 동작.
+  aiAutoConvertEnabled: false,
+  aiAutoConvertConsent: false,
 };
 
 // ============================================================================
@@ -160,5 +165,38 @@ export async function updateDriveRoot(path: string): Promise<void> {
 export async function setDriveSyncEnabled(enabled: boolean): Promise<void> {
   const { data } = await loadSettings();
   const next: AppSettings = { ...data, driveSyncEnabled: enabled };
+  await saveSettings(next);
+}
+
+/**
+ * AI→SVG 자동 변환 활성/비활성 토글 (Phase 3).
+ *
+ * 왜 setDriveSyncEnabled와 같은 패턴인가:
+ *   "현재 설정 전체를 읽어 한 필드만 바꿔 다시 저장"하는 보일러플레이트를
+ *   여러 호출자가 반복하지 않도록 캡슐화하기 위함. 호출 측은 단 한 줄로 토글 가능.
+ *
+ * 호출 시점:
+ *   - Settings 페이지 토글 클릭 (사용자 명시 액션)
+ *   - useAutoAiConvert 훅에서 3연속 실패 시 강제 OFF (settings.json에 영속해야 다음
+ *     실행에서도 OFF 상태 유지 — 메모리 플래그로는 안전하지 않음)
+ */
+export async function setAiAutoConvertEnabled(enabled: boolean): Promise<void> {
+  const { data } = await loadSettings();
+  const next: AppSettings = { ...data, aiAutoConvertEnabled: enabled };
+  await saveSettings(next);
+}
+
+/**
+ * AI→SVG 자동 변환 동의 여부 갱신 (Phase 3).
+ *
+ * 한 번 true가 되면 영구 유지 (사용자가 토글을 OFF→ON으로 다시 켜도 동의 모달 재표시 X).
+ * Settings 초기화 시점에만 false로 돌아간다.
+ *
+ * 비유:
+ *   설치 시 한 번만 묻는 "이용 약관 동의" 같은 것. 다시 묻지 않는다.
+ */
+export async function setAiAutoConvertConsent(consent: boolean): Promise<void> {
+  const { data } = await loadSettings();
+  const next: AppSettings = { ...data, aiAutoConvertConsent: consent };
   await saveSettings(next);
 }
