@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect, developer | 최대 30항목 -->
 <!-- 프로젝트의 폴더 구조, 파일 역할, 핵심 패턴을 기록 -->
 
+### [2026-04-26] AI→SVG Phase 3 구현 완료 — 자동 백그라운드 변환 (옵트인)
+- **분류**: architecture
+- **발견자**: pm
+- **내용**: Phase 1+2 변환 파이프라인을 사용자 클릭 없이 호출하는 옵트인 자동화 레이어. **신규 2파일**: (1) `src/hooks/useAutoAiConvert.ts` 493줄 — `useAutoUpdateCheck.ts` 패턴 100% 미러(모듈 상태 + 구독자 Set + StrictMode 가드). 6상태 머신 `idle/preparing/converting/done/error/aborted`. 모듈 변수 `state/listeners/isConverting(뮤텍스)/aborter(AbortController)`. 외부 API 5개: `useAutoAiConvert()/scheduleAutoConvert(files)/abortAutoConvert()/resetAutoConvertState()/getAutoConvertState()`. 핵심 로직: `previewAiConversion`으로 PDF/PS/unknown 분류 → Illustrator 미설치 시 PS는 다음 사이클 SKIP → PS 있고 Illustrator 있으면 `convertPostScriptToTmp` → tmp 합본 → `convertAiBatch`. 실패 카운터: `failed >= 1`이면 ++, `=== 0`이면 리셋, **3 도달 시 `setAiAutoConvertEnabled(false)`** 호출(settings.json 영속) + `mode='error'`. AbortController 게이트 위치 3곳: preview 직후/PS 변환 직후/batch 시작 직전(실행 중 batch는 atomic write 보장 위해 끝까지). reviewer 권장 처리로 부분 실패 lastError 노출(첫 FAIL `error` 메시지 추출) + PS throw 명시 catch 추가. (2) `src/components/AutoConvertConsentModal.tsx` 217줄 — 첫 ON 시 1회 동의 모달. ESC/백드롭 클릭 → onCancel, 카드 stopPropagation. 본문 불릿 4개(같은 폴더 저장/덮어쓰지 않음/백그라운드/언제든 OFF). **수정 5파일**: (3) `src/types/pattern.ts` — AppSettings에 `aiAutoConvertEnabled?` + `aiAutoConvertConsent?` 2필드 추가(둘 다 optional, 기존 settings.json 호환). (4) `src/stores/settingsStore.ts` — DEFAULT_SETTINGS 갱신 + `setAiAutoConvertEnabled`/`setAiAutoConvertConsent` setter 2개 신규(setDriveSyncEnabled 100% 미러). (5) `src/pages/Settings.tsx` +125줄 — "AI 자동 변환" 섹션(Drive 동기화 옆) + 토글 + 동의 모달 통합. ON 시도 + consent=false면 모달, 그 외 즉시 setter. (6) `src/pages/PatternManage.tsx` +199줄 — 자동 변환 트리거(runAutoSync 끝부분에서 옵트인 ON + 미변환 > 0일 때만 `scheduleAutoConvert` 호출, 호출자 게이트) + 배너 4모드 IIFE 분기(A 미변환=수동 라벨, B 진행 중=진행률 바+[중지], C 완료=5초 후 자동 reset, D 자동 OFF=경고+[확인]) + 5초 타이머 useEffect. (7) `src/App.css` +257줄 — 배너 모디파이어 3종 + 진행률 바 + 보조 버튼 + 동의 모달 BEM 전체 + Settings 안내 박스. **변경 0파일**: `aiConvertService.ts`/`AiConvertModal.tsx`/`driveSync.ts`/`ai_converter.py`/`lib.rs`/`ai_to_pdf.jsx` 모두 git diff 0줄 — 정책 레이어(훅)와 실행 레이어(Phase 1+2) 완전 분리. tester 10/10 PASS, reviewer 🟢 우수(critical 0, 권장 3건 모두 처리). 실 동작 검증은 사용자 담당.
+- **참조횟수**: 0
+
 ### [2026-04-25] AI→SVG Phase 2 구현 완료 — PostScript AI 지원 (Illustrator COM) ~2h 단축
 - **분류**: architecture
 - **발견자**: pm

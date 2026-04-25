@@ -49,6 +49,18 @@ import SvgStandardizeModal from "../components/SvgStandardizeModal";
 // Phase 1-F (AI→SVG): AI 변환 모달 — 상단 배너의 [자동 변환] 버튼에서 열림
 // 왜 여기서 import: PatternManage가 unconvertedAi 상태를 소유하고 모달을 조건부 렌더하므로 소유자가 맞다.
 import AiConvertModal from "../components/AiConvertModal";
+// === Phase 3 (AI→SVG 자동 변환) — 단계 1에서 만든 정책 훅 ===
+// 왜 named imports: 단계 1 산출물이 모두 named export로 정의됨 (default 없음)
+// scheduleAutoConvert: runAutoSync 끝부분에서 호출 (옵트인 ON일 때만)
+// useAutoAiConvert: 컴포넌트가 모듈 상태를 구독해 배너 4모드 분기에 사용
+// abortAutoConvert: 배너 [중지] 버튼에서 호출
+// resetAutoConvertState: 모드 C(완료) 5초 타이머 만료 시 idle로 복귀
+import {
+  useAutoAiConvert,
+  scheduleAutoConvert,
+  abortAutoConvert,
+  resetAutoConvertState,
+} from "../hooks/useAutoAiConvert";
 
 /** 편집 모드 상태 타입 */
 type EditMode = "list" | "create" | "edit";
@@ -272,13 +284,26 @@ function PatternManage() {
   const [aiConvertTargets, setAiConvertTargets] = useState<string[] | null>(null);
   const [unconvertedAi, setUnconvertedAi] = useState<string[]>([]);
 
-  // === Settings에서 Drive 동기화 활성 여부 + 루트 경로 로드 ===
+  // === Phase 3 (AI→SVG 자동 변환): 옵트인 토글 상태 ===
+  // 왜 별도 state: runAutoSync에서 매번 settings.json 재로드하면 I/O 비용이 발생.
+  // 페이지 진입 시 한 번 읽고 메모리에 들고 있다가 트리거 게이트로만 사용.
+  // settings 변경(다른 탭에서 토글)은 페이지 재진입 시 반영 — Phase 3 단순화 정책.
+  const [aiAutoConvertEnabled, setAiAutoConvertEnabledState] = useState(false);
+
+  // === Phase 3: 자동 변환 모듈 상태 구독 ===
+  // 모듈 상태가 바뀌면 자동 리렌더 — 배너 4모드 분기에 사용
+  const autoConvertState = useAutoAiConvert();
+
+  // === Settings에서 Drive 동기화 활성 여부 + 루트 경로 + AI 자동 변환 토글 로드 ===
   // 왜 별도 useEffect인가: Settings는 presets와 독립이라 병렬 로드 가능.
   useEffect(() => {
     loadSettings().then((result) => {
       if (result.success) {
         setDriveSyncEnabledState(result.data.driveSyncEnabled);
         setDrivePatternRoot(result.data.drivePatternRoot);
+        // Phase 3: 자동 변환 토글 상태 메모리 캐시
+        // ?? false 폴백: 기존 settings.json에 필드 없는 사용자 호환
+        setAiAutoConvertEnabledState(result.data.aiAutoConvertEnabled ?? false);
       }
     });
   }, []);
@@ -523,6 +548,23 @@ function PatternManage() {
 
       // 성공/변경없음 모두 마지막 스캔 시각 갱신 (실패만 쿨다운 갱신 안 함 → 재시도 허용)
       lastAutoScanRef.current = Date.now();
+
+      // === Phase 3 (AI→SVG 자동 변환) 트리거 ===
+      // 게이트 (PLAN 13장 / scratchpad 주의사항 5):
+      //   1) 옵트인 토글 OFF면 호출 자체를 안 함 (호출자 게이트)
+      //   2) 미변환 AI 0개면 호출 안 함
+      //   3) 훅 내부에 isConverting 뮤텍스가 있어 동시 트리거는 자동 차단 (StrictMode 2회 가드)
+      // scheduleAutoConvert는 Promise를 반환하지만 fire-and-forget으로 처리 — 사이클 진행은
+      // 모듈 상태로 구독되어 배너가 자동 갱신되므로 await 불필요.
+      const unconvertedAiFiles = scanResult.unconvertedAiFiles ?? [];
+      if (aiAutoConvertEnabled && unconvertedAiFiles.length > 0) {
+        console.info(
+          "[자동 변환] 트리거 (옵트인 ON, 미변환:",
+          unconvertedAiFiles.length,
+          "개)"
+        );
+        void scheduleAutoConvert(unconvertedAiFiles);
+      }
     } catch (err) {
       console.warn("[Drive 자동 동기화] 예외:", err);
     } finally {
@@ -532,6 +574,7 @@ function PatternManage() {
     isLoadSuccess,
     driveSyncEnabled,
     drivePatternRoot,
+    aiAutoConvertEnabled,
     presets,
     categories,
   ]);
@@ -548,6 +591,20 @@ function PatternManage() {
     runAutoSync();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoadSuccess, driveSyncEnabled, drivePatternRoot]);
+
+  // === Phase 3 (AI→SVG 자동 변환): 모드 C(완료) 배너 5초 후 자동 idle 복귀 ===
+  // 왜 useEffect 안에 setTimeout: autoConvertState.mode가 'done'으로 진입하면 5초 표시 후
+  // resetAutoConvertState()로 idle 전환 → 배너 자연스럽게 사라짐.
+  // cleanup에서 clearTimeout: 사용자가 5초 안에 페이지 이동하거나 다른 모드로 전환되면
+  // 타이머가 살아있으면 안 됨 (메모리/state 갱신 누수 방지).
+  useEffect(() => {
+    if (autoConvertState.mode !== "done") return;
+    const timer = setTimeout(() => {
+      // 5초 후 idle로 복귀 — 모듈 상태 변경이라 모든 구독자(배너)가 자동 리렌더
+      resetAutoConvertState();
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [autoConvertState.mode]);
 
   // === Phase 1-5: 카드 ⋮ 메뉴 바깥 클릭 시 닫기 ===
   // 왜 document-level listener 인가: 드롭다운 바깥 어디를 눌러도 닫혀야
@@ -1114,25 +1171,147 @@ function PatternManage() {
           </div>
         )}
 
-        {/* Phase 1-F: AI 미변환 안내 배너 — Drive 스캔에서 SVG 짝 없는 .ai를 발견했을 때만 표시.
-            왜 여기에 배치: 페이지 헤더(타이틀/설명) 바로 아래, 카테고리 트리 위.
-            사용자가 패턴 카드 그리드를 보기 전에 "변환되지 않은 AI가 있다"는 사실을 먼저 인지할 수 있다.
-            CSS는 Phase 1-E에서 App.css에 이미 추가됨. */}
-        {unconvertedAi.length > 0 && (
-          <div className="pattern-manage__ai-banner" role="alert">
-            <span className="pattern-manage__ai-banner-icon">📋</span>
-            <span className="pattern-manage__ai-banner-text">
-              변환되지 않은 AI 파일 {unconvertedAi.length}개가 있습니다.
-            </span>
-            <button
-              type="button"
-              className="pattern-manage__ai-banner-button"
-              onClick={() => setAiConvertTargets(unconvertedAi)}
-            >
-              자동 변환 →
-            </button>
-          </div>
-        )}
+        {/* === AI 변환 배너 — 4모드 분기 (Phase 1-F + Phase 3) ===
+            왜 IIFE: 4가지 모드 중 하나만 렌더하는 분기를 if/return으로 깔끔히 표현.
+              모드 B (변환 중)  : 진행률 + [중지] 버튼 — autoConvertState.mode === 'preparing' | 'converting'
+              모드 C (완료)     : "N개 변환됨" + 5초 후 자동 사라짐 — mode === 'done'
+              모드 D (자동 OFF) : 3연속 실패 경고 + [확인] — mode === 'error' && failCountConsecutive >= 3
+              모드 A (미변환)   : 기존 [자동 변환] 버튼 — unconvertedAi > 0 (자동 변환 idle 상태) */}
+        {(() => {
+          // 모드 B: 자동 변환 진행 중 (preparing 또는 converting)
+          if (
+            autoConvertState.mode === "preparing" ||
+            autoConvertState.mode === "converting"
+          ) {
+            // 진행률 계산 — preparing 단계에선 total=0이라 0%로 표시 (preview 단계 의미)
+            const total = autoConvertState.total;
+            const current = autoConvertState.current;
+            const percent =
+              total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+            return (
+              <div
+                className="pattern-manage__ai-banner pattern-manage__ai-banner--converting"
+                role="status"
+                aria-live="polite"
+              >
+                <span className="pattern-manage__ai-banner-icon">⚙️</span>
+                <div className="pattern-manage__ai-banner-content">
+                  <div className="pattern-manage__ai-banner-text">
+                    {autoConvertState.mode === "preparing"
+                      ? "AI 파일 분석 중..."
+                      : `AI → SVG 자동 변환 중 (${current}/${total})`}
+                  </div>
+                  {/* 진행률 바 — preparing 단계는 0%이지만 일부러 항상 렌더해 레이아웃 흔들림 방지 */}
+                  <div
+                    className="pattern-manage__ai-banner-progress"
+                    role="progressbar"
+                    aria-valuenow={percent}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                  >
+                    <div
+                      className="pattern-manage__ai-banner-progress-fill"
+                      style={{ width: `${percent}%` }}
+                    />
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="pattern-manage__ai-banner-button pattern-manage__ai-banner-button--secondary"
+                  onClick={() => abortAutoConvert()}
+                >
+                  중지
+                </button>
+              </div>
+            );
+          }
+
+          // 모드 C: 완료 직후 (5초 후 useEffect가 reset해서 자동 사라짐)
+          if (autoConvertState.mode === "done") {
+            const r = autoConvertState.lastResult;
+            // lastResult가 있으면 OK 개수 표시, 없으면 추상적 안내
+            const okText = r ? `${r.ok}개 변환 완료` : "변환 완료";
+            const skipText = r && r.skip > 0 ? ` (${r.skip}개 건너뜀)` : "";
+            const failText = r && r.fail > 0 ? ` (${r.fail}개 실패)` : "";
+            return (
+              <div
+                className="pattern-manage__ai-banner pattern-manage__ai-banner--done"
+                role="status"
+              >
+                <span className="pattern-manage__ai-banner-icon">✅</span>
+                <span className="pattern-manage__ai-banner-text">
+                  AI 자동 변환: {okText}
+                  {skipText}
+                  {failText}
+                </span>
+              </div>
+            );
+          }
+
+          // 모드 D: 3연속 실패로 자동 OFF 발동
+          // 왜 failCountConsecutive >= 3 조건: 1~2회 실패는 사용자에게 안내 안 하고 카운터만 누적,
+          // 3회 도달 시 setAiAutoConvertEnabled(false)로 settings.json에 영속 + 이 배너 표시.
+          if (
+            autoConvertState.mode === "error" &&
+            autoConvertState.failCountConsecutive >= 3
+          ) {
+            return (
+              <div
+                className="pattern-manage__ai-banner pattern-manage__ai-banner--error"
+                role="alert"
+              >
+                <span className="pattern-manage__ai-banner-icon">⚠️</span>
+                <div className="pattern-manage__ai-banner-content">
+                  <div className="pattern-manage__ai-banner-text">
+                    AI 자동 변환을 일시 중단했습니다 (3회 연속 실패).
+                  </div>
+                  {autoConvertState.lastError && (
+                    <div className="pattern-manage__ai-banner-subtext">
+                      마지막 오류: {autoConvertState.lastError}
+                    </div>
+                  )}
+                  <div className="pattern-manage__ai-banner-subtext">
+                    설정에서 다시 켜거나, 아래 [수동 변환]으로 시도해보세요.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="pattern-manage__ai-banner-button pattern-manage__ai-banner-button--secondary"
+                  onClick={() => resetAutoConvertState()}
+                >
+                  확인
+                </button>
+              </div>
+            );
+          }
+
+          // 모드 A: 미변환 AI 있음 + 자동 변환 idle/aborted 상태 — 기존 [자동 변환] 버튼
+          // 왜 idle/aborted를 함께 묶나: aborted는 "사용자가 중지한 상태"라 다음 액션이 가능해야 함.
+          // 이 모드에서 사용자는 수동 모달을 열어 변환할 수 있다.
+          // (주의사항 7: 자동 변환 진행 중 수동 모달 진입 차단은 위 분기에서 이미 가로챔 — 여기 도달했다면 idle/aborted)
+          if (unconvertedAi.length > 0) {
+            return (
+              <div className="pattern-manage__ai-banner" role="alert">
+                <span className="pattern-manage__ai-banner-icon">📋</span>
+                <span className="pattern-manage__ai-banner-text">
+                  변환되지 않은 AI 파일 {unconvertedAi.length}개가 있습니다.
+                </span>
+                <button
+                  type="button"
+                  className="pattern-manage__ai-banner-button"
+                  onClick={() => setAiConvertTargets(unconvertedAi)}
+                >
+                  {/* 옵트인 ON일 때 라벨이 다른 이유: 자동 변환 켜져 있는 상태에서
+                      배너에 미변환이 남았다는 건 = 자동 변환에서 SKIP된 항목 (예: PostScript이고 Illustrator 미설치)
+                      → 사용자가 명시적으로 처리하라는 의미로 "수동 변환"이 더 정확 */}
+                  {aiAutoConvertEnabled ? "수동 변환" : "자동 변환"} →
+                </button>
+              </div>
+            );
+          }
+
+          return null;
+        })()}
 
         {/* 좌측 트리 + 우측 프리셋 목록 레이아웃 */}
         <div className="pattern-layout">

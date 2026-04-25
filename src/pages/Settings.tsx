@@ -25,9 +25,16 @@ import {
   loadSettings,
   updateDriveRoot,
   setDriveSyncEnabled,
+  // === Phase 3 (AI→SVG 자동 변환) — 단계 1에서 추가된 setter 2개 ===
+  // 왜 named import: settingsStore는 default export 없이 setter를 개별 export
+  setAiAutoConvertEnabled,
+  setAiAutoConvertConsent,
 } from "../stores/settingsStore";
 import { getCacheStats, clearAll as clearSvgCache } from "../stores/svgCacheStore";
 import UpdateSection from "../components/UpdateSection";
+// === Phase 3 (AI→SVG 자동 변환) — 첫 ON 시 1회 동의 모달 ===
+// 왜 default import: 단계 1에서 default export로 정의됨
+import AutoConvertConsentModal from "../components/AutoConvertConsentModal";
 import type { AppSettings } from "../types/pattern";
 
 /**
@@ -68,6 +75,11 @@ function Settings() {
 
   // === 저장 중 플래그 ===
   const [saving, setSaving] = useState(false);
+
+  // === Phase 3 (AI→SVG 자동 변환): 첫 ON 시 1회 동의 모달 표시 플래그 ===
+  // 왜 별도 state: 토글 ON 시도 → consent 검증 → 모달 ON/OFF 전환을 분리해야
+  // "사용자가 모달에서 [취소] 누르면 토글 ON 자체가 일어나지 않는다"를 깔끔히 표현 가능.
+  const [showConsentModal, setShowConsentModal] = useState(false);
 
   // === 초기 로드 ===
   useEffect(() => {
@@ -185,6 +197,67 @@ function Settings() {
     },
     [isLoadSuccess]
   );
+
+  // === Phase 3: AI→SVG 자동 변환 토글 ===
+  // 동작:
+  //   - OFF → ON 전환:
+  //     · consent === true   → 즉시 enabled=true 영속 + 토글 ON
+  //     · consent === false  → 동의 모달 표시 (사용자가 [동의하고 켜기] 누를 때까지 대기)
+  //   - ON → OFF 전환: 즉시 enabled=false 영속 (consent 값은 그대로 유지 — 다음 ON 때 모달 X)
+  const handleToggleAutoConvert = useCallback(
+    async (enabled: boolean) => {
+      if (!isLoadSuccess) return;
+
+      // ON 시도 + 아직 동의한 적 없음 → 모달 띄우기만 하고 실제 토글은 onConsent에서
+      if (enabled && !settings.aiAutoConvertConsent) {
+        setShowConsentModal(true);
+        return;
+      }
+
+      // OFF로 전환 또는 ON + 이미 동의됨 → 즉시 영속
+      setSaving(true);
+      try {
+        await setAiAutoConvertEnabled(enabled);
+        setSettings((prev) => ({ ...prev, aiAutoConvertEnabled: enabled }));
+      } catch (err) {
+        alert(`저장 실패: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setSaving(false);
+      }
+    },
+    [isLoadSuccess, settings.aiAutoConvertConsent]
+  );
+
+  // === Phase 3: 동의 모달 [동의하고 켜기] 클릭 처리 ===
+  // 두 setter를 순차적으로 호출 — consent=true 영속 후 enabled=true 영속.
+  // 두 호출 모두 최신 settings.json을 읽어서 한 필드만 바꾸는 패턴이라 순서가 중요하다.
+  const handleConsentApproved = useCallback(async () => {
+    setSaving(true);
+    try {
+      // 1) 동의 영속 — 다음에 토글 OFF→ON 해도 모달 안 뜸
+      await setAiAutoConvertConsent(true);
+      // 2) 자동 변환 활성 영속
+      await setAiAutoConvertEnabled(true);
+      // 3) 화면 상태 동기화
+      setSettings((prev) => ({
+        ...prev,
+        aiAutoConvertConsent: true,
+        aiAutoConvertEnabled: true,
+      }));
+      // 4) 모달 닫기
+      setShowConsentModal(false);
+    } catch (err) {
+      alert(`저장 실패: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  }, []);
+
+  // === Phase 3: 동의 모달 [취소] / ESC / 백드롭 처리 ===
+  // 토글은 ON 안 됨 — 모달만 닫는다.
+  const handleConsentCancel = useCallback(() => {
+    setShowConsentModal(false);
+  }, []);
 
   // === 캐시 비우기 ===
   const handleClearCache = useCallback(() => {
@@ -312,6 +385,50 @@ function Settings() {
         </div>
       </section>
 
+      {/* === 섹션 1.5: AI 자동 변환 (Phase 3) ===
+          왜 Drive 섹션 바로 아래: "Drive 동기화"로 SVG를 가져온 다음 단계가
+          "AI→SVG 자동 변환"이므로 사용자 머릿속 흐름과 일치한다.
+          Drive 동기화 OFF면 자동 변환도 의미 없지만, 토글 자체는 독립 동작 —
+          (Drive ON + 자동변환 ON) 조합에서만 PatternManage가 트리거함. */}
+      <section className="settings-section">
+        <h2 className="settings-section__title">AI 자동 변환</h2>
+        <p className="settings-section__description">
+          Google Drive 폴더에 있는 .ai 파일 중 짝이 되는 SVG가 없는 것을
+          자동으로 SVG로 변환하여 같은 폴더에 저장합니다. 패턴 관리 페이지에
+          진입할 때마다 1회 백그라운드로 실행됩니다.
+        </p>
+
+        <div className="settings-row">
+          <label className="settings-row__label">자동 변환 사용</label>
+          <div className="settings-row__value">
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={settings.aiAutoConvertEnabled ?? false}
+                onChange={(e) => handleToggleAutoConvert(e.target.checked)}
+                disabled={!isLoadSuccess || saving}
+              />
+              <span>
+                {settings.aiAutoConvertEnabled
+                  ? "활성 (G드라이브 스캔 직후 자동 변환)"
+                  : "비활성 (자동 변환 중지 — 수동 변환만 가능)"}
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div className="settings-row">
+          <label className="settings-row__label">안내</label>
+          <div className="settings-row__value settings-row__hint-block">
+            <ul className="settings-hint-list">
+              <li>같은 이름의 SVG가 이미 있으면 건너뜁니다 (덮어쓰지 않음).</li>
+              <li>변환 진행 상황은 패턴 관리 페이지 상단 배너에 표시됩니다.</li>
+              <li>3회 연속 실패하면 자동으로 꺼집니다 — 이 토글에 다시 켜야 합니다.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
       {/* === 섹션 2: SVG 캐시 === */}
       <section className="settings-section">
         <h2 className="settings-section__title">SVG 메모리 캐시</h2>
@@ -346,6 +463,14 @@ function Settings() {
 
       {/* === 섹션 3: 버전 정보 + 업데이트 (자동 업데이트 Phase C) === */}
       <UpdateSection />
+
+      {/* === Phase 3: AI 자동 변환 첫 ON 시 1회 동의 모달 === */}
+      {/* isOpen이 false면 컴포넌트 내부에서 null 반환 — 렌더 비용 0 */}
+      <AutoConvertConsentModal
+        isOpen={showConsentModal}
+        onConsent={handleConsentApproved}
+        onCancel={handleConsentCancel}
+      />
 
       {/* === 섹션 4: 정보 === */}
       <section className="settings-section">

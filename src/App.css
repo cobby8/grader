@@ -2967,3 +2967,260 @@ html, body, #root {
   cursor: not-allowed;
 }
 
+/* ============================================================================
+   AI→SVG 자동 변환 (Phase 3): 배너 모드 B/C/D 모디파이어 + 진행률 바
+   ============================================================================
+   왜 모디파이어 패턴: 기존 .pattern-manage__ai-banner 베이스 스타일을 유지하면서
+   배경/테두리만 모드별로 바꾸면 코드 중복 없이 4모드를 표현할 수 있다.
+   모드 A (미변환 안내)는 기본 스타일 그대로 사용. */
+
+/* 모드 B: 변환 중 — 진행 상태를 부드럽게 표현하기 위해 status-ok 색상 사용 */
+.pattern-manage__ai-banner--converting {
+  background-color: var(--color-bg-content);
+  border-left-color: var(--color-status-ok);
+}
+
+/* 모드 C: 완료 — 성공 컬러로 시각적 강조 (5초 후 자동 사라짐) */
+.pattern-manage__ai-banner--done {
+  background-color: var(--color-bg-content);
+  border-left-color: var(--color-status-ok);
+}
+
+/* 모드 D: 자동 OFF (3연속 실패) — 위험 컬러로 사용자 주의 환기 */
+.pattern-manage__ai-banner--error {
+  background-color: var(--color-bg-content);
+  border-left-color: var(--color-status-error);
+}
+
+/* 배너 본문 (텍스트 + 진행률 바를 세로 정렬할 컨테이너)
+   왜 별도 컨테이너: 모드 B/D는 본문이 두 줄(텍스트 + 진행률/세부정보)이라
+   flex-direction: column으로 묶어야 자연스러움. */
+.pattern-manage__ai-banner-content {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;  /* 긴 에러 메시지가 부모 flex를 깨지 않도록 */
+}
+
+/* 본문 보조 텍스트 (모드 D의 마지막 오류 / 안내 문구) */
+.pattern-manage__ai-banner-subtext {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+/* 진행률 바 트랙 — 옅은 배경 위에 채움 영역이 width로 확장 */
+.pattern-manage__ai-banner-progress {
+  width: 100%;
+  height: 6px;
+  background-color: var(--color-border-dashed);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+/* 진행률 바 채움 — width는 인라인 스타일로 설정, transition으로 부드럽게 */
+.pattern-manage__ai-banner-progress-fill {
+  height: 100%;
+  background-color: var(--color-status-ok);
+  transition: width var(--transition-normal);
+}
+
+/* 보조 버튼 ([중지] / [확인]) — 강조색 대신 중립적 배경 */
+.pattern-manage__ai-banner-button--secondary {
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-dark);
+  border: 1px solid var(--color-border-dashed);
+}
+.pattern-manage__ai-banner-button--secondary:hover {
+  background-color: var(--color-bg-content);
+  border-color: var(--color-text-muted);
+}
+
+/* ============================================================================
+   AutoConvertConsentModal (Phase 3 단계 1에서 마크업만 작성, CSS는 여기서)
+   ============================================================================
+   왜 별도 BEM: AiConvertModal과 모양은 비슷하지만 역할이 다름 (1회 동의용)
+   하드코딩 색상 0건 — 모든 색상은 CSS 변수 참조 */
+
+/* 백드롭 — AiConvertModal과 동일한 어두운 오버레이 */
+.autoconvert-consent-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+
+/* 카드 — 동의 모달은 본문이 짧으므로 max-width 작게 */
+.autoconvert-consent-modal__card {
+  background-color: var(--color-bg-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  width: 100%;
+  max-width: 520px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 헤더 — 아이콘 + 제목 한 줄 */
+.autoconvert-consent-modal__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid var(--color-bg-content);
+}
+
+.autoconvert-consent-modal__icon {
+  font-size: 28px;
+  color: var(--color-accent);
+  flex: 0 0 auto;
+}
+
+.autoconvert-consent-modal__title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-text-dark);
+  margin: 0;
+}
+
+/* 본문 — 설명 + 불릿 리스트 */
+.autoconvert-consent-modal__body {
+  padding: 16px 24px;
+  overflow-y: auto;
+}
+
+.autoconvert-consent-modal__description {
+  font-size: var(--font-size-base);
+  color: var(--color-text-dark);
+  line-height: 1.5;
+  margin: 0 0 12px;
+}
+
+.autoconvert-consent-modal__description code {
+  font-family: "Consolas", "Monaco", monospace;
+  background-color: var(--color-bg-content);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--color-text-dark);
+  font-size: var(--font-size-sm);
+}
+
+/* 불릿 리스트 — 기본 disc 마커 제거하고 아이콘으로 대체 */
+.autoconvert-consent-modal__bullet-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.autoconvert-consent-modal__bullet {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+  line-height: 1.5;
+}
+
+.autoconvert-consent-modal__bullet code {
+  font-family: "Consolas", "Monaco", monospace;
+  background-color: var(--color-bg-content);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--color-text-dark);
+}
+
+.autoconvert-consent-modal__bullet-icon {
+  font-size: 18px;
+  color: var(--color-status-ok);
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+/* 푸터 — 버튼 2개 우측 정렬 */
+.autoconvert-consent-modal__footer {
+  padding: 12px 24px 20px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+  border-top: 1px solid var(--color-bg-content);
+}
+
+/* 푸터 버튼 베이스 — 아이콘 + 텍스트 */
+.autoconvert-consent-modal__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.autoconvert-consent-modal__btn .material-symbols-outlined {
+  font-size: 18px;
+}
+
+/* 취소 버튼 — 중립 컬러 */
+.autoconvert-consent-modal__btn--cancel {
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-dashed);
+}
+.autoconvert-consent-modal__btn--cancel:hover {
+  background-color: var(--color-bg-content);
+  color: var(--color-text-dark);
+}
+
+/* 동의 버튼 — 강조 컬러 (긍정 액션) */
+.autoconvert-consent-modal__btn--primary {
+  background-color: var(--color-accent);
+  color: var(--color-bg-surface);
+  border: 1px solid var(--color-accent);
+}
+.autoconvert-consent-modal__btn--primary:hover {
+  background-color: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+}
+
+/* ============================================================================
+   Settings 페이지 - AI 자동 변환 섹션 보조 클래스
+   ============================================================================ */
+
+/* 안내 블록 — 그리드 정렬 깨지 않고 박스로 안내 표시 */
+.settings-row__hint-block {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+/* 안내 불릿 리스트 — Settings 토글 옆에 짧은 안내 문구 */
+.settings-hint-list {
+  list-style: disc;
+  padding-left: 18px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-hint-list li {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
