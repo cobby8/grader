@@ -34,3 +34,7 @@ python-engine/__pycache__/
 
 # Tauri 업데이터 서명 키 (절대 커밋 금지 — G드라이브에 원본 보관)
 keys/
+
+# Illustrator 스크립트 임시 파일 (그레이딩 실행 시마다 자동 생성)
+illustrator-scripts/config.json
+illustrator-scripts/result.json
