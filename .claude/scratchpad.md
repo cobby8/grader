@@ -8,9 +8,10 @@
 ---
 
 ## 현재 작업
-- **요청**: AI→SVG Phase 1-B Rust 커맨드 2개 추가 (`ai_convert_preview`/`ai_convert_batch`)
-- **상태**: 🔨 **developer 구현 중** (1-A 완료 ✅, 1-B 진행)
-- **현재 담당**: developer → (다음) 커밋 A (1-A + 1-B 묶음) → 1-D 또는 1-C
+- **요청**: AI→SVG Phase 1-F 구현 (PatternManage.tsx 통합 — 배너 + 모달 렌더)
+- **상태**: ✅ **developer 1-F 완료** (1-A~1-F 모두 완료, 커밋 B + tester/reviewer 대기)
+- **현재 담당**: PM → 커밋 B (1-C ~ 1-F 묶음) → tester/reviewer 병렬 → 1-G/1-H
+- **⚠️ 1-D 발견**: `ScanResult`는 평면 구조 → 1-F에서 `scanResult.unconvertedAiFiles` (data 경유 X)
 - **병행 대기**: 수정 요청 3건 테스트 (TEST-GUIDE-2026-04-25.md, 사용자 담당)
 
 ---
@@ -168,6 +169,201 @@
 
 **다음 단계**: 커밋 A (Phase 1-A + 1-B 묶음). 그 이후 Phase 1-C(aiConvertService.ts) 또는 1-D(driveSync.ts) 진행.
 
+### developer [2026-04-25] Phase 1-C: aiConvertService.ts (AI→SVG TS 게이트웨이)
+
+📝 **구현한 기능**: Phase 1-A/1-B의 invoke 커맨드를 React에서 사용 가능한 비동기 함수로 노출
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| `src/services/aiConvertService.ts` | 239줄 신규 — 타입 6개 + invoke 래퍼 함수 2개 | 신규 |
+
+**구조**:
+- Type/Interface 6개: `AiKind`, `AiPreviewEntry`, `AiPreviewResult`, `AiBatchStatus`, `AiBatchResultEntry`, `AiBatchResult`
+- async 함수 2개: `previewAiConversion(files)`, `convertAiBatch(files, overwrite)`
+
+**구현 요점**:
+- `svgStandardizeService.ts` 패턴 완전 미러 — discriminated union 안 씀, Python `{success, data, error}` 그대로 노출
+- `invoke<string>` → `JSON.parse(raw)` → 타입 캐스팅 (svg standardize와 동일)
+- console 로그 프리픽스 `[ai-convert]` (디버깅 식별 용이)
+- 에러 처리: invoke/JSON.parse 실패 시 throw (사용자 명시 액션이라 조용한 실패 안 함)
+- `files: string[]`을 `";"`로 join하여 Rust로 전달 (Python CLI 관례 일관성)
+- `skipped_unknown` 필드 추가(optional `?: number`) — Phase 1-A `ai_converter.py` L408~410 실제 반환 필드 반영
+- batch 성공 로그에 5개 카운트(`total`/`converted`/`skipped_ps`/`skipped_existing`/`skipped_unknown`/`failed`) 한 줄 출력
+
+**검증 (모두 PASS)**:
+- `npx tsc --noEmit`: ✅ EXIT_CODE=0, 에러 0건
+- import 확인: ✅ `@tauri-apps/api/core`만 import (1줄)
+- export 확인: ✅ type 2개 + interface 4개 + function 2개 = 8개
+- 무변경 확인: ✅ `git status`상 `src/services/aiConvertService.ts`만 untracked, 다른 src/src-tauri/python-engine 파일 0건 수정
+
+💡 **tester 참고**:
+- 단독 테스트는 어려움 — 호출 컴포넌트(AiConvertModal)가 Phase 1-E에서 추가됨
+- `tsc --noEmit` 통과로 컴파일 타임 시그니처 정합성은 확보됨
+- 호출 예시:
+  ```ts
+  import { previewAiConversion, convertAiBatch } from '../services/aiConvertService';
+  const preview = await previewAiConversion(['/abs/XL.ai', '/abs/2XL.ai']);
+  const result = await convertAiBatch(['/abs/XL.ai'], false);
+  ```
+
+⚠️ **reviewer 참고**:
+- 신규 발명 0 — `svgStandardizeService.ts` 패턴 완전 미러
+- 단순한 invoke 래퍼라 별도 검토 포인트 적음
+- 다만 `skipped_unknown`이 optional(`?: number`)인 이유: PLAN 의사코드엔 없지만 Phase 1-A 구현엔 있음 — 추후 Python 측 누락 시에도 TS 타입은 안전
+
+**다음 단계**: Phase 1-D(driveSync.ts 확장 — `unconvertedAiFiles: string[]` 필드 추가) 또는 1-E(AiConvertModal.tsx).
+
+### developer [2026-04-25] Phase 1-E: AiConvertModal.tsx + App.css (AI→SVG)
+
+📝 **구현한 기능**: 6상태 Phase 머신 모달 + 분류 요약 + 진행바 + 결과 아코디언
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| `src/components/AiConvertModal.tsx` | 680줄 신규 — 6상태 머신, idle/previewing/preview-done/converting/done/error | 신규 |
+| `src/App.css` | +427줄 — `.ai-convert-modal__*` BEM 클래스 + `.pattern-manage__ai-banner` | 수정 (append) |
+
+**구현 요점**:
+- SvgStandardizeModal(560줄) 패턴 완전 미러 — 6상태 discriminated union Phase 머신
+- ESC + 백드롭 클릭 차단 (converting 단계만, previewing은 차단 안 함 — 빠르게 끝남)
+- 옵션 "기존 SVG 덮어쓰기" 기본 꺼짐 (안전 우선)
+- preview-done의 [실행] 버튼에 실제 변환 예정 개수 표시 — `pdf_compatible 분류 중 (overwrite || !existing_svg)` 카운트
+- 결과 단계의 PostScript skip 항목에 "Phase 2 지원 예정" 뱃지 자동 추가
+- 충돌 행 시각화: PostScript는 회색, unknown은 회색+이탤릭, 충돌은 노란 배경
+- 진행바는 indeterminate 슬라이딩 애니메이션 (Python progress 콜백 미제공 대응)
+- 결과 요약 카드 4개: 변환/PostScript/기존SVG/실패 (auto-fit grid로 반응형)
+- 모든 색상은 `var(--color-*)` 변수 또는 alpha rgba (svg-standardize와 동일 패턴), 하드코딩 hex 0건, Tailwind 0건
+- `pattern-manage__ai-banner` 클래스 4종 (banner/icon/text/button) + hover/disabled 함께 추가 (Phase 1-F가 사용)
+
+**검증 (모두 PASS)**:
+- `npx tsc --noEmit`: ✅ EXIT_CODE=0, 에러 0건
+- 하드코딩 hex 색상 grep (신규 CSS 영역 L2543~2969): ✅ 0건
+- Tailwind 클래스 grep (.flex/.grid/.p-N/.m-N/bg-/text-/hover:): ✅ 0건
+- import 검증: ✅ React (`useCallback, useEffect, useMemo, useState`) + aiConvertService만 (외부 아이콘 라이브러리 0)
+- BEM 매칭: ✅ tsx에서 87건 사용, CSS에서 57건 정의 (모두 정의됨)
+- pattern-manage__ai-banner 정의: ✅ 6건 (banner/icon/text/button + hover/disabled)
+- git status: ✅ AiConvertModal.tsx (`??`) + App.css (`M`) + scratchpad (`M`) 만 변경
+
+**무변경 확인**: 기존 src 파일 0건 수정 (svg-standardize 모달, UpdateModal 등 불변)
+
+💡 **tester 참고**:
+- 단독 통합 테스트 어려움 — Phase 1-F(PatternManage 통합)까지 완료된 후 e2e 테스트 가능
+- `tsc --noEmit` 통과로 컴파일 타임 시그니처 정합성 확보됨
+- 호출 패턴 (Phase 1-F에서 사용):
+  ```tsx
+  {aiConvertTargets && (
+    <AiConvertModal
+      files={aiConvertTargets}
+      onClose={() => setAiConvertTargets(null)}
+      onComplete={() => {
+        setAiConvertTargets(null);
+        lastAutoScanRef.current = 0;
+        runAutoSync();
+      }}
+    />
+  )}
+  ```
+
+⚠️ **reviewer 참고**:
+- 신규 발명 0 — SvgStandardizeModal 6-Phase 패턴 + BEM/CSS 변수 컨벤션 완전 미러
+- discriminated union으로 각 phase에서 필요한 데이터 타입 안전 강제 (preview-done에는 AiPreviewResult 필수, done에는 AiBatchResult 필수)
+- alpha rgba() 사용은 기존 컨벤션 (svg-standardize-modal L2367/L2416 동일 패턴)
+- handleDoneClose 분기: 변환된 파일 1개 이상이면 onComplete(재스캔), 아니면 onClose만 (불필요한 재스캔 방지)
+- 진행바 indeterminate 슬라이딩은 Python 측 progress 콜백 미제공 대응책 (PLAN 6-5 명시)
+- "변환 가능 개수" 계산 공식: `pdf_compatible && (overwrite || !existing_svg)` — overwrite 토글 시 useMemo가 즉시 재계산
+
+**다음 단계** (Phase 1-F):
+- PatternManage.tsx에서 `useState<string[] | null>(null)` (`aiConvertTargets`) + `useState<string[]>([])` (`unconvertedAi`)
+- 배너 렌더: `unconvertedAi.length > 0` 조건
+- 모달 조건부 렌더: `aiConvertTargets && <AiConvertModal files={aiConvertTargets} ... />`
+- onComplete 콜백: `setAiConvertTargets(null)` + `lastAutoScanRef.current=0` + `runAutoSync()`
+- ⚠️ Phase 1-D 발견: `scanResult.unconvertedAiFiles` (data 경유 X, 평면 구조)
+
+### developer [2026-04-25] Phase 1-D: driveSync.ts unconvertedAiFiles 수집 (AI→SVG)
+
+📝 **구현한 기능**: G드라이브 스캔 시 SVG 짝 없는 .ai 파일을 절대 경로 배열로 수집 + ScanResult 타입 확장
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| `src/services/driveSync.ts` | +56줄 / -3줄 — ScanResult 타입 확장 + listChildren에 aiFiles 수집 + scanDriveRoot 폴더 단위 SVG/AI 짝 비교 + 반환 필드 추가 | 수정 |
+
+**구현 요점**:
+- `ScanResult.unconvertedAiFiles: string[]` 필드 추가 (PLAN 의사코드의 `data.unconvertedAiFiles`는 실제 평면 ScanResult 구조에 맞춰 최상위로 배치)
+- `listChildren` 반환에 `aiFiles: {name, absPath}[]` 추가 — `.ai` 파일을 svgFiles와 분리 수집 (presets에는 절대 추가 안 됨, 기존 동작 보존)
+- `scanDriveRoot` BFS 순회 중 폴더별로 SVG basename Set 만들고 AI basename과 비교 → 짝 없는 AI만 push
+- basename 비교는 **소문자**로 정규화 (예 "XL.ai" + "xl.svg"도 짝으로 인식)
+- ".svg"/.ai" 길이 4/3 슬라이스로 단순 추출 (정규식 회피, 분기 단순화)
+- 같은 폴더 내부에서만 매칭 (전체 트리 cross-folder 매칭 안 함)
+- 에러 경로(`success: false`) 2곳에도 `unconvertedAiFiles: []` 빈 배열 반환 → 호출자 분기 단순화
+- `mergeDriveScanResult` **무변경** (PatternManage가 ScanResult에서 직접 꺼내 씀)
+
+**검증 (모두 PASS)**:
+- `npx tsc --noEmit`: ✅ EXIT_CODE=0, 에러 0
+- `unconvertedAiFiles` 참조 grep: ✅ 7건 (interface 1 + 변수 1 + 에러경로 2 + push 1 + 정상 return 1 + 주석 1)
+- 기존 export 보존: ✅ 11건 (SIZE_REGEX, ScanCategory, ScanPreset, ScanResult, parseFilename, writeMetaJson, readOrCreateMetaJson, loadSvgFromPath, scanDriveRoot, MergeResult, mergeDriveScanResult) 모두 시그니처 무변경
+- `.ai` 처리 로직 grep: ✅ L361 분기로 aiFiles에만 수집 (svgFiles 무영향)
+- `git status`: ✅ `src/services/driveSync.ts`만 추가 수정 (다른 작업 미푸시 파일은 이전 상태 그대로)
+
+**무변경 확인**: scanDriveRoot/mergeDriveScanResult 외부 호출 측 영향 없음 — 새 필드는 기존 호출자가 무시해도 컴파일 가능 (TypeScript 구조적 타이핑). 기존 `.ai` 조용히 스킵 동작은 svgFiles/presets 흐름에서 그대로 유지 (paths에 .ai가 들어가지 않음).
+
+💡 **호출 측 안내** (Phase 1-F PatternManage):
+- `runAutoSync` 내 `scanDriveRoot` 결과 처리 시 `setUnconvertedAi(scanResult.unconvertedAiFiles)` 한 줄 추가
+- 배열 빔이면 배너 숨김, 비어있지 않으면 표시
+- ⚠️ PLAN 6-6에는 `scanResult.data.unconvertedAiFiles`로 명세되어 있으나 실제 ScanResult는 평면 구조라 `scanResult.unconvertedAiFiles`로 접근
+
+⚠️ **reviewer 참고**:
+- PLAN과 실제 ScanResult 구조 차이로 인한 명세 변경 (data 중첩 X, 평면 필드로 추가) — 기존 코드 보존 우선
+- basename 비교는 단순 슬라이스 (svg 4글자 / ai 3글자) — `.SVG`/`.AI` 대소문자는 `.toLowerCase()` 끝에서 처리되지만 슬라이스 인덱스는 같음
+- AI 수집 로직(L508~528)은 **SVG 처리 후 + 하위 폴더 큐 추가 전** 위치 — 같은 BFS 순회 안에서 동일 children을 재사용해 추가 I/O 0
+
+**다음 단계**: 커밋 B 묶음(Phase 1-C ~ 1-F)으로 PM 처리 예정. 그 이전에 1-E(AiConvertModal.tsx) + 1-F(PatternManage.tsx 배너) 구현.
+
+### developer [2026-04-25] Phase 1-F: PatternManage.tsx AiConvertModal 통합 (AI→SVG)
+
+📝 **구현한 기능**: AI 미변환 배너 + AiConvertModal 렌더 + onComplete 시 쿨다운 우회 후 재스캔
+
+| 파일 경로 | 변경 내용 | 신규/수정 |
+|----------|----------|----------|
+| `src/pages/PatternManage.tsx` | +60줄 — import 1줄 + state 2개 + runAutoSync 4줄(주석 포함) + 배너 16줄 + 모달 렌더 18줄 | 수정 |
+
+**구현 요점**:
+- `import AiConvertModal from "../components/AiConvertModal";` (default export 형태 — 실제 컴포넌트 export 형식 확인 후 결정)
+- state 2개: `aiConvertTargets: string[] | null`, `unconvertedAi: string[]`
+  - 두 state 분리 이유: 배너는 unconvertedAi 기준 표시, 모달 열기 시 스냅샷을 aiConvertTargets로 캡처 → 진행 중 재스캔 일어나도 입력 흔들림 없음
+- `runAutoSync` 내 `scanResult.success` 분기 직후 `setUnconvertedAi(scanResult.unconvertedAiFiles ?? [])` 1줄 추가
+  - **⚠️ 평면 구조 사용** — `scanResult.data.unconvertedAiFiles` 아님 (Phase 1-D 발견사항)
+- 상단 배너: `loadError` 배너 다음, `pattern-layout` 위 — `unconvertedAi.length > 0` 조건 + "변환되지 않은 AI N개" + [자동 변환 →] 버튼
+  - 배너 클릭 시 `setAiConvertTargets(unconvertedAi)`로 모달 열림
+- 모달 렌더: 기존 `SvgStandardizeModal` 블록 바로 다음에 `aiConvertTargets && <AiConvertModal files={...} onClose={...} onComplete={...} />`
+- onComplete 콜백 3줄: `setAiConvertTargets(null)` + `lastAutoScanRef.current = 0` + `void runAutoSync()` (Promise 무시)
+- 기존 SvgStandardizeModal 통합 코드 무수정 (L48 import / L262 state / L455~ runAutoSync / L1372~ 모달 렌더 보존)
+
+**검증 (모두 PASS)**:
+- `npx tsc --noEmit`: ✅ EXIT_CODE=0, 에러 0건
+- AiConvertModal 참조 grep: ✅ 2건 (import L51, 렌더 L1395)
+- aiConvertTargets/unconvertedAi state 참조 grep: ✅ 13건 (state 정의 + setter + 배너 사용 + 모달 props + 주석)
+- `scanResult.unconvertedAiFiles` (평면 구조) 사용: ✅ 1건 (L478)
+- `scanResult.data.unconvertedAiFiles` 사용 0건 (잘못된 형태 미사용): ✅
+- 기존 SvgStandardizeModal 통합 보존: ✅ 10건 (import + state 2 + 주석 + 모달 렌더 6) — 변동 없음
+- 다른 파일 무수정: ✅ git status 상 PatternManage.tsx만 새로 변경 (App.css/driveSync.ts/AiConvertModal.tsx/aiConvertService.ts는 1-C~1-E 기존 결과물)
+
+**무변경 확인**: PatternManage.tsx 외 추가 수정 0건. 다른 컴포넌트/서비스 영향 없음.
+
+💡 **다음 단계 (Phase 1-G)**:
+- tester + reviewer 병렬 실행 권장
+- 통합 흐름 end-to-end (사용자 G드라이브 테스트):
+  1. 빈 폴더 또는 SVG만 있는 폴더 스캔 → unconvertedAi 0건 → 배너 안 보임
+  2. AI 1개만 있는 폴더 추가 후 스캔 (60초 쿨다운 또는 페이지 재진입) → 배너 표시
+  3. [자동 변환 →] 클릭 → AiConvertModal 열림 (idle phase)
+  4. [헤더 분석] → preview 결과(분류 요약 카드 3개) 표시
+  5. [실행] → 진행바 → 결과 화면 → [닫기]
+  6. 자동으로 onComplete 발화 → lastAutoScanRef=0 + runAutoSync → 재스캔 → unconvertedAi 갱신 → 배너 사라짐 또는 개수 감소
+
+⚠️ **reviewer 참고**:
+- 평면 구조 (`scanResult.unconvertedAiFiles`) 일관성 — driveSync.ts ScanResult 인터페이스 확장과 짝
+- 배너 위치는 페이지 헤더(타이틀/설명) → loadError 배너 → AI 미변환 배너 → pattern-layout 순. 사용자가 카드 그리드 보기 전에 인지 가능
+- `void runAutoSync()` — onComplete가 동기 콜백인데 runAutoSync가 Promise를 반환하므로 명시적 void로 fire-and-forget (lint 경고 차단)
+- 두 state 분리 설계가 "모달 진행 중 재스캔 → 입력 흔들림" 문제를 사전에 방지함 (AiConvertModal은 props.files가 바뀌어도 자체 phase 머신을 보호하지만, 분리해 두는 편이 안전)
+
 
 ## 테스트 결과 (tester)
 (해당 없음 — 수정 요청 3건은 사용자 실테스트 담당)
@@ -201,6 +397,10 @@
 | 2026-04-25 | planner-architect | AI→SVG 자동 변환 Phase 1 MVP 설계 (PLAN-AI-TO-SVG.md 1017줄) | ✅ 12섹션+부록 3개, knowledge 7건 갱신 |
 | 2026-04-25 | pm | scratchpad 정리 (273줄 → ~135줄) | ✅ 디버거 조사 상세 → errors.md 참조로 단순화 |
 | 2026-04-25 | developer | AI→SVG Phase 1-B: lib.rs Rust 커맨드 2개 추가 | ✅ ai_convert_preview/ai_convert_batch + invoke_handler, cargo check 통과 |
+| 2026-04-25 | developer | AI→SVG Phase 1-C: aiConvertService.ts 신규 (TS 게이트웨이) | ✅ 239줄, 타입 6개+함수 2개, tsc --noEmit 통과 |
+| 2026-04-25 | developer | AI→SVG Phase 1-D: driveSync.ts unconvertedAiFiles 수집 | ✅ +56/-3, ScanResult 확장 + 폴더 단위 SVG/AI 짝 비교, tsc 통과 |
+| 2026-04-25 | developer | AI→SVG Phase 1-E: AiConvertModal.tsx 신규 + App.css append | ✅ 680줄 신규 + 427줄 append, 6상태 머신, tsc 통과, hex/Tailwind 0건 |
+| 2026-04-25 | developer | AI→SVG Phase 1-F: PatternManage.tsx AiConvertModal 통합 | ✅ +60줄, import/state2/runAutoSync1줄/배너/모달, 평면구조 사용, tsc 통과, 다른 파일 무수정 |
 
 ---
 

@@ -116,6 +116,21 @@ export interface ScanResult {
   success: boolean;
   /** 실패 시 에러 메시지 */
   error?: string;
+  /**
+   * 변환되지 않은 AI 파일 절대 경로 배열.
+   *
+   * 같은 폴더에 동일 basename SVG 짝이 없는 .ai 파일만 수집.
+   * 예: "/G/.../XL.ai" 있는데 "/G/.../XL.svg" 없으면 → 배열에 포함.
+   *     "/G/.../XL.ai" + "/G/.../XL.svg" 둘 다 있으면 → 제외 (이미 변환됨).
+   *
+   * Phase 1-F PatternManage 상단 배너에서 length > 0 시 표시.
+   * 배열 빔(0개)이면 정상 (모든 AI가 SVG 짝을 가짐).
+   *
+   * 에러 경로(success=false)에서는 빈 배열로 반환.
+   *
+   * Phase 1-D (2026-04-25) 추가.
+   */
+  unconvertedAiFiles: string[];
 }
 
 // ============================================================================
@@ -311,15 +326,26 @@ export async function loadSvgFromPath(absPath: string): Promise<string> {
 // ============================================================================
 
 /**
- * 한 폴더의 자식 목록을 조사해 (하위 폴더들, SVG 파일들, 기타)로 분류한다.
+ * 한 폴더의 자식 목록을 조사해 (하위 폴더들, SVG 파일들, AI 파일들)로 분류한다.
+ *
+ * AI 파일 수집 (Phase 1-D, 2026-04-25 추가):
+ *   - `.ai` 파일은 SVG 변환이 필요한 원본이라 svgFiles에는 들어가지 않는다 (기존 동작 유지).
+ *   - 별도 필드 aiFiles로 따로 수집해 호출자가 "SVG 짝 없는 AI"를 골라낼 수 있게 한다.
+ *   - 기존 `.ai` 조용히 스킵 동작 자체는 그대로 (presets에 들어가지 않음).
  */
 async function listChildren(folderAbs: string): Promise<{
   subfolders: { name: string; absPath: string }[];
   svgFiles: { name: string; absPath: string }[];
+  aiFiles: { name: string; absPath: string }[];
 }> {
   const entries = await readDir(folderAbs);
   const subfolders: { name: string; absPath: string }[] = [];
   const svgFiles: { name: string; absPath: string }[] = [];
+  // 왜 aiFiles를 별도로 모으나:
+  //   기존 svgFiles 수집 로직은 그대로 유지하면서, AI 변환 필요 여부 판정에 쓸
+  //   메타데이터만 추가로 제공하기 위함이다. 호출자(scanDriveRoot)에서 폴더 단위로
+  //   SVG basename과 비교해 짝 없는 AI만 수집한다. presets에는 절대 추가되지 않는다.
+  const aiFiles: { name: string; absPath: string }[] = [];
 
   for (const entry of entries) {
     const name = entry.name;
@@ -332,10 +358,14 @@ async function listChildren(folderAbs: string): Promise<{
       subfolders.push({ name, absPath });
     } else if (entry.isFile && name.toLowerCase().endsWith(".svg")) {
       svgFiles.push({ name, absPath });
+    } else if (entry.isFile && name.toLowerCase().endsWith(".ai")) {
+      // .ai 파일은 SVG 패턴 인식 대상이 아니라 변환 후보로만 기록
+      // (기존 동작과 동일하게 svgFiles에는 추가하지 않음 — presets 결과 무변경 보장)
+      aiFiles.push({ name, absPath });
     }
-    // 그 외(.ai, .pdf 등)는 스캔 대상 아님 — 조용히 스킵
+    // 그 외(.pdf 등)는 스캔 대상 아님 — 조용히 스킵
   }
-  return { subfolders, svgFiles };
+  return { subfolders, svgFiles, aiFiles };
 }
 
 /**
@@ -348,6 +378,9 @@ export async function scanDriveRoot(rootAbs: string): Promise<ScanResult> {
   const warnings: string[] = [];
   const categories: ScanCategory[] = [];
   const presets: ScanPreset[] = [];
+  // 변환되지 않은 AI 파일(같은 폴더에 SVG 짝 없음)의 절대 경로를 모은다.
+  // Phase 1-D (2026-04-25): PatternManage 상단 배너에서 length > 0 시 표시.
+  const unconvertedAiFiles: string[] = [];
 
   // 루트 존재 확인
   try {
@@ -359,6 +392,8 @@ export async function scanDriveRoot(rootAbs: string): Promise<ScanResult> {
         warnings: [],
         success: false,
         error: `루트 폴더를 찾을 수 없습니다: ${rootAbs}`,
+        // 에러 경로에서도 unconvertedAiFiles 필드는 빈 배열로 반환 (호출자 분기 단순화)
+        unconvertedAiFiles: [],
       };
     }
   } catch (err) {
@@ -368,6 +403,7 @@ export async function scanDriveRoot(rootAbs: string): Promise<ScanResult> {
       warnings: [],
       success: false,
       error: `루트 폴더 접근 실패 (권한/드라이브 문제일 수 있음): ${String(err)}`,
+      unconvertedAiFiles: [],
     };
   }
 
@@ -469,6 +505,29 @@ export async function scanDriveRoot(rootAbs: string): Promise<ScanResult> {
       }
     }
 
+    // === 폴더 단위 SVG/AI 짝 비교 (Phase 1-D, 2026-04-25) ===
+    // 왜 폴더 단위인가:
+    //   "변환되지 않은 AI"의 정의는 "같은 폴더에 동일 basename SVG가 없는 .ai 파일".
+    //   전체 트리 cross-folder 매칭이 아니라 "각 폴더 내부에서만" 비교한다.
+    //   예) `/A/XL.ai`와 `/B/XL.svg`가 있어도 다른 폴더이므로 짝 없음으로 판정.
+    // 왜 basename을 소문자로 정규화: 대소문자 차이를 무시 (예 "XL.ai" + "xl.svg"도 짝).
+    if (children.aiFiles.length > 0) {
+      // 같은 폴더 SVG들의 basename(확장자 제외)을 소문자로 모은 Set
+      const svgBaseNames = new Set<string>();
+      for (const svg of children.svgFiles) {
+        // ".svg" 길이 4를 제거해 basename 추출 — 정규식 회피로 단순화
+        const base = svg.name.slice(0, -4).toLowerCase();
+        svgBaseNames.add(base);
+      }
+      // 짝 없는 AI만 절대 경로로 push (presets에는 추가하지 않음, 기존 동작 보존)
+      for (const ai of children.aiFiles) {
+        const base = ai.name.slice(0, -3).toLowerCase(); // ".ai" 길이 3 제거
+        if (!svgBaseNames.has(base)) {
+          unconvertedAiFiles.push(ai.absPath);
+        }
+      }
+    }
+
     // 하위 폴더를 큐에 추가
     for (const sub of children.subfolders) {
       queue.push({
@@ -494,6 +553,8 @@ export async function scanDriveRoot(rootAbs: string): Promise<ScanResult> {
     presets,
     warnings,
     success: true,
+    // Phase 1-D: 변환되지 않은 AI 파일 절대 경로 배열 (PatternManage 배너용)
+    unconvertedAiFiles,
   };
 }
 

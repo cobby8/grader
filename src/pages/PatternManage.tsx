@@ -46,6 +46,9 @@ import type { WorkSession } from "../types/session";
 // Phase 1-5: SVG 표준화 모달 — 카드 ⋮ 메뉴에서 열림
 // 왜 여기서 import: PatternManage가 이 모달을 조건부 렌더하므로 소유자가 맞다.
 import SvgStandardizeModal from "../components/SvgStandardizeModal";
+// Phase 1-F (AI→SVG): AI 변환 모달 — 상단 배너의 [자동 변환] 버튼에서 열림
+// 왜 여기서 import: PatternManage가 unconvertedAi 상태를 소유하고 모달을 조건부 렌더하므로 소유자가 맞다.
+import AiConvertModal from "../components/AiConvertModal";
 
 /** 편집 모드 상태 타입 */
 type EditMode = "list" | "create" | "edit";
@@ -259,6 +262,16 @@ function PatternManage() {
   const [standardizeTarget, setStandardizeTarget] =
     useState<PatternPreset | null>(null);
 
+  // === Phase 1-F: AI→SVG 자동 변환 (2026-04-25) ===
+  // 왜 두 state로 분리했나:
+  //   - aiConvertTargets: 모달이 처리할 AI 절대 경로 배열 (null이면 모달 닫힘 / 비-null이면 모달 렌더)
+  //   - unconvertedAi: scanDriveRoot 결과의 unconvertedAiFiles 캐시 (배너 표시 조건과 모달 입력 소스)
+  // 분리 이유: 배너는 항상 unconvertedAi 기준으로 표시하고,
+  // 모달 열기 시점에 그 스냅샷을 aiConvertTargets로 캡처해 두면
+  // 모달 진행 중 재스캔이 일어나도 입력값이 흔들리지 않는다.
+  const [aiConvertTargets, setAiConvertTargets] = useState<string[] | null>(null);
+  const [unconvertedAi, setUnconvertedAi] = useState<string[]>([]);
+
   // === Settings에서 Drive 동기화 활성 여부 + 루트 경로 로드 ===
   // 왜 별도 useEffect인가: Settings는 presets와 독립이라 병렬 로드 가능.
   useEffect(() => {
@@ -458,6 +471,11 @@ function PatternManage() {
         console.warn("[Drive 자동 동기화] 스캔 실패:", scanResult.error);
         return;
       }
+
+      // Phase 1-F: SVG 짝 없는 .ai 파일 목록 갱신 → 배너에 즉시 반영
+      // ⚠️ ScanResult는 평면 구조 (Phase 1-D 발견사항) — `scanResult.unconvertedAiFiles`로 직접 접근
+      // `?? []` 폴백은 1-D 이전 캐시된 ScanResult가 있을 가능성 대비 (실제로는 항상 array 반환).
+      setUnconvertedAi(scanResult.unconvertedAiFiles ?? []);
 
       // 병합: 기존 치수(sizes)는 절대 덮어쓰지 않고, svgPathBySize만 최신화
       const merged = mergeDriveScanResult(scanResult, presets, categories);
@@ -1096,6 +1114,26 @@ function PatternManage() {
           </div>
         )}
 
+        {/* Phase 1-F: AI 미변환 안내 배너 — Drive 스캔에서 SVG 짝 없는 .ai를 발견했을 때만 표시.
+            왜 여기에 배치: 페이지 헤더(타이틀/설명) 바로 아래, 카테고리 트리 위.
+            사용자가 패턴 카드 그리드를 보기 전에 "변환되지 않은 AI가 있다"는 사실을 먼저 인지할 수 있다.
+            CSS는 Phase 1-E에서 App.css에 이미 추가됨. */}
+        {unconvertedAi.length > 0 && (
+          <div className="pattern-manage__ai-banner" role="alert">
+            <span className="pattern-manage__ai-banner-icon">📋</span>
+            <span className="pattern-manage__ai-banner-text">
+              변환되지 않은 AI 파일 {unconvertedAi.length}개가 있습니다.
+            </span>
+            <button
+              type="button"
+              className="pattern-manage__ai-banner-button"
+              onClick={() => setAiConvertTargets(unconvertedAi)}
+            >
+              자동 변환 →
+            </button>
+          </div>
+        )}
+
         {/* 좌측 트리 + 우측 프리셋 목록 레이아웃 */}
         <div className="pattern-layout">
           {/* 좌측: 카테고리 트리 */}
@@ -1347,6 +1385,25 @@ function PatternManage() {
               // 근거: 사용자가 명시적으로 실행한 작업이므로 즉시 UI 반영이 기대됨.
               lastAutoScanRef.current = 0;
               runAutoSync();
+            }}
+          />
+        )}
+
+        {/* Phase 1-F: AI→SVG 변환 모달 — 상단 배너 [자동 변환] 버튼에서 열림.
+            aiConvertTargets가 null이면 렌더 안 함 (언마운트 = 6상태 머신 초기화). */}
+        {aiConvertTargets && (
+          <AiConvertModal
+            files={aiConvertTargets}
+            onClose={() => setAiConvertTargets(null)}
+            onComplete={() => {
+              // 변환 완료 시: 모달 닫고 Drive 재스캔 강제 트리거.
+              // - setAiConvertTargets(null): 모달 언마운트
+              // - lastAutoScanRef.current = 0: 60초 쿨다운 무시 (사용자 명시 액션)
+              // - void runAutoSync(): 재스캔 → unconvertedAi 자동 갱신 → 배너가 자연스럽게 사라짐
+              //   (Promise 반환 무시하므로 void 키워드, fire-and-forget)
+              setAiConvertTargets(null);
+              lastAutoScanRef.current = 0;
+              void runAutoSync();
             }}
           />
         )}

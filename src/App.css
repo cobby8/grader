@@ -2540,3 +2540,430 @@ html, body, #root {
   cursor: not-allowed;
 }
 
+/* ============================================================================
+   AI → SVG 변환 모달 (Phase 1-E, 2026-04-25)
+   - 용도: PatternManage 상단 배너에서 열리는 "AI → SVG 자동 변환" UI
+   - 디자인: SvgStandardizeModal과 같은 백드롭/카드/요약카드 패턴 (일관성 우선)
+   - BEM: .ai-convert-modal__*
+   - 모든 색상은 var(--color-*) 변수만 사용 (하드코딩 금지)
+   ============================================================================ */
+
+/* 백드롭 — svg-standardize와 동일 톤 (alpha 55% 검은 오버레이) */
+.ai-convert-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+
+/* 모달 카드 */
+.ai-convert-modal__card {
+  background-color: var(--color-bg-surface);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  width: 100%;
+  max-width: 720px;  /* svg-standardize(680)보다 약간 넓게 — 분류+뱃지 행이 길어짐 */
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 헤더 */
+.ai-convert-modal__header {
+  padding: 20px 24px 8px;
+  border-bottom: 1px solid var(--color-bg-content);
+}
+.ai-convert-modal__title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--color-text-dark);
+  margin-bottom: 4px;
+}
+.ai-convert-modal__subtitle {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* 상단 안내 배너 (노란 톤) */
+.ai-convert-modal__warning {
+  margin: 12px 24px 0;
+  padding: 10px 12px;
+  background-color: var(--color-accent-soft);
+  border-left: 3px solid var(--color-status-warning);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-dark);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+/* 본문 — 스크롤 가능 */
+.ai-convert-modal__body {
+  padding: 12px 24px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 140px;
+}
+
+/* 섹션 블록 (idle 폼/결과 컨테이너 공용) */
+.ai-convert-modal__section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ai-convert-modal__section-title {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-text-dark);
+  margin-top: 4px;
+}
+
+/* 입력 필드 (라벨+컨트롤 세로 배치) */
+.ai-convert-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ai-convert-modal__hint {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+.ai-convert-modal__hint--caution {
+  color: var(--color-status-warning);
+}
+.ai-convert-modal__checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* 로딩 (previewing / converting) */
+.ai-convert-modal__loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px 0;
+}
+.ai-convert-modal__spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--color-bg-content);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: ai-convert-spin 0.8s linear infinite;
+}
+@keyframes ai-convert-spin {
+  to { transform: rotate(360deg); }
+}
+.ai-convert-modal__loading-text {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+  font-weight: 600;
+}
+.ai-convert-modal__loading-hint {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+
+/* 진행바 (converting 단계, indeterminate 애니메이션) */
+.ai-convert-modal__progress {
+  width: 80%;
+  margin-top: 8px;
+}
+.ai-convert-modal__progress-bar {
+  width: 100%;
+  height: 6px;
+  background-color: var(--color-bg-content);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  position: relative;
+}
+.ai-convert-modal__progress-fill {
+  height: 100%;
+  background-color: var(--color-accent);
+  border-radius: var(--radius-sm);
+  transition: width var(--transition-normal);
+}
+/* indeterminate — Python progress 콜백 미제공이라 슬라이딩 애니메이션으로 대체 */
+.ai-convert-modal__progress-fill--indeterminate {
+  width: 35%;
+  animation: ai-convert-progress-slide 1.4s ease-in-out infinite;
+}
+@keyframes ai-convert-progress-slide {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(180%); }
+  100% { transform: translateX(-100%); }
+}
+.ai-convert-modal__progress-text {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  text-align: center;
+  margin-top: 4px;
+}
+
+/* 파일 목록 (idle / preview-done / done 공용) */
+.ai-convert-modal__file-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-dashed);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-content);
+}
+.ai-convert-modal__file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+  border-bottom: 1px solid var(--color-bg-surface);
+}
+.ai-convert-modal__file-row:last-child {
+  border-bottom: none;
+}
+/* PostScript 행 — 회색 톤 (Phase 2 대상이므로 시각적으로 약화) */
+.ai-convert-modal__file-row--postscript {
+  color: var(--color-text-muted);
+  background-color: var(--color-bg-surface);
+}
+/* 알 수 없음 행 — 회색 톤 + 점선 */
+.ai-convert-modal__file-row--unknown {
+  color: var(--color-text-muted);
+  background-color: var(--color-bg-surface);
+  font-style: italic;
+}
+/* 충돌 행 (overwrite 꺼졌을 때 기존 SVG 있는 행) — 노란 강조 */
+.ai-convert-modal__file-row--conflict {
+  background-color: var(--color-accent-soft);
+}
+/* 결과 단계의 SKIP 행 — 약화 */
+.ai-convert-modal__file-row--skip {
+  color: var(--color-text-muted);
+}
+/* 결과 단계의 FAIL 행 — 빨강 강조 */
+.ai-convert-modal__file-row--fail {
+  background-color: rgba(239, 68, 68, 0.08);
+  color: var(--color-status-error);
+}
+.ai-convert-modal__file-icon {
+  flex: 0 0 auto;
+  font-weight: 700;
+  width: 16px;
+  text-align: center;
+}
+.ai-convert-modal__file-name {
+  flex: 1 1 auto;
+  font-family: "Consolas", "Monaco", monospace;
+  word-break: break-all;
+}
+.ai-convert-modal__file-meta {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.ai-convert-modal__file-error {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--color-status-error);
+}
+
+/* 분류 요약 카드 컨테이너 — 가로 grid (3개 또는 4개) */
+.ai-convert-modal__summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.ai-convert-modal__summary-card {
+  background-color: var(--color-bg-content);
+  border-radius: var(--radius-sm);
+  padding: 12px 8px;
+  text-align: center;
+  border: 1px solid var(--color-border-dashed);
+}
+/* PDF 호환 카드 — 초록 강조 (변환 가능) */
+.ai-convert-modal__summary-card--pdf,
+.ai-convert-modal__summary-card--pass {
+  background-color: rgba(34, 197, 94, 0.08);
+  border-color: var(--color-status-ok);
+}
+/* PostScript 카드 — 노란 강조 (Phase 2 대상) */
+.ai-convert-modal__summary-card--ps {
+  background-color: rgba(245, 158, 11, 0.10);
+  border-color: var(--color-status-warning);
+}
+/* unknown 카드 — 회색 (분류 실패) */
+.ai-convert-modal__summary-card--unknown {
+  background-color: var(--color-bg-content);
+  border-color: var(--color-border-dashed);
+}
+/* fail 카드 — 빨강 강조 */
+.ai-convert-modal__summary-card--fail {
+  background-color: rgba(239, 68, 68, 0.08);
+  border-color: var(--color-status-error);
+}
+.ai-convert-modal__summary-card-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-text-dark);
+}
+.ai-convert-modal__summary-card-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+
+/* 결과 뱃지 (PASS/SKIP/FAIL/Phase2/덮어쓰기 등) */
+.ai-convert-modal__result-badge {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-dashed);
+}
+.ai-convert-modal__result-badge--pass {
+  background-color: rgba(34, 197, 94, 0.12);
+  color: var(--color-status-ok);
+  border-color: var(--color-status-ok);
+}
+.ai-convert-modal__result-badge--skip {
+  background-color: var(--color-bg-content);
+  color: var(--color-text-muted);
+  border-color: var(--color-border-dashed);
+}
+.ai-convert-modal__result-badge--fail {
+  background-color: rgba(239, 68, 68, 0.12);
+  color: var(--color-status-error);
+  border-color: var(--color-status-error);
+}
+/* Phase 2 지원 예정 뱃지 — 노란 톤 */
+.ai-convert-modal__result-badge--phase2 {
+  background-color: rgba(245, 158, 11, 0.12);
+  color: var(--color-status-warning);
+  border-color: var(--color-status-warning);
+  text-transform: none;
+  letter-spacing: 0;
+}
+/* 덮어쓰기 예정 뱃지 — 노란 톤 (충돌 행에 표시) */
+.ai-convert-modal__result-badge--overwrite {
+  background-color: rgba(245, 158, 11, 0.12);
+  color: var(--color-status-warning);
+  border-color: var(--color-status-warning);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* 변환기 버전 표기 (디버깅용 작은 글씨) */
+.ai-convert-modal__version-note {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin-top: 8px;
+  text-align: right;
+}
+
+/* 에러 박스 */
+.ai-convert-modal__error-box {
+  padding: 12px 14px;
+  background-color: rgba(239, 68, 68, 0.08);
+  border-left: 3px solid var(--color-status-error);
+  border-radius: var(--radius-sm);
+}
+.ai-convert-modal__error-title {
+  font-weight: 600;
+  color: var(--color-status-error);
+  margin-bottom: 4px;
+}
+.ai-convert-modal__error-message {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+  word-break: break-word;
+  margin-bottom: 8px;
+}
+.ai-convert-modal__error-hint {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+.ai-convert-modal__error-hint code {
+  font-family: "Consolas", "Monaco", monospace;
+  background-color: var(--color-bg-content);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+/* 푸터 */
+.ai-convert-modal__footer {
+  padding: 12px 24px 20px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+  border-top: 1px solid var(--color-bg-content);
+  flex-wrap: wrap;
+}
+
+/* ============================================================================
+   PatternManage 상단 AI 변환 배너 (Phase 1-F가 사용)
+   - 위치: PatternManage 페이지 헤더 아래, 카드 그리드 위
+   - 트리거: scanResult.unconvertedAiFiles.length > 0
+   ============================================================================ */
+.pattern-manage__ai-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 16px;
+  padding: 10px 16px;
+  background-color: var(--color-accent-soft);
+  border-left: 4px solid var(--color-status-warning);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-dark);
+}
+.pattern-manage__ai-banner-icon {
+  flex: 0 0 auto;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+.pattern-manage__ai-banner-text {
+  flex: 1 1 auto;
+  font-weight: 500;
+}
+.pattern-manage__ai-banner-button {
+  flex: 0 0 auto;
+  padding: 6px 14px;
+  background-color: var(--color-accent);
+  color: var(--color-bg-surface);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+.pattern-manage__ai-banner-button:hover {
+  background-color: var(--color-accent-hover);
+}
+.pattern-manage__ai-banner-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
