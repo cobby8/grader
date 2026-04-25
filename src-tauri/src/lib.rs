@@ -447,6 +447,50 @@ fn svg_normalize_batch(
     run_python(app, "normalize_batch".to_string(), args)
 }
 
+/// [AI→SVG] AI 파일 목록을 헤더 검사로 분류 (파일 미수정 시뮬레이션)
+/// 왜 별도 커맨드로 빼는가:
+///   - SVG 표준화의 `svg_preview_normalize`와 동일 이유 — **명시적 네이밍**으로 컴파일 타임에 인자 검증.
+///   - 내부적으로는 기존 `run_python`을 호출하는 **얇은 래퍼**. Python subprocess 로직을 중복시키지 않음.
+///
+/// 인자:
+///   - files: 폴더 경로 OR ';' 구분 AI 파일 목록 (Python 측 `_expand_ai_files`가 자동 분기)
+///
+/// 반환: Python이 stdout에 출력한 JSON 문자열 그대로 (프론트에서 JSON.parse)
+///       { success, data: { entries: [...], summary: {...} }, error? }
+#[tauri::command]
+fn ai_convert_preview(
+    app: tauri::AppHandle,
+    files: String,
+) -> Result<String, String> {
+    // run_python 재사용 — command="ai_convert_preview", args=[files]
+    run_python(app, "ai_convert_preview".to_string(), vec![files])
+}
+
+/// [AI→SVG] AI 파일 일괄 변환 (PyMuPDF 기반, 기존 SVG는 기본 skip)
+/// 왜 별도 커맨드로 빼는가: `ai_convert_preview`와 동일한 이유 (타입 안전성).
+/// 추가 이유: `--overwrite` 플래그를 bool로 받아서 Rust 측에서 args 구성 실수를 차단.
+///
+/// 인자:
+///   - files: 폴더 경로 OR ';' 구분 AI 파일 목록
+///   - overwrite: true면 기존 SVG 덮어쓰기 (.bak 자동 백업), false면 skip
+///
+/// 반환: Python이 stdout에 출력한 JSON 문자열 그대로
+///       { success, data: { total, converted, skipped_postscript, skipped_existing, failed, results: [...], version }, error? }
+#[tauri::command]
+fn ai_convert_batch(
+    app: tauri::AppHandle,
+    files: String,
+    overwrite: bool,
+) -> Result<String, String> {
+    // args 구성: 기본은 [files], overwrite=true일 때만 "--overwrite" 추가
+    let mut args: Vec<String> = vec![files];
+    if overwrite {
+        args.push("--overwrite".to_string());
+    }
+    // run_python 재사용 — command="ai_convert_batch"
+    run_python(app, "ai_convert_batch".to_string(), args)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -469,7 +513,10 @@ pub fn run() {
             remove_file_absolute,
             // SVG 표준화 Phase 1-4: Python preview_normalize/normalize_batch CLI 래퍼
             svg_preview_normalize,
-            svg_normalize_batch
+            svg_normalize_batch,
+            // AI→SVG Phase 1-B: Python ai_convert_preview/ai_convert_batch CLI 래퍼
+            ai_convert_preview,
+            ai_convert_batch
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

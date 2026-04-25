@@ -44,6 +44,13 @@ from svg_normalizer import (
     preview_normalization,
     normalize_batch,
 )
+# AI → SVG 자동 변환 모듈 (Phase 1-A 신규, PyMuPDF 단독)
+# - preview_ai_conversion: 헤더 검사로 변환 가능 여부 분류 (파일 미수정)
+# - convert_ai_batch: PDF 호환 AI를 SVG로 일괄 변환 (atomic write + .bak 백업)
+from ai_converter import (
+    preview_ai_conversion,
+    convert_ai_batch,
+)
 
 
 def print_json(data: dict) -> None:
@@ -54,6 +61,59 @@ def print_json(data: dict) -> None:
 def print_error(message: str) -> None:
     """에러를 JSON 형식으로 출력한다."""
     print_json({"success": False, "error": message})
+
+
+def _expand_ai_files(arg: str) -> list[str]:
+    """
+    AI 파일 인자를 절대 경로 리스트로 확장한다 (AI→SVG 변환 CLI 전용).
+
+    입력 형태:
+    - 폴더 경로 → 폴더 내 .ai/.AI 파일 수집(비재귀)
+    - ';' 구분자 포함 → split하여 각 파일 절대 경로화
+    - 단일 파일 경로 → [그 파일] 반환
+
+    존재하지 않는 파일은 조용히 제외 (한 줄 JSON 원칙).
+    .ai 확장자 대소문자 무시(.AI도 인식).
+
+    Args:
+        arg: CLI 1번째 인자 (폴더/세미콜론 구분 파일 목록/단일 파일)
+
+    Returns:
+        절대 경로 리스트 (존재하는 파일만)
+    """
+    import os as _os_ai
+    result: list[str] = []
+
+    # 1. 폴더 경로면 → 폴더 내 .ai 파일 수집 (비재귀)
+    if _os_ai.path.isdir(arg):
+        try:
+            for name in sorted(_os_ai.listdir(arg)):
+                # 확장자 대소문자 무시 (.ai / .AI 모두 인식)
+                if name.lower().endswith(".ai"):
+                    full = _os_ai.path.join(arg, name)
+                    if _os_ai.path.isfile(full):
+                        result.append(_os_ai.path.abspath(full))
+        except OSError:
+            # 폴더 읽기 실패는 빈 리스트 반환 (배치 안전)
+            return []
+        return result
+
+    # 2. ';' 구분자가 있으면 → split (Windows 경로 ',' 충돌 회피)
+    if ";" in arg:
+        for piece in arg.split(";"):
+            piece = piece.strip()
+            if not piece:
+                continue
+            # 존재 여부 체크 후 절대 경로화 (없는 파일 조용히 제외)
+            if _os_ai.path.isfile(piece):
+                result.append(_os_ai.path.abspath(piece))
+        return result
+
+    # 3. 단일 파일 경로
+    if _os_ai.path.isfile(arg):
+        result.append(_os_ai.path.abspath(arg))
+    # 존재하지 않으면 빈 리스트 반환 (한 줄 JSON 원칙 — 경고 출력 안 함)
+    return result
 
 
 def show_help() -> None:
@@ -78,6 +138,8 @@ def show_help() -> None:
             "measure_svg <svg_path>": "[SVG 표준화] 모든 path의 bbox를 측정합니다 (디버깅용)",
             "preview_normalize <folder_or_files> <base_file>": "[SVG 표준화] 변환 시뮬레이션 (파일 미수정). 첫 인자가 폴더면 내부 SVG 모두 수집, 파일이면 ';' 구분 가능",
             "normalize_batch <folder> <base_file> [--no-backup]": "[SVG 표준화] 폴더 내 SVG 일괄 변환. 기본 백업(.bak) 생성, --no-backup 시 백업 생략",
+            "ai_convert_preview <file_or_files>": "[AI→SVG] 변환 시뮬레이션 (파일 미수정). ; 구분자로 다중 파일 또는 폴더 경로 가능",
+            "ai_convert_batch <file_or_files> [--overwrite]": "[AI→SVG] AI 일괄 변환. 기본은 기존 SVG 유지, --overwrite 시 .bak 백업 후 덮어쓰기",
         },
         "examples": [
             'python main.py get_pdf_info "C:/designs/front.pdf"',
@@ -99,6 +161,9 @@ def show_help() -> None:
             'python main.py preview_normalize "C:/patterns/" "C:/patterns/U넥_2XL.svg"',
             'python main.py normalize_batch "C:/patterns/" "C:/patterns/U넥_2XL.svg"',
             'python main.py normalize_batch "C:/patterns/" "C:/patterns/U넥_2XL.svg" --no-backup',
+            'python main.py ai_convert_preview "G:/공유 드라이브/디자인/00. 2026 커스텀용 패턴 SVG/U넥/스탠다드/"',
+            'python main.py ai_convert_preview "C:/temp/XL.ai;C:/temp/2XL.ai"',
+            'python main.py ai_convert_batch "C:/temp/" --overwrite',
         ],
     }
     print_json(help_text)
@@ -431,6 +496,48 @@ def main() -> None:
                 sys.exit(1)
 
             result = normalize_batch(folder_path, base_file_path=base_file, backup=backup)
+            print_json(result)
+            if not result.get("success"):
+                sys.exit(1)
+
+        elif command == "ai_convert_preview":
+            # [AI→SVG] 변환 시뮬레이션 (파일 미수정)
+            # 사용: ai_convert_preview <file_or_files_or_folder>
+            # - 폴더 경로면 내부 .ai 파일 수집(비재귀)
+            # - ';' 구분자로 다중 파일 가능
+            # - 단일 파일도 OK
+            # - 존재하지 않는 파일은 조용히 제외 (한 줄 JSON 원칙 준수)
+            if len(args) < 2:
+                print_error(
+                    "인자가 부족합니다. 예: python main.py ai_convert_preview 'file1.ai;file2.ai' (또는 폴더 경로)"
+                )
+                sys.exit(1)
+            files = _expand_ai_files(args[1])
+            result = preview_ai_conversion(files)
+            print_json(result)
+            if not result.get("success"):
+                sys.exit(1)
+
+        elif command == "ai_convert_batch":
+            # [AI→SVG] 일괄 변환 (실제 파일 생성)
+            # 사용: ai_convert_batch <file_or_files_or_folder> [--overwrite]
+            # - 기본: 기존 SVG가 있으면 skip
+            # - --overwrite: .bak 백업 후 덮어쓰기
+            if len(args) < 2:
+                print_error(
+                    "인자가 부족합니다. 예: python main.py ai_convert_batch 'folder_or_files' [--overwrite]"
+                )
+                sys.exit(1)
+            files = _expand_ai_files(args[1])
+            # 옵션 파싱: --overwrite 플래그 (위치 무관)
+            overwrite = False
+            for opt in args[2:]:
+                if opt == "--overwrite":
+                    overwrite = True
+                else:
+                    print_error(f"알 수 없는 옵션: {opt} (지원: --overwrite)")
+                    sys.exit(1)
+            result = convert_ai_batch(files, overwrite=overwrite)
             print_json(result)
             if not result.get("success"):
                 sys.exit(1)

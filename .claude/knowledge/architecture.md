@@ -2,6 +2,12 @@
 <!-- 담당: planner-architect, developer | 최대 30항목 -->
 <!-- 프로젝트의 폴더 구조, 파일 역할, 핵심 패턴을 기록 -->
 
+### [2026-04-25] AI→SVG 자동 변환 Phase 1 통합 아키텍처 (PyMuPDF 반자동)
+- **분류**: architecture
+- **발견자**: planner-architect
+- **내용**: G드라이브에 SVG 없이 AI만 올라오는 누락 상황을 앱 내장 반자동 변환으로 해결. **신규 4파일**: (1) `python-engine/ai_converter.py`(~300줄) — 헤더 첫 10바이트 바이너리 검사(`%PDF-` vs `%!PS-Adobe` vs unknown) + PyMuPDF `page.get_svg_image(text_as_path=True)` 변환 + atomic write(.tmp→rename) + overwrite 시 `.bak` 백업. public 함수 2개: `preview_ai_conversion(files)` / `convert_ai_batch(files, overwrite)`. (2) `src/services/aiConvertService.ts`(~130줄) — `AiPreviewResult`/`AiBatchResult` 타입 + invoke 2개 래퍼. (3) `src/components/AiConvertModal.tsx`(~450줄) — SvgStandardizeModal 미러, 6상태 Phase 머신(idle/previewing/preview-done/converting/done/error), 분류 요약 카드 3개(PDF호환/PostScript/unknown), 진행바, 결과 아코디언. (4) `App.css` append(~150줄) — `.ai-convert-modal__*` + `.pattern-manage__ai-banner`. **수정 5파일**: (5) `python-engine/main.py` — CLI 커맨드 2개(`ai_convert_preview`, `ai_convert_batch`; 세미콜론 구분자 관례 유지). (6) `src-tauri/src/lib.rs` — Rust 커맨드 2개(얇은 래퍼, `run_python` 재사용). (7) `src/services/driveSync.ts` — `ScanResult.data.unconvertedAiFiles: string[]` 필드 추가 + 폴더 순회 시 "SVG 짝 없는 AI" 수집 로직(기존 `.ai` 스킵 동작은 병행 유지). (8) `src/pages/PatternManage.tsx` — 상단 배너(`unconvertedAi.length > 0` 조건) + 모달 조건부 렌더 + `onComplete`에서 `lastAutoScanRef.current = 0` 후 `runAutoSync()` 강제 트리거. **재사용 원칙**: SVG 표준화 Phase 1의 3층 구조(Python←Rust←React) 완전 미러, 신규 발명 최소화. **범위**: Phase 1은 PyMuPDF 단독(PDF 호환 AI 89%), PostScript AI 11%는 Phase 2 대상으로 skip 분류. **외부 검증**: 2026-04-20 G드라이브 63개 100% 성공(PyMuPDF 56 + Illustrator COM 7)에서 Phase 1은 56/63 부분 재현. 상세: `PLAN-AI-TO-SVG.md` 12섹션+부록 3개 참조.
+- **참조횟수**: 0
+
 ### [2026-04-24] SVG 표준화 Phase 1-5 구현 완료 + v1.0.0 릴리스 포함
 - **분류**: architecture
 - **발견자**: pm
