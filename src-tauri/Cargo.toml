@@ -1,6 +1,6 @@
 [package]
 name = "grader"
-version = "1.0.3"
+version = "1.0.4"
 description = "승화전사 유니폼 패턴 자동 생성 프로그램"
 authors = ["you"]
 edition = "2021"
