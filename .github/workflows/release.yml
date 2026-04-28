@@ -47,6 +47,16 @@ jobs:
     # Windows 전용 빌드 — macOS/Linux는 현재 범위 외
     runs-on: windows-latest
 
+    # 왜 FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true 인가:
+    #   GitHub Actions runner 기본 Node 가 2026-06-02 부터 Node 24 로 강제 전환되며
+    #   2026-09-16 이후엔 Node 20 이 runner 에서 완전히 제거된다.
+    #   현재 workflow 는 actions/checkout@v4 / actions/setup-node@v4 (Node 20 사용)을
+    #   쓰고 있으므로 그 전에 Node 24 환경에서 정상 동작 여부를 미리 확인해 둬야 한다.
+    #   이 환경변수는 Node 20 액션을 Node 24 로 실행하도록 강제 (GitHub 공식 옵트인).
+    #   호환 문제가 생기면 즉시 false 로 되돌려 1단계 후퇴 가능.
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
     steps:
       # 1) 소스 받아오기
       - name: Checkout repository
@@ -112,12 +122,19 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "Extracting CHANGELOG for version: $VERSION"
 
-          # awk로 "## [버전]" 라인 다음부터 다음 "## [" 직전까지 추출
+          # awk로 "## [버전]" 라인 다음부터 다음 "## " 헤더 직전까지 추출
           # 왜 [[]/[]] 문자 클래스: gawk가 \[ 를 "plain ["로 취급해 경고+매칭 실패하므로
           # 문자 클래스 [[] / []] 로 [ 와 ] 를 표현. POSIX 호환되고 경고도 안 남.
+          # 왜 종료 조건을 `^## ` (대괄호 무관)로 확장했는가:
+          #   v1.0.3까지의 awk 는 종료 조건이 `^## [[]` 였다. 이 경우 마지막 정식 버전
+          #   추출 시 다음 `## [버전]` 헤더가 없어 EOF 까지 본문이 부풀어 버린다 (errors.md
+          #   2026-04-29 v1.0.4 항목 참조). CHANGELOG.md 의 마지막 섹션 `## 이 전 버전들`
+          #   같은 일반 ## 헤더에서 깔끔히 끊기도록 패턴을 넓혔다. 본문 안에 `## `(스페이스 있는
+          #   2-단계 헤더)을 쓰지 않는 keepachangelog 컨벤션 준수가 전제. 본문 안의 `### `
+          #   (3-단계)는 영향 없음.
           BODY=$(awk -v ver="$VERSION" '
             $0 ~ "^## [[]" ver "[]]" { found = 1; next }
-            found && /^## [[]/ { exit }
+            found && /^## / { exit }
             found { print }
           ' CHANGELOG.md)
 

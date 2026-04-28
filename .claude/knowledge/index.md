@@ -5,6 +5,8 @@
 |------|--------|------------|
 | architecture.md | 19 | 2026-04-26 (AI→SVG Phase 3 구현 완료 항목 추가) |
 | errors.md | 16 | 2026-04-29 (v1.0.3: catch-22 패턴 전수 점검 — store 4종 + capabilities 3종 + FileGenerate 가면 통일) |
+
+> v1.0.4 (CI 안정화): release.yml awk 종료 조건 보강 (마지막 정식 버전 부풀음 차단) + Node 24 옵트인. Internal 변경이라 errors.md 신규 항목 없음.
 | conventions.md | 13 | 2026-04-22 (Tauri 래퍼 서비스 패턴 + 모듈 상태 공유 패턴 2건 추가) |
 | decisions.md | 39 | 2026-04-26 (AI→SVG Phase 3 9개 핵심 결정 통합 항목 추가) |
 | lessons.md | 7 | 2026-04-23 (v1.0.0 첫 릴리스 교훈 — 서명 키 + Secret + draft 추가) |
