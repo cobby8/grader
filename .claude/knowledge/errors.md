@@ -2,6 +2,12 @@
 <!-- 담당: debugger, tester | 최대 30항목 -->
 <!-- 이 프로젝트에서 반복되는 에러 패턴, 함정, 주의사항을 기록 -->
 
+### [2026-04-28] capabilities `fs:allow-mkdir` 패턴이 $APPDATA 자체 미매칭 — 신규 PC 첫 실행 settings 저장 실패 (v1.0.1 재발)
+- **분류**: error
+- **발견자**: pm (직원 PC v1.0.1에서도 동일 "지정된 경로를 찾을 수 없습니다 (os error 3)" 재발 보고 후 추적)
+- **내용**: v1.0.1에서 `write_file_absolute`의 부모 폴더 자동 생성 처방을 적용했으나, 정작 `src/stores/settingsStore.ts`의 `saveSettings()`는 **Tauri fs 플러그인의 `writeTextFile`/`mkdir`**을 사용하고 `write_file_absolute` 커맨드를 거치지 않음. 두 코드 경로가 완전히 분리. 진짜 결함은 **`src-tauri/capabilities/default.json`의 `fs:allow-mkdir` 권한 매칭 패턴**: `$APPDATA/**`은 `$APPDATA` **안의** 경로만 허용하고 `$APPDATA` 자체(=`com.grader.app` 폴더 만들기)는 미매칭. settingsStore 라인 115의 `mkdir("", { baseDir: BaseDirectory.AppData, recursive: true })` 호출이 권한 부족으로 실패하지만 silent `.catch(() => {})`로 단서 0건 → 다음 `writeTextFile`이 부모 폴더 없어 폭발. 본 PC는 옛 버전 사용 흔적으로 폴더 이미 존재 → mkdir noop → 결함 안 보임. 신규 PC만 발현. **교훈**: (1) Tauri capabilities glob 패턴 `path/**`은 `path` **자체를 매칭하지 않는다** — 폴더 자체를 만드는 작업이라면 `path` 와 `path/**` 둘 다 명시 필요. (2) silent catch는 진단 시간을 폭발적으로 늘린다. fallback은 OK여도 console.warn 정도는 남겨야 회귀 시 단서가 된다. (3) 동일 파일 저장도 코드 경로가 분리되어 있을 수 있다 — Tauri fs 플러그인 vs 자체 Rust 커맨드. 한쪽만 고치면 다른 쪽이 그대로 결함. **해결 (v1.0.2)**: capabilities `fs:allow-mkdir`에 `{ "path": "$APPDATA" }` 추가 + settingsStore의 silent catch를 console.warn 명시 catch로 변경. **catch-22**: 이 결함 자체가 자동 업데이트 진입을 막아 v1.0.1 → v1.0.2 자동 전환이 불가능하므로, v1.0.0/v1.0.1 사용자에게는 v1.0.2 설치본 직접 다운로드 + 재설치 안내 필수.
+- **참조횟수**: 0
+
 ### [2026-04-28] scripts/bump-version.mjs 의 split('\\n') 이 Windows CRLF에서 Cargo.toml [package] 매칭 실패
 - **분류**: error
 - **발견자**: pm (v1.0.1 릴리스 직전 `npm run release:bump 1.0.1` 실행 시 "Cargo.toml의 [package] 섹션에서 version 필드를 찾을 수 없음" 에러)

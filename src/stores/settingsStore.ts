@@ -112,8 +112,19 @@ export async function loadSettings(): Promise<SettingsLoadResult> {
 export async function saveSettings(settings: AppSettings): Promise<void> {
   try {
     // AppData 디렉토리 준비 (이미 있으면 무시)
+    // 왜 명시 catch + console.warn 인가:
+    //   v1.0.1까지는 빈 catch(()=>{})로 모든 에러를 silently 삼켰다. 그 결과
+    //   capabilities 권한 매칭 결함(`fs:allow-mkdir`이 `$APPDATA` 자체 미매칭)으로
+    //   mkdir가 실패해도 아무 단서가 안 남아, 다음 writeTextFile 단계에서
+    //   "지정된 경로를 찾을 수 없습니다 (os error 3)"가 비로소 폭발했다.
+    //   진단까지 길게 돌아간 사례 (errors.md 2026-04-28 참조).
+    //   이제 명시 catch로 console.warn 을 남겨 다음 회귀 시 즉시 단서 제공.
+    //   capabilities 자체는 이번 v1.0.2 에서 `$APPDATA` 매칭을 추가해 근본 해결됨.
     await mkdir("", { baseDir: BaseDirectory.AppData, recursive: true }).catch(
-      () => {}
+      (err) => {
+        // 이미 존재 시 EEXIST 류는 정상이라 무해. 권한 부족/타 에러는 단서 남김.
+        console.warn("[settingsStore] mkdir AppData 실패 (capabilities 확인 필요):", err);
+      }
     );
 
     // 기존 파일 백업
