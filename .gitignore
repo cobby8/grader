@@ -38,3 +38,12 @@ keys/
 # Illustrator 스크립트 임시 파일 (그레이딩 실행 시마다 자동 생성)
 illustrator-scripts/config.json
 illustrator-scripts/result.json
+
+# .claude/ 작업 메모 (개인 메모/임시 가이드 — 공유 안 함)
+# 추적 대상은 scratchpad.md / knowledge/ / settings.local.json 만 유지
+.claude/TEST-GUIDE-*.md
+.claude/release-notes-*.md
+.claude/image-cache/
+
+# PM/검증 작업용 임시 폴더 (수동 정리 대상)
+.tmp-release-check/
