@@ -2,6 +2,12 @@
 <!-- 담당: debugger, tester | 최대 30항목 -->
 <!-- 이 프로젝트에서 반복되는 에러 패턴, 함정, 주의사항을 기록 -->
 
+### [2026-04-28] write_file_absolute 부모 폴더 미생성으로 첫 실행 PC에서 settings.json 저장 실패 (os error 3)
+- **분류**: error
+- **발견자**: pm (사용자 다른 PC에서 Drive 경로 [적용] 시 "지정된 경로를 찾을 수 없습니다 (os error 3)" 저장 실패 화면 캡처)
+- **내용**: `src-tauri/src/lib.rs:383~385` `write_file_absolute` 커맨드가 단순히 `std::fs::write(&path, &content)` 만 호출. Rust 표준 `fs::write`는 **부모 폴더가 없으면 즉시 실패**하며 자동 생성하지 않음. 다른 PC(`cobby` 사용자)에서 앱을 처음 실행하면 `%APPDATA%\com.grader.app\` 폴더 자체가 아직 안 만들어진 상태인데, 사용자가 Drive 경로 [적용] 누르면 settings.json 저장 시도 → 부모 폴더 부재 → Windows ERROR_PATH_NOT_FOUND (os error 3) → "저장 실패: failed to open file at path: ... settings.json with error: 지정된 경로를 찾을 수 없습니다." 이전엔 본 PC에서만 테스트해 폴더가 이미 존재해 결함이 안 보였음. **교훈**: 절대 경로 파일 쓰기 커맨드는 반드시 `Path::parent()` + `create_dir_all` 패턴으로 부모 폴더를 보장해야 한다. `create_dir_all`은 이미 존재하면 no-op이라 매 호출 호출해도 안전. 첫 실행 환경(폴더 없음)을 본 PC 테스트만으로 발견 못 한 사례 — 다른 PC/신규 PC 검증의 가치. **임시 우회**: 사용자가 `%APPDATA%\com.grader.app\` 폴더 수동 생성 후 재실행. **근본 처방(v1.0.1)**: `write_file_absolute`에 `create_dir_all` 5줄 추가. read_file_absolute / remove_file_absolute는 부모 폴더 자동 생성 의미 없으므로 미적용.
+- **참조횟수**: 0
+
 ### [2026-04-28] GitHub Release v1.0.0 빌드에 v0.1.0 하드코딩이 그대로 박혀 배포된 결함
 - **분류**: error
 - **발견자**: pm (사용자가 v1.0.0 setup.exe 새로 받아 설치해도 화면에 v0.1.0 표시되는 증상 추적)

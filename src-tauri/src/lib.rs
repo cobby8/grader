@@ -381,6 +381,16 @@ fn get_illustrator_scripts_path(app: tauri::AppHandle) -> Result<String, String>
 /// 주 용도: illustrator-scripts/ 폴더에 config.json, 임시 SVG 등을 저장할 때.
 #[tauri::command]
 fn write_file_absolute(path: String, content: String) -> Result<(), String> {
+    // 부모 폴더가 없으면 자동 생성한다.
+    //   왜 필요한가: 앱을 처음 켜는 PC에서는 `%APPDATA%\com.grader.app\` 폴더 자체가
+    //   아직 만들어지지 않은 상태일 수 있다. 이 상태로 settings.json 같은 파일을 저장하려 하면
+    //   `std::fs::write`는 부모 폴더를 자동으로 만들어 주지 않으므로 즉시 실패한다
+    //   (Windows: ERROR_PATH_NOT_FOUND / "지정된 경로를 찾을 수 없습니다 (os error 3)").
+    //   `create_dir_all`은 이미 존재하면 no-op이므로 매 호출마다 호출해도 안전하다.
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("부모 폴더 생성 실패: {}", e))?;
+    }
     std::fs::write(&path, &content).map_err(|e| format!("파일 쓰기 실패: {}", e))
 }
 
