@@ -75,7 +75,15 @@ export async function saveCategories(categories: PatternCategory[]): Promise<voi
 
   try {
     // AppData 디렉토리 생성 (이미 있으면 무시)
-    await mkdir("", { baseDir: BaseDirectory.AppData, recursive: true }).catch(() => {});
+    // 왜 명시 catch + console.warn: settingsStore.ts와 동일 사유. 빈 catch는
+    // capabilities 권한 결함 같은 다른 에러까지 silently 삼켜 진단을 어렵게 한다
+    // (errors.md 2026-04-28 참조). EEXIST 류는 무해라 진행하고, 권한 부족 등은
+    // 단서를 남긴다.
+    await mkdir("", { baseDir: BaseDirectory.AppData, recursive: true }).catch(
+      (err) => {
+        console.warn("[categoryStore] mkdir AppData 실패 (capabilities 확인 필요):", err);
+      }
+    );
 
     // 안전장치 2: 저장 전 기존 파일을 백업
     try {

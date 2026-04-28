@@ -39,6 +39,7 @@
     {
       "identifier": "fs:allow-read-dir",
       "allow": [
+        { "path": "$APPDATA" },
         { "path": "$APPDATA/**" },
         { "path": "G:/**" },
         { "path": "H:/**" },
@@ -62,11 +63,17 @@
     },
     {
       "identifier": "fs:allow-write-file",
-      "allow": [{ "path": "$APPDATA/**" }]
+      "allow": [
+        { "path": "$APPDATA" },
+        { "path": "$APPDATA/**" }
+      ]
     },
     {
       "identifier": "fs:allow-remove",
-      "allow": [{ "path": "$APPDATA/**" }]
+      "allow": [
+        { "path": "$APPDATA" },
+        { "path": "$APPDATA/**" }
+      ]
     },
     {
       "identifier": "opener:allow-open-path",

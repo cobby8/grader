@@ -93,7 +93,12 @@ export async function savePresets(presets: PatternPreset[]): Promise<void> {
 
   try {
     // AppData 디렉토리 생성 (이미 있으면 무시)
-    await mkdir("", { baseDir: BaseDirectory.AppData, recursive: true }).catch(() => {});
+    // 왜 명시 catch + console.warn: settingsStore.ts와 동일 사유 (errors.md 2026-04-28).
+    await mkdir("", { baseDir: BaseDirectory.AppData, recursive: true }).catch(
+      (err) => {
+        console.warn("[presetStore] mkdir AppData 실패 (capabilities 확인 필요):", err);
+      }
+    );
 
     // 안전장치 2: 저장 전 기존 파일을 백업
     try {

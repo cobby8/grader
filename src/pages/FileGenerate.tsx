@@ -376,10 +376,14 @@ function FileGenerate() {
       } catch (err) {
         // 한 사이즈 실패해도 전체 중단하지 않고 다음으로 진행
         console.error(`사이즈 ${targetSize} Illustrator 생성 실패:`, err);
+        // 왜 String(err)로 fallback: OrderGenerate(라인 624)와 동일 사유.
+        // Tauri Rust 커맨드 Result<_, String> 의 Err 은 JS catch 에서 string 으로 들어와
+        // instanceof Error=false 라 fallback 발동 → 진짜 메시지 마스킹.
+        // String(err) 은 string/객체/숫자 모두 안전하게 문자열화하여 진단성 확보.
         updateResult(targetSize, {
           status: "error",
           errorMessage:
-            err instanceof Error ? err.message : "알 수 없는 오류",
+            err instanceof Error ? err.message : String(err),
         });
       }
     }
@@ -451,10 +455,11 @@ function FileGenerate() {
         });
       } catch (err) {
         console.error(`사이즈 ${targetSize} Python 생성 실패:`, err);
+        // 왜 String(err)로 fallback: 위 Illustrator catch와 동일 사유 (마스킹 차단).
         updateResult(targetSize, {
           status: "error",
           errorMessage:
-            err instanceof Error ? err.message : "알 수 없는 오류",
+            err instanceof Error ? err.message : String(err),
         });
       }
     }

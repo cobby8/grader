@@ -87,7 +87,13 @@ export async function saveDesigns(designs: DesignFile[]): Promise<void> {
 
   try {
     // AppData 디렉토리 + designs/ 하위 폴더 생성 (이미 있으면 무시)
-    await mkdir(DESIGNS_DIR, { baseDir: BaseDirectory.AppData, recursive: true }).catch(() => {});
+    // 왜 명시 catch + console.warn: settingsStore.ts와 동일 사유 (errors.md 2026-04-28).
+    // designs/ 는 $APPDATA/** 패턴에 매칭되므로 권한 결함은 적지만 일관성 위해 동일 패턴 적용.
+    await mkdir(DESIGNS_DIR, { baseDir: BaseDirectory.AppData, recursive: true }).catch(
+      (err) => {
+        console.warn("[designStore] mkdir designs/ 실패 (capabilities 확인 필요):", err);
+      }
+    );
 
     // 안전장치 2: 저장 전 기존 파일을 백업
     try {

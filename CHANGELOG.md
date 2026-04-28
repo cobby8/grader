@@ -37,6 +37,26 @@ _(다음 릴리스 전까지 여기에 변경사항을 쌓아둡니다.)_
 
 ---
 
+## [1.0.3] — 2026-04-29
+
+🧹 **catch-22 결함 패턴 전수 점검 + 에러 마스킹 통일.** v1.0.2 핫픽스에서 발견한 두 가지 결함 패턴(silent catch + capabilities 매칭)을 다른 파일에도 일괄 적용하여 같은 결함이 또 나타나지 않게 사전 차단합니다.
+
+### Fixed (버그 수정)
+
+- **다른 store 파일들의 silent catch 보강 (preventive)**
+  - `categoryStore` / `favoritesStore` / `presetStore` / `designStore` 의 `mkdir().catch(() => {})` 패턴을 모두 명시 `console.warn` 으로 교체.
+  - v1.0.2 진단 시 settingsStore 의 silent catch가 capabilities 권한 결함을 통째로 가렸던 사례를 재발 방지하기 위함. 회귀 시 즉시 콘솔에서 단서 확인 가능.
+- **capabilities 다른 fs 권한도 `$APPDATA` 자체 매칭 추가 (preventive)**
+  - `fs:allow-write-file` / `fs:allow-read-dir` / `fs:allow-remove` 모두 `$APPDATA/**` 만 허용했었음. mkdir 처럼 폴더 자체를 대상으로 한 작업이 들어오면 같은 결함이 발현될 수 있어, 사전에 두 패턴(`$APPDATA` + `$APPDATA/**`) 모두 허용.
+- **`FileGenerate` 페이지 에러 마스킹 통일**
+  - 라인 382 / 457 의 fallback `err instanceof Error ? err.message : "알 수 없는 오류"` 가 OrderGenerate와 동일한 마스킹 패턴이었음. v1.0.1에서 OrderGenerate만 통일하고 빠졌던 곳을 같은 `String(err)` fallback 으로 정리.
+
+### Internal (내부 구조 변경, 일반 사용자 영향 없음)
+
+- knowledge/errors.md 항목 통합 정리 — 같은 catch-22 패턴이 어떤 코드 경로/권한에서 발현 가능한지 정리.
+
+---
+
 ## [1.0.2] — 2026-04-28
 
 🚑 **긴급 핫픽스.** v1.0.1 배포 후 신규 직원 PC에서 첫 실행이 막히는 결함을 해결합니다.
