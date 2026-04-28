@@ -4,7 +4,7 @@
 | 파일 | 항목 수 | 최종 업데이트 |
 |------|--------|------------|
 | architecture.md | 19 | 2026-04-26 (AI→SVG Phase 3 구현 완료 항목 추가) |
-| errors.md | 14 | 2026-04-28 (write_file_absolute 부모 폴더 미생성 + v1.0.0 빌드 v0.1.0 표시 + 그레이딩 timeout 마스킹) |
+| errors.md | 15 | 2026-04-28 (bump-version.mjs CRLF 누수 + write_file_absolute 부모 폴더 + v1.0.0 v0.1.0 표시 + 그레이딩 timeout 마스킹) |
 | conventions.md | 13 | 2026-04-22 (Tauri 래퍼 서비스 패턴 + 모듈 상태 공유 패턴 2건 추가) |
 | decisions.md | 39 | 2026-04-26 (AI→SVG Phase 3 9개 핵심 결정 통합 항목 추가) |
 | lessons.md | 7 | 2026-04-23 (v1.0.0 첫 릴리스 교훈 — 서명 키 + Secret + draft 추가) |

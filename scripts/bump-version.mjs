@@ -91,7 +91,11 @@ function writePkgVersion(raw, newVersion) {
 //   구현: 행 단위로 읽으며 현재 섹션 추적 → [package] 섹션의 첫 version 행만 교체.
 function readCargoVersion() {
   const raw = readFileSync(CARGO_TOML_PATH, 'utf-8');
-  const lines = raw.split('\n');
+  // 왜 /\r?\n/ 인가: Windows에서 만든 Cargo.toml 은 CRLF 라인 종결이라
+  // split('\n') 만 쓰면 라인 끝에 \r 이 남는다. 그 상태에선 아래 version 매칭의
+  // (.*)$ 정규식이 \r 을 line terminator 로 보고 매칭 실패한다 (ECMAScript 사양).
+  // /\r?\n/ 로 split 하면 \r 까지 자동 제거되어 정규식이 정상 동작한다.
+  const lines = raw.split(/\r?\n/);
   let currentSection = '';
   let versionLineIdx = -1;
   let currentVersion = '';

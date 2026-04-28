@@ -2,6 +2,12 @@
 <!-- 담당: debugger, tester | 최대 30항목 -->
 <!-- 이 프로젝트에서 반복되는 에러 패턴, 함정, 주의사항을 기록 -->
 
+### [2026-04-28] scripts/bump-version.mjs 의 split('\\n') 이 Windows CRLF에서 Cargo.toml [package] 매칭 실패
+- **분류**: error
+- **발견자**: pm (v1.0.1 릴리스 직전 `npm run release:bump 1.0.1` 실행 시 "Cargo.toml의 [package] 섹션에서 version 필드를 찾을 수 없음" 에러)
+- **내용**: `scripts/bump-version.mjs:94`의 `lines = raw.split('\n')` 이 Windows CRLF 라인 종결을 제대로 안 풀어 라인 끝에 `\r`이 남음. 그 상태에서 version 매칭 정규식 `^(\s*version\s*=\s*)"([^"]+)"(.*)$`이 실패. 원인: ECMAScript 사양상 `(.*)`의 `.`은 line terminator(`\n`/`\r`/U+2028/U+2029)를 매칭하지 않고, multiline 플래그 없는 `$`도 input 끝만 매칭하므로 `\r$` 형태에서 `(.*)$`가 어긋남. 결과: Cargo.toml [package] 섹션은 정상 인식했지만 version 행 매칭 실패 → 스크립트 abort. **해결**: `split(/\r?\n/)`으로 변경 (1줄). `\r`이 split 단계에서 자동 제거되어 정규식 정상 동작. **교훈**: Windows 환경에서 텍스트 라인 단위 처리 시 `split('\n')`은 항상 `\r` 누수 위험이 있다. 표준 패턴은 `split(/\r?\n/)`. **참고**: package.json/tauri.conf.json은 첫 매치 정규식이라 `(.*)$` 같은 줄 끝 캡처가 없어 영향 안 받았음 — Cargo.toml 만 라인별 처리라 결함 노출.
+- **참조횟수**: 0
+
 ### [2026-04-28] write_file_absolute 부모 폴더 미생성으로 첫 실행 PC에서 settings.json 저장 실패 (os error 3)
 - **분류**: error
 - **발견자**: pm (사용자 다른 PC에서 Drive 경로 [적용] 시 "지정된 경로를 찾을 수 없습니다 (os error 3)" 저장 실패 화면 캡처)
