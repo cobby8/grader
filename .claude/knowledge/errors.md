@@ -2,6 +2,18 @@
 <!-- 담당: debugger, tester | 최대 30항목 -->
 <!-- 이 프로젝트에서 반복되는 에러 패턴, 함정, 주의사항을 기록 -->
 
+### [2026-04-28] GitHub Release v1.0.0 빌드에 v0.1.0 하드코딩이 그대로 박혀 배포된 결함
+- **분류**: error
+- **발견자**: pm (사용자가 v1.0.0 setup.exe 새로 받아 설치해도 화면에 v0.1.0 표시되는 증상 추적)
+- **내용**: `src/components/StatusBar.tsx:16`과 `src/pages/Settings.tsx:480`에 `"v0.1.0"` / `"0.1.0"` 문자열이 **하드코딩**되어 있어 빌드 산출물(`dist/assets/index-CuRAnkPY.js`)에 그대로 박힘. `package.json`/`tauri.conf.json`은 `1.0.0`이지만 UI 표시는 `0.1.0`. v1.0.0 setup.exe를 새로 다운로드/설치해도 동일 증상. **추가 발견**: `latest.json`의 `notes` 필드도 `release.yml` `releaseBody` placeholder("자동 생성된 릴리스입니다. 아래 체크 후 Publish 해 주세요" + "(여기에 CHANGELOG 내용을 붙여넣거나 직접 작성)")가 그대로 박힌 채 published — Tauri Updater 자동 업데이트 모달에서 사용자가 그대로 보게 됨. **교훈**: 하드코딩된 버전 문자열은 릴리스마다 자동 갱신되지 않아 표시 불일치를 유발한다. 빌드 산출물에 직접 grep으로 버전 문자열을 확인하는 검증 step을 release.yml에 추가할 가치 있음. `releaseBody`도 placeholder 그대로 두지 말고 CHANGELOG 자동 추출 로직 필수. **해결 방향(v1.0.1)**: (A) StatusBar/Settings에서 `package.json` version을 import하여 동적 표시, (B) `release.yml`에 CHANGELOG.md에서 해당 버전 섹션 추출하여 `releaseBody`에 주입하는 step 추가.
+- **참조횟수**: 0
+
+### [2026-04-27] 그레이딩 4건 동시 "알 수 없는 오류" — Tauri String Err이 instanceof Error catch에 마스킹됨 + Illustrator 콜드 스타트 timeout
+- **분류**: error
+- **발견자**: debugger (1차+2차 분석 + 사용자 답변 5건)
+- **내용**: 사용자가 4사이즈 그레이딩 시도 → 4건 모두 "알 수 없는 오류" fallback. **표면 원인**: `src/pages/OrderGenerate.tsx:621`의 `e instanceof Error ? e.message : "알 수 없는 오류"` fallback이 Tauri Rust 커맨드의 `Result<String, String>` Err을 받을 때 `e`가 String 타입이라 Error 인스턴스가 아니어서 fallback 발동 → 진짜 메시지 마스킹. **근본 원인 (가설 P1)**: Illustrator 콜드 스타트 — 4/22 이후 5일 만의 첫 사용으로 Adobe CC 라이선스 캐시/인증 만료 또는 좀비 프로세스 잔존 → spawn 자체는 성공했으나 UI 미출현/result.json 미생성 → `lib.rs:277` 60초 timeout × 4사이즈 = 4분 → string Err 마스킹 → "알 수 없는 오류". 사용자 답변 5건이 부합: (1) Illustrator 작업 표시줄 미출현, (2) 4/22 이후 첫 시도, (3) Adobe 업데이트 없음, (4) 다른 폴더도 동일 실패, (5) 본 PC 재시도하니 정상. 코드 회귀 0건 확인(git log 직접). **교훈**: Tauri 커맨드 시그니처 `Result<T, String>` 사용 시 Err 분기는 catch에서 string으로 받아야 하며 `instanceof Error` 단독 검사는 마스킹 위험. **해결 방향(v1.0.1)**: (A) fallback에 `typeof e === "string" ? e : "알 수 없는 오류"` 분기 추가(가면 벗기기), (B) timeout 60→120초 확장(콜드 스타트 대비, 다른 PC 재현 시 적용), (C) 향후 spawn 후 child PID 로깅 검토.
+- **참조횟수**: 0
+
 ### [2026-04-24] grading v2 리팩토링에서 누락된 v1 안전장치 3종 (clamp / exponent / piece=null 폴백)
 - **분류**: error
 - **발견자**: debugger (수정 요청 3건 재검증 정적 분석)

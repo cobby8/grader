@@ -25,7 +25,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "targets": [
+      "msi",
+      "nsis"
+    ],
     "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
@@ -35,18 +38,19 @@
       "icons/icon.ico"
     ],
     "resources": {
+      "../python-engine/ai_converter.py": "python-engine/ai_converter.py",
       "../python-engine/main.py": "python-engine/main.py",
-      "../python-engine/pdf_handler.py": "python-engine/pdf_handler.py",
+      "../python-engine/order_parser.py": "python-engine/order_parser.py",
       "../python-engine/pattern_scaler.py": "python-engine/pattern_scaler.py",
       "../python-engine/pdf_grader.py": "python-engine/pdf_grader.py",
-      "../python-engine/order_parser.py": "python-engine/order_parser.py",
-      "../python-engine/svg_parser.py": "python-engine/svg_parser.py",
+      "../python-engine/pdf_handler.py": "python-engine/pdf_handler.py",
       "../python-engine/svg_normalizer.py": "python-engine/svg_normalizer.py",
+      "../python-engine/svg_parser.py": "python-engine/svg_parser.py",
       "../python-engine/requirements.txt": "python-engine/requirements.txt",
-      "../illustrator-scripts/grading.jsx": "illustrator-scripts/grading.jsx",
+      "../illustrator-scripts/ai_to_pdf.jsx": "illustrator-scripts/ai_to_pdf.jsx",
       "../illustrator-scripts/check_area.jsx": "illustrator-scripts/check_area.jsx",
       "../illustrator-scripts/check_layers.jsx": "illustrator-scripts/check_layers.jsx",
-      "../illustrator-scripts/config.json": "illustrator-scripts/config.json",
+      "../illustrator-scripts/grading.jsx": "illustrator-scripts/grading.jsx",
       "../illustrator-scripts/README.md": "illustrator-scripts/README.md",
       "../setup-python.bat": "setup-python.bat",
       "../INSTALL-GUIDE.md": "INSTALL-GUIDE.md"

@@ -13,7 +13,9 @@ function StatusBar() {
         <span>준비됨</span>
       </div>
       <div className="statusbar__right">
-        <span>v0.1.0</span>
+        {/* 왜 __APP_VERSION__: 하드코딩 대신 빌드 타임에 package.json version으로 자동 치환.
+            예전엔 v0.1.0이 박혀있어 1.0.0 배포 후에도 화면엔 0.1.0이 떴음. */}
+        <span>v{__APP_VERSION__}</span>
       </div>
     </footer>
   );

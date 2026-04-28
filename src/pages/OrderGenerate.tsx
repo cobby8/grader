@@ -616,9 +616,12 @@ function OrderGenerate() {
         } catch (e) {
           // 한 사이즈 실패해도 전체 중단하지 않고 다음으로 진행
           console.error(`사이즈 ${targetSize} 생성 실패:`, e);
+          // 왜 String(e)로 fallback: 기존 "알 수 없는 오류"는 string/객체 형태 에러를 모두
+          // 가려서 Illustrator 좀비 timeout 같은 진짜 원인을 추적 불가능하게 만들었음.
+          // 시트 가져오기(467행), 폴더 열기(648행)와 동일하게 String(e)로 통일.
           updateResult(targetSize, {
             status: "error",
-            errorMessage: e instanceof Error ? e.message : "알 수 없는 오류",
+            errorMessage: e instanceof Error ? e.message : String(e),
           });
         }
       }
@@ -631,7 +634,8 @@ function OrderGenerate() {
       }
     } catch (e) {
       console.error("파일 생성 전체 실패:", e);
-      setGlobalError(e instanceof Error ? e.message : "알 수 없는 오류가 발생했습니다.");
+      // 사이즈별 catch와 같은 이유로 String(e) fallback. 가면 벗기기.
+      setGlobalError(e instanceof Error ? e.message : String(e));
     } finally {
       setGenerating(false);
     }

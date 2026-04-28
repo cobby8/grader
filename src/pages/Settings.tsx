@@ -477,7 +477,8 @@ function Settings() {
         <h2 className="settings-section__title">정보</h2>
         <div className="settings-row">
           <label className="settings-row__label">앱 버전</label>
-          <div className="settings-row__value">0.1.0</div>
+          {/* 빌드 타임에 package.json version 으로 치환되는 상수. StatusBar와 동일한 출처. */}
+          <div className="settings-row__value">{__APP_VERSION__}</div>
         </div>
         <div className="settings-row">
           <label className="settings-row__label">Drive for Desktop</label>

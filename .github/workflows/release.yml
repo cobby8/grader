@@ -94,6 +94,56 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
+      # 6.7) CHANGELOG.md 에서 현재 버전 섹션을 추출하여 릴리스 본문으로 사용
+      #      [왜 이게 필요한가]
+      #        v1.0.0 배포 시 latest.json의 notes 필드가 placeholder 그대로 들어갔다.
+      #        그래서 자동 업데이트 모달에 "자동 생성된 릴리스입니다. 아래 체크 후..." 가
+      #        직원 PC로 그대로 노출되는 결함 발생.
+      #      [어떻게 추출하나]
+      #        1) github.ref_name(v1.0.1)에서 'v' 제거 → 버전(1.0.1)
+      #        2) awk로 CHANGELOG.md 에서 "## [1.0.1]" 라인부터 다음 "## [" 직전까지 본문 추출
+      #        3) GITHUB_OUTPUT 으로 다음 step에 전달
+      #        4) 추출 실패(섹션 누락 등) 시 fallback 본문 사용 — 빌드를 막진 않음
+      - name: Extract CHANGELOG section
+        id: changelog
+        shell: bash
+        run: |
+          # 태그(v1.0.1) → 버전(1.0.1)
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Extracting CHANGELOG for version: $VERSION"
+
+          # awk로 "## [버전]" 라인 다음부터 다음 "## [" 직전까지 추출
+          # 왜 [[]/[]] 문자 클래스: gawk가 \[ 를 "plain ["로 취급해 경고+매칭 실패하므로
+          # 문자 클래스 [[] / []] 로 [ 와 ] 를 표현. POSIX 호환되고 경고도 안 남.
+          BODY=$(awk -v ver="$VERSION" '
+            $0 ~ "^## [[]" ver "[]]" { found = 1; next }
+            found && /^## [[]/ { exit }
+            found { print }
+          ' CHANGELOG.md)
+
+          # 추출 결과가 비어있으면 fallback 메시지로 대체
+          # 왜 어휘를 "⚠️ 누락"으로 강하게: v1.0.0 결함이 placeholder 어휘("자동 생성된 릴리스입니다…")로
+          # 무심코 publish되어 발생했음. 같은 패턴이 다시 나오지 않도록 한눈에 결함임을 인지 가능한
+          # 표현으로 통일. ::error:: 로 GitHub Actions UI 빨간 배지 띄움 (빌드는 안 막음 — releaseDraft
+          # 안전망에 의존).
+          if [ -z "$(echo "$BODY" | tr -d '[:space:]')" ]; then
+            echo "::error::CHANGELOG.md 에 [$VERSION] 섹션이 없습니다. Publish 전에 반드시 본문을 교체하세요."
+            BODY=$(printf '## ⚠️ Grader v%s — CHANGELOG.md 누락 (수정 필요)\n\n**경고**: 자동 본문 추출에 실패했습니다. `CHANGELOG.md` 에 `[%s]` 섹션이 없어 이 fallback 텍스트가 사용되었습니다.\n\n**즉시 조치**:\n1. `CHANGELOG.md` 에 `## [%s] — YYYY-MM-DD` 섹션 추가 후 변경사항 작성\n2. 본 GitHub Release 페이지에서 본문 직접 교체 (Edit → 붙여넣기)\n3. 또는 태그 삭제 후 재푸시로 워크플로우 재실행\n\n> 이 메시지를 그대로 Publish 하면 자동 업데이트 모달에 그대로 노출됩니다.\n' "$VERSION" "$VERSION" "$VERSION")
+          fi
+
+          # GITHUB_OUTPUT 에 멀티라인 출력으로 저장 (heredoc 패턴)
+          # EOF 구분자를 매번 랜덤화하면 안전하지만 여기선 RELEASE_BODY_EOF 고정으로 충분
+          {
+            echo "body<<RELEASE_BODY_EOF"
+            echo "$BODY"
+            echo "RELEASE_BODY_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          # CI 로그에 미리보기 (디버깅 용)
+          echo "--- Release body preview (first 20 lines) ---"
+          echo "$BODY" | head -n 20
+          echo "----------------------------------------------"
+
       # 7) Tauri 빌드 + 서명 + GitHub Release 업로드 (한 번에)
       #    tauri-apps/tauri-action@v0 — Tauri 팀 공식 액션 (Tauri 2.x 호환)
       #    자동 수행:
@@ -116,22 +166,11 @@ jobs:
           tagName: ${{ github.ref_name }}
           # __VERSION__ 은 tauri.conf.json의 version으로 자동 치환됨
           releaseName: 'Grader v__VERSION__'
-          releaseBody: |
-            ## Grader v__VERSION__
-
-            자동 생성된 릴리스입니다. 아래 체크 후 Publish 해 주세요.
-
-            ### 변경사항
-            (여기에 CHANGELOG 내용을 붙여넣거나 직접 작성)
-
-            ### 설치 방법
-            - 신규 설치: `Grader_*_x64_en-US.msi` 또는 `Grader_*_x64-setup.exe` 다운로드 후 실행
-            - 기존 사용자: 앱이 자동으로 새 버전을 감지하고 업데이트 안내 팝업을 띄웁니다
-
-            ### 포함 아티팩트
-            - `Grader_*_x64_en-US.msi` / `.msi.zip` / `.msi.zip.sig` (MSI 설치 파일 + 서명)
-            - `Grader_*_x64-setup.exe` / `.nsis.zip` / `.nsis.zip.sig` (NSIS 설치 파일 + 서명)
-            - `latest.json` (Tauri Updater 매니페스트)
+          # 왜 steps.changelog.outputs.body: 위의 "Extract CHANGELOG section" step에서
+          # CHANGELOG.md 의 해당 버전 섹션을 추출해 둔 결과를 그대로 본문으로 사용.
+          # 이 본문이 latest.json 의 notes 필드에도 들어가서, 자동 업데이트 모달에
+          # 실제 변경사항이 노출됨 (placeholder 노출 결함 방지).
+          releaseBody: ${{ steps.changelog.outputs.body }}
           # Draft로 생성 → 사람이 GitHub 페이지에서 확인 후 수동 Publish
           # 실수로 태그 푸시해도 직원 PC로 자동 전파되지 않는 안전장치
           releaseDraft: true
