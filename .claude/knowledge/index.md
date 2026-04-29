@@ -9,10 +9,11 @@
 > v1.0.4 (CI 안정화): release.yml awk 종료 조건 보강 (마지막 정식 버전 부풀음 차단) + Node 24 옵트인. Internal 변경이라 errors.md 신규 항목 없음.
 | conventions.md | 13 | 2026-04-22 (Tauri 래퍼 서비스 패턴 + 모듈 상태 공유 패턴 2건 추가) |
 | decisions.md | 39 | 2026-04-26 (AI→SVG Phase 3 9개 핵심 결정 통합 항목 추가) |
-| lessons.md | 7 | 2026-04-23 (v1.0.0 첫 릴리스 교훈 — 서명 키 + Secret + draft 추가) |
+| lessons.md | 8 | 2026-04-29 (v1.0.0/v1.0.1도 자동 업데이트 성공 — 안내 보수적 유지 결정) |
 
 ## 최근 추가된 지식 (최근 15건)
-1. [2026-04-26] architecture: AI→SVG **Phase 3 구현 완료** — useAutoAiConvert 493줄 신규(useAutoUpdateCheck 패턴 미러, 모듈 상태+뮤텍스+AbortController+실패카운터 자동 OFF) + AutoConvertConsentModal 217줄 신규 + Settings/PatternManage/App.css 통합 (+125/+199/+257). aiConvertService/AiConvertModal/driveSync/Phase 1+2 모두 git diff 0줄. tester 10/10 PASS, reviewer 🟢 우수
+1. [2026-04-29] lesson: v1.0.0/v1.0.1도 자동 업데이트 성공 — 본 PC v1.0.1 → v1.0.4 정상 동작 확인. NOTICE 안내는 보수적 유지 결정(데이터 누적 후 다음 NOTICE에서 안내 범위 좁히기)
+2. [2026-04-26] architecture: AI→SVG **Phase 3 구현 완료** — useAutoAiConvert 493줄 신규(useAutoUpdateCheck 패턴 미러, 모듈 상태+뮤텍스+AbortController+실패카운터 자동 OFF) + AutoConvertConsentModal 217줄 신규 + Settings/PatternManage/App.css 통합 (+125/+199/+257). aiConvertService/AiConvertModal/driveSync/Phase 1+2 모두 git diff 0줄. tester 10/10 PASS, reviewer 🟢 우수
 2. [2026-04-26] decision: AI→SVG **Phase 3 (옵트인 자동 백그라운드) 9개 핵심 결정** 일괄 — 토글=Settings 신설 / 트리거=Drive 스캔 직후 / UI=배너 4모드 / 중지=AbortController 파일 경계 / 실패 3회 자동 OFF / Illustrator 미설치는 PDF만 / 단일 뮤텍스 / 신규 훅 1개만 추가(service/Modal 무수정) / 기본 OFF + 첫 ON 동의 모달. PLAN-AI-TO-SVG.md 13장 상세 설계 완료
 2. [2026-04-25] architecture: AI→SVG **Phase 2 구현 완료** — ai_to_pdf.jsx 181줄 신규(ACROBAT5/IIFE) + aiConvertService +172줄(findIllustratorExe/convertPostScriptToTmp/cleanupTmpFiles) + AiConvertModal +95줄(체크박스+감지+executeConvert 분기). ai_converter.py/lib.rs 무변경. PLAN 12와 다른 흐름(프론트 분기) 채택으로 ~2h 단축
 2. [2026-04-25] decision: AI→SVG Phase 2 **흐름 = 프론트 분기 호출** — PLAN 12의 Python 캡슐화 거부. ai_converter.py 무변경, JSX는 단일 파일 변환 책임, Rust find_illustrator_exe 재사용
