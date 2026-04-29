@@ -1,31 +1,30 @@
 # 작업 스크래치패드
 
 ## 🎯 다음 세션 시작 가이드
-1. **다른 PC 검증 결과** 확인 (사용자 담당) — 그레이딩 4건 실패 재현 여부 → 재현 시 timeout 60→120초 확장 패치 추가
-2. **v1.0.1 릴리스 빌드/태그 푸시** — 다른 PC 검증 통과 후 `npm run release:bump 1.0.1` + 태그 푸시
-3. **수정 요청 3건 테스트** (TEST-GUIDE-2026-04-25.md, 사용자 담당)
+1. **v1.0.4 자동 업데이트 직원 PC 전파 확인** — 본 PC v1.0.1→v1.0.4 자동 업데이트 성공(2026-04-29). 직원 PC들도 모달 받고 적용됐는지
+2. **수정 요청 #1/#2/#3 실 테스트** (TEST-GUIDE-2026-04-25.md, 사용자 담당)
+3. **AI→SVG Phase 1+2+3 실 사용 검증** (사용자 담당)
+4. **v1.0.5 후보 작업** 착수 검토 (수정 요청 누적 + AI→SVG UX 보강 + 그레이딩 timeout 60→120)
 
 ---
 
 ## 현재 작업
-- **요청**: GitHub v1.0.0 릴리스 자산 검증 + 발견 결함 v1.0.1 패치
-- **상태**: ✅ 커밋 완료 (`6ffeb73`) — 다른 PC 검증 결과 대기
-- **현재 담당**: pm (대기)
+- **요청**: v1.0.0 릴리스 자산 검증 + 발견 결함 v1.0.1 패치
+- **상태**: ✅ **정식 배포 완료** (`v1.0.1`, 2026-04-28 publish)
+- **현재 담당**: 없음 (다음 작업 대기)
 
-### 완료된 처리 (v1.0.1 patch)
-1. ✅ vite define + `__APP_VERSION__` (vite.config.ts + vite-env.d.ts)
-2. ✅ StatusBar/Settings 동적 버전 표시 — dist 잔존 0건 확정
-3. ✅ OrderGenerate 라인 624/638 `String(e)` 가면 벗기기
-4. ✅ release.yml CHANGELOG 자동 추출 step + fallback 어휘 강화 (P1 반영)
-5. ✅ CHANGELOG.md `[1.0.1]` 섹션 작성
-
-### 보류 (다른 PC 검증 결과 따라)
-- 그레이딩 timeout 60→120초 확장 (콜드 스타트 가설 P1이 다른 PC에서도 재현되면)
+### v1.0.1 최종 산출물
+- 태그: `v1.0.1` / 커밋: `8100736` / 미푸시: 0개
+- URL: https://github.com/cobby8/grader/releases/tag/v1.0.1
+- 자산 5종 + latest.json (notes에 CHANGELOG 정상 추출 ✨)
+- 직원 PC 자동 업데이트 모달 전파 시작
 
 ### v1.0.2 후보 (이번 작업 외 발견사항)
 - "알 수 없는 오류" 잔존 4곳 통일: `useAutoAiConvert.ts:312`, `FileGenerate.tsx:382, 457`, `Settings.tsx:94`
 - awk 마지막 정식 버전 추출 시 부풀음 (release.yml P2)
+- GitHub Actions Node.js 20 deprecation: `actions/checkout@v4`/`setup-node@v4` → `@v5` 업그레이드 (2026-06 강제 전환 전)
 - AI→SVG UX 보강 (.tmp.ai 매핑, converting sub-status 등)
+- 그레이딩 timeout 60→120초 (콜드 스타트 재현 시)
 
 ---
 
@@ -53,7 +52,7 @@
 | 12-B | AI→SVG 자동 변환 Phase 1+2 | ✅ 완료 |
 | 12-C | AI→SVG 자동 변환 Phase 3 (옵트인 자동) | ✅ 완료 |
 | 12-D | 양면 유니폼 그레이딩 버그 4종 | ✅ 완료 |
-| **v1.0.1** | **릴리스 결함 패치 (표시/마스킹/notes 자동화)** | ✅ **커밋 완료**, 릴리스 대기 |
+| **v1.0.1** | **릴리스 결함 패치 (표시/마스킹/notes 자동화 + 첫 실행 폴더 + bump-version CRLF)** | ✅ **정식 배포 완료** (2026-04-28) |
 
 ---
 
@@ -82,6 +81,11 @@
 | 2026-04-28 | reviewer | v1.0.1 코드 리뷰 (7파일, Q1~Q10) | 🟢 우수, critical 0, 권장 P1/P2 |
 | 2026-04-28 | pm | reviewer P1 반영 (release.yml fallback 어휘 강화) + 커밋 `6ffeb73` | 미푸시 4개 |
 | 2026-04-28 | pm | 다른 PC 첫 실행 결함 즉시 처방 (write_file_absolute 부모 폴더 자동 생성) + 커밋 `84a000c` | cargo check PASS, 미푸시 5개 |
+| 2026-04-28 | pm | bump-version.mjs CRLF 처리 보강 + 1.0.0→1.0.1 + 정리 커밋 (`8ac3dac`/`8100736`) + 푸시(7) + 태그 v1.0.1 | GitHub Actions 빌드 성공 (8m23s) |
+| 2026-04-28 | pm | v1.0.2 핫픽스 (capabilities mkdir $APPDATA + settingsStore 명시 catch) + 직원 안내문 + publish | catch-22 결함 해소, NOTICE-v1.0.2.md 작성 |
+| 2026-04-29 | pm | v1.0.3 catch-22 패턴 전수 점검 (store 4종 + capabilities 3종 + FileGenerate 가면 통일) + publish | 사전 차단 + 진단성 강화, NOTICE-v1.0.3.md 작성 |
+| 2026-04-29 | pm | v1.0.4 CI 안정화 (Node 24 옵트인 + awk 종료 조건 보강) + publish | Node 24 forced 실행 OK 확인, 2026-06 대비 완료 |
+| 2026-04-29 | pm | v1.0.4 직원 배포 공지문 작성 + 카톡 메모 발송 + 자동 업데이트 검증 (v1.0.1→v1.0.4 본 PC 성공) | NOTICE-v1.0.4.md 작성, lessons.md +1 (보수적 안내 유지 결정), 커밋 `11a2bbd`+`18ce181` |
 
 ---
 
