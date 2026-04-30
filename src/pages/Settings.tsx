@@ -91,7 +91,9 @@ function Settings() {
           setIsLoadSuccess(true);
           setLoadError(null);
         } else {
-          setLoadError(result.error ?? "알 수 없는 오류");
+          // [v1.0.5] fallback 어휘 통일 (errors.md 2026-04-27).
+          //   "알 수 없는 오류"는 사용자가 어디 봐야 할지 모르므로 진단 힌트로 대체.
+          setLoadError(result.error ?? "(설정 로드 응답에 error 필드 없음)");
           setIsLoadSuccess(false);
         }
       })

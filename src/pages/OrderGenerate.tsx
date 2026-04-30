@@ -590,11 +590,14 @@ function OrderGenerate() {
           });
 
           // 3-e) Illustrator 실행 (grading.jsx 호출 + result.json 폴링)
+          // [v1.0.5] 60→120초: Illustrator 콜드 스타트 마스킹 방지 (errors.md 2026-04-27).
+          //   첫 사이즈가 60초 안에 result.json 못 만들면 4사이즈 동시 시도 시 4분간
+          //   "알 수 없는 오류" 4번. aiConvertService PostScript 변환 120초와 일관 맞춤.
           const resultRaw = await invoke<string>("run_illustrator_script", {
             illustratorExe: aiExePath,
             scriptPath: gradingJsxPath,
             resultJsonPath: resultJsonPath,
-            timeoutSecs: 60,
+            timeoutSecs: 120,
           });
           const result: IllustratorGradingResult = JSON.parse(resultRaw);
 

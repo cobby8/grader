@@ -151,9 +151,11 @@ function SvgStandardizeModal({
     try {
       const result = await previewNormalize(driveFolder, baseFile);
       if (!result.success) {
+        // [v1.0.5] fallback 어휘 통일 (errors.md 2026-04-27).
+        //   Python 응답에 error 필드가 빠진 경우 어디를 봐야 하는지 즉시 알 수 있게 명시.
         setPhase({
           kind: "error",
-          message: result.error ?? "알 수 없는 오류 (Python success=false)",
+          message: result.error ?? "(SVG 표준화 응답에 error 필드 없음 — svg_normalizer.py 출력 확인)",
         });
         return;
       }

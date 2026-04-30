@@ -47,24 +47,19 @@ jobs:
     # Windows 전용 빌드 — macOS/Linux는 현재 범위 외
     runs-on: windows-latest
 
-    # 왜 FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true 인가:
-    #   GitHub Actions runner 기본 Node 가 2026-06-02 부터 Node 24 로 강제 전환되며
-    #   2026-09-16 이후엔 Node 20 이 runner 에서 완전히 제거된다.
-    #   현재 workflow 는 actions/checkout@v4 / actions/setup-node@v4 (Node 20 사용)을
-    #   쓰고 있으므로 그 전에 Node 24 환경에서 정상 동작 여부를 미리 확인해 둬야 한다.
-    #   이 환경변수는 Node 20 액션을 Node 24 로 실행하도록 강제 (GitHub 공식 옵트인).
-    #   호환 문제가 생기면 즉시 false 로 되돌려 1단계 후퇴 가능.
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    # [2026-04-30, v1.0.5] actions/checkout@v4 → @v5, actions/setup-node@v4 → @v5 업그레이드.
+    #   v5 액션은 자체적으로 Node 24 런타임을 사용하므로 v1.0.4 의
+    #   `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` 옵트인 환경변수가 더 이상 필요 없어 제거함.
+    #   2026-06-02 Node 24 강제 전환 / 2026-09-16 Node 20 제거 일정에 v5 정식 적용으로 대응.
 
     steps:
       # 1) 소스 받아오기
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      # 2) Node.js 20 설치 + npm 캐시
+      # 2) Node.js 20 설치 + npm 캐시 (setup-node@v5 자체는 Node 24 로 동작, node-version 은 빌드용 Node)
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: 'npm'

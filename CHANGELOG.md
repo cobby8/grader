@@ -37,6 +37,26 @@ _(다음 릴리스 전까지 여기에 변경사항을 쌓아둡니다.)_
 
 ---
 
+## [1.0.5] — 2026-04-30
+
+🧹 **외부 마감 대응 + 진단성 강화 정비.** GitHub Actions Node 24 강제 전환(2026-06-02) 이전에 액션 정식 업그레이드, Illustrator 콜드 스타트 마스킹 차단, "알 수 없는 오류" 가면 잔존 5곳 통일. 사용자 가시 동작 변경 0.
+
+### Fixed (버그 수정)
+
+- **그레이딩 timeout 60 → 120초로 확장 (콜드 스타트 안전망)**
+  - `OrderGenerate.tsx` / `FileGenerate.tsx` 두 곳의 `timeoutSecs: 60` → `120`. Illustrator 콜드 스타트(라이선스 캐시/인증 만료) 시 60초 안에 결과 파일을 못 만들고 timeout으로 "알 수 없는 오류"로 가려지던 문제 차단. 이미 PostScript 변환에서 사용 중인 120초와 일관성 맞춤.
+- **"알 수 없는 오류" 가면 잔존 5곳 통일**
+  - `useAutoAiConvert.ts` / `SvgStandardizeModal.tsx` / `Settings.tsx` 의 `result.error ?? "알 수 없는 오류"` fallback을 진단 친화 메시지로 교체(어디를 봐야 하는지 즉시 알 수 있도록).
+  - `FileGenerate.tsx` / `DesignUpload.tsx` 의 catch 블록 fallback을 v1.0.1 OrderGenerate 패턴(`Error → typeof string → String(err)`)과 일치시켜, Tauri Rust 커맨드의 string Err가 가면에 가려지지 않도록 통일.
+
+### Internal (내부 구조 변경, 일반 사용자 영향 없음)
+
+- **GitHub Actions `actions/checkout@v4` → `@v5`, `actions/setup-node@v4` → `@v5` 정식 업그레이드**
+  - 2026-06-02부터 GitHub runner 기본 Node가 24로 강제 전환되고 2026-09-16엔 Node 20이 runner에서 완전히 제거된다. v5는 자체 Node 24 런타임 사용. v1.0.4에서 추가했던 임시 옵트인 환경변수 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`도 함께 제거(불필요).
+  - `setup-node@v5`의 `node-version: '20'` 입력은 그대로 유지 — 이는 빌드 환경의 Node 버전(vite/tsc 실행)이며, 액션 자체의 런타임(Node 24)과는 분리된 입력.
+
+---
+
 ## [1.0.4] — 2026-04-29
 
 🛠 **CI/빌드 환경 안정화.** 자동 업데이트와 릴리스 파이프라인 자체의 결함을 정비합니다. 일반 사용자 영향은 없지만 향후 릴리스 안정성에 직결됩니다.

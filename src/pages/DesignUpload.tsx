@@ -349,8 +349,16 @@ function DesignUpload() {
       await processMultipleFiles(paths);
     } catch (err) {
       console.error("파일 다이얼로그 오류:", err);
+      // [v1.0.5] v1.0.1 OrderGenerate 패턴 통일 — Tauri Rust string Err 대응
+      //   (errors.md 2026-04-27). Tauri 커맨드 `Result<_, String>` Err 는 string 으로
+      //   reject 되어 catch 에 도달함. instanceof Error 만 검사하면 string Err 가
+      //   "알 수 없는 오류" 가면에 마스킹되어 진짜 메시지가 안 보임.
       setErrorMessage(
-        err instanceof Error ? err.message : "알 수 없는 오류가 발생했습니다."
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+          ? err
+          : String(err)
       );
     }
   }

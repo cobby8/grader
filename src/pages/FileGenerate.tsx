@@ -244,8 +244,16 @@ function FileGenerate() {
       }
     } catch (err) {
       console.error("파일 생성 실패:", err);
+      // [v1.0.5] v1.0.1 OrderGenerate 패턴 통일 — Tauri Rust string Err 대응
+      //   (errors.md 2026-04-27). Tauri 커맨드 `Result<_, String>` Err 는 string 으로
+      //   reject 되어 catch 에 도달함. instanceof Error 만 검사하면 string Err 가
+      //   "알 수 없는 오류" 가면에 마스킹되어 진짜 메시지가 안 보임.
       setGlobalError(
-        err instanceof Error ? err.message : "알 수 없는 오류가 발생했습니다."
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+          ? err
+          : String(err)
       );
     } finally {
       setGenerating(false);
@@ -345,12 +353,15 @@ function FileGenerate() {
 
         // 2-e) Illustrator로 grading.jsx 실행
         // run_illustrator_script는 내부에서 result.json을 폴링하여 완료를 감지한다
-        // 타임아웃 60초 (사이즈당 10~30초 예상, 여유 확보)
+        // [v1.0.5] 60→120초: Illustrator 콜드 스타트 마스킹 방지 (errors.md 2026-04-27).
+        //   첫 사이즈가 60초 안에 result.json 못 만들면 "알 수 없는 오류"로 마스킹돼
+        //   사용자가 진짜 원인(콜드 스타트/라이선스 캐시)을 알 수 없게 됨.
+        //   aiConvertService PostScript 변환 120초와 일관 맞춤.
         const resultRaw = await invoke<string>("run_illustrator_script", {
           illustratorExe: aiExePath,
           scriptPath: gradingJsxPath,
           resultJsonPath: resultJsonPath,
-          timeoutSecs: 60,
+          timeoutSecs: 120,
         });
 
         // 2-f) 결과 파싱

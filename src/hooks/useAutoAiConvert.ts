@@ -308,8 +308,11 @@ export async function scheduleAutoConvert(files: string[]): Promise<void> {
       // results 배열에서 첫 FAIL 항목을 찾아 짧은 요약 메시지로 가공.
       // (모드 C 배너에서 보이도록 — 디버깅 시 콘솔 로그 분석을 줄여줌)
       const firstFailure = batchResults.find((r) => r.status === "FAIL");
+      // [v1.0.5] fallback "알 수 없는 오류" → 진단 힌트로 통일 (errors.md 2026-04-27).
+      //   실제 환경에서 이 메시지가 노출되면 어디를 봐야 하는지(AI 변환기 응답 구조)
+      //   즉시 알 수 있도록 가면을 벗긴 표현으로 대체.
       const failureSummary = firstFailure
-        ? `${firstFailure.file.split(/[\\/]/).pop() ?? firstFailure.file}: ${firstFailure.error ?? "알 수 없는 오류"}`
+        ? `${firstFailure.file.split(/[\\/]/).pop() ?? firstFailure.file}: ${firstFailure.error ?? "(AI 변환기 응답에 error 필드 없음 — python 출력 확인)"}`
         : null;
 
       nextFailCount = state.failCountConsecutive + 1;
